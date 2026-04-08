@@ -8,13 +8,14 @@ class YahooFinanceAdapter:
         await ctx.rate_limiter.throttle()
         symbols = spec.symbols if isinstance(spec.symbols, list) else ["SPY", "QQQ"]
         
+        ts = ctx.start_date or ctx.run_timestamp
+        
         return [
             {
-                "published_at": ctx.run_timestamp,
+                "published_at": ts,
                 "symbol": symbol,
                 "headline": f"{symbol} Yahoo Finance placeholder event",
                 "provider": "yahoo",
             }
             for symbol in symbols
         ]
-

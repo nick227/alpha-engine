@@ -6,6 +6,8 @@ from datetime import datetime, timezone, timedelta
 def test_live_replay_optimizer_tick_smoke(tmp_path, monkeypatch) -> None:
     # Force loops to use a temp db by working in a temp cwd.
     monkeypatch.chdir(tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "target_stocks.yaml").write_text("- NVDA\n", encoding="utf-8")
 
     from app.core.repository import Repository
     from app.core.types import RawEvent
@@ -37,6 +39,8 @@ def test_live_replay_optimizer_tick_smoke(tmp_path, monkeypatch) -> None:
 
 def test_optimizer_precompute_cache_reuses_windows(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "target_stocks.yaml").write_text("- NVDA\n", encoding="utf-8")
 
     from app.core.repository import Repository
     from app.core.types import RawEvent, StrategyConfig

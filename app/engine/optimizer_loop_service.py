@@ -13,6 +13,7 @@ from app.engine.reaper_engine import should_reap
 from app.engine.runner import _strategy_track
 from app.engine.strategy_store import bootstrap_strategies_from_experiments, load_active_strategy_configs_from_db
 from app.engine.champion_state import set_active_champion
+from app.core.target_stocks import get_target_stocks
 
 
 class OptimizerLoopService:
@@ -55,6 +56,12 @@ class OptimizerLoopService:
         now = now or datetime.now(timezone.utc)
         repo = Repository("data/alpha.db")
         bootstrap_strategies_from_experiments(repo)
+
+        total_scored = int(
+            (repo.conn.execute(
+                "SELECT COUNT(*) as c FROM prediction_outcomes WHERE tenant_id='default' AND exit_reason='horizon'"
+            ).fetchone() or {"c": 0})["c"]
+        )
 
         def track_for_strategy_id(strategy_id: str) -> str:
             row = repo.conn.execute(
@@ -109,6 +116,11 @@ class OptimizerLoopService:
         min_ts = min_dt.isoformat().replace("+00:00", "Z")
         max_ts = max_dt.isoformat().replace("+00:00", "Z")
         tickers = sorted({(evt.tickers[0] if evt.tickers else "") for evt in raw_events} - {""})
+        try:
+            allowed = set(get_target_stocks(asof=now))
+            tickers = [t for t in tickers if t in allowed]
+        except Exception:
+            tickers = []
         if not tickers:
             repo.add_heartbeat("optimizer", "ok", "no tickers in events")
             repo.close()
@@ -120,6 +132,7 @@ class OptimizerLoopService:
             SELECT ticker, timestamp, open, high, low, close, volume
             FROM price_bars
             WHERE tenant_id = 'default'
+              AND timeframe = '1m'
               AND ticker IN ({placeholders})
               AND timestamp >= ? AND timestamp <= ?
             ORDER BY ticker, timestamp ASC
@@ -157,7 +170,7 @@ class OptimizerLoopService:
         # Precompute train/forward windows, cached across ticks keyed by (ticker set, time window).
         # Invalidation: version stamps from raw_events / price_bars.
         raw_events_version = repo.conn.execute("SELECT COALESCE(MAX(ingested_at), '') as v FROM raw_events WHERE tenant_id='default'").fetchone()["v"]
-        bars_version = repo.conn.execute("SELECT COALESCE(MAX(timestamp), '') as v FROM price_bars WHERE tenant_id='default'").fetchone()["v"]
+        bars_version = repo.conn.execute("SELECT COALESCE(MAX(timestamp), '') as v FROM price_bars WHERE tenant_id='default' AND timeframe='1m'").fetchone()["v"]
         cache_key = (tuple(tickers), min_ts, max_ts, 0.3)
 
         cached = self._cache_get(cache_key)
@@ -203,6 +216,7 @@ class OptimizerLoopService:
                         repo,
                         track=cand_track,
                         strategy_id=cand.id,
+                        scored_total_at_switch=total_scored,
                         reason="optimizer_promoted",
                         meta={"parent_id": parent.id, "gate": gate_logs},
                         now=now,
@@ -282,6 +296,7 @@ class OptimizerLoopService:
                     repo,
                     track=track,
                     strategy_id=parent_id,
+                    scored_total_at_switch=total_scored,
                     reason="optimizer_rolled_back",
                     meta={"child_id": strategy_id, "stability": stability, "underperformance_pct": under},
                     now=now,

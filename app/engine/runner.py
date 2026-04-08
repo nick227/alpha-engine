@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+import hashlib
 import json
 
 from app.engine.consensus_engine import ConsensusEngine, TrackSignal
@@ -16,6 +17,11 @@ from app.core.types import RawEvent, StrategyConfig, Prediction, PredictionOutco
 from app.engine.evaluate import evaluate_prediction, summarize_outcomes
 from app.engine.strategy_factory import build_strategy_instance
 
+# Intelligent Loop Imports
+from app.engine.continuous_learning import ContinuousLearner, Signal, SignalOutcome
+from app.engine.strategy_registry import StrategyRegistry
+from app.engine.promotion_engine import PromotionEngine
+from app.engine.genetic_optimizer import GeneticOptimizer
 
 class Runner:
     """
@@ -96,6 +102,26 @@ def _strategy_display_name(config: StrategyConfig) -> str:
     return f"{config.strategy_type}:{config.version}"
 
 
+def _stable_prediction_id(
+    *,
+    prefix: str,
+    tenant_id: str,
+    strategy_id: str,
+    raw_event_id: str,
+    horizon: str,
+    mode: str,
+) -> str:
+    base = f"{tenant_id}:{strategy_id}:{raw_event_id}:{horizon}:{mode}"
+    digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
+
+
+def _stable_outcome_id(*, prefix: str, tenant_id: str, prediction_id: str) -> str:
+    base = f"{tenant_id}:{prediction_id}"
+    digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
+
+
 def _estimate_realized_volatility(price_context: dict) -> float:
     if "realized_volatility" in price_context:
         try:
@@ -112,6 +138,32 @@ def _estimate_realized_volatility(price_context: dict) -> float:
     if not candidates:
         return 0.0
     return max(candidates)
+
+
+def _split_context(ctx: dict | None) -> tuple[dict, dict]:
+    """
+    Split a combined context into (features, outcomes) to prevent look-ahead bias.
+
+    Accepted shapes:
+    - {"features": {...}, "outcomes": {...}} (preferred)
+    - flat dict: outcome keys are peeled off automatically
+    """
+    if not isinstance(ctx, dict):
+        return {}, {}
+
+    if "features" in ctx or "outcomes" in ctx:
+        features = ctx.get("features") if isinstance(ctx.get("features"), dict) else {}
+        outcomes = ctx.get("outcomes") if isinstance(ctx.get("outcomes"), dict) else {}
+        return dict(features), dict(outcomes)
+
+    outcomes: dict = {}
+    features: dict = {}
+    for k, v in ctx.items():
+        if isinstance(k, str) and (k.startswith("future_return_") or k in {"max_runup", "max_drawdown"}):
+            outcomes[k] = v
+        else:
+            features[k] = v
+    return features, outcomes
 
 
 def load_strategy_configs(
@@ -179,6 +231,11 @@ def run_pipeline(
     strategy_configs: list[StrategyConfig] | None = None,
     mode_override: str | None = None,
     evaluate_outcomes: bool = True,
+    learner: ContinuousLearner | None = None,
+    registry: StrategyRegistry | None = None,
+    promotion_engine: PromotionEngine | None = None,
+    genetic_optimizer: GeneticOptimizer | None = None,
+    generation_counter: int = 1,
 ) -> dict[str, Any]:
     """
     End-to-end POC vertical slice:
@@ -186,6 +243,12 @@ def run_pipeline(
 
     Returns dicts that are easy to write to CSV or render in Streamlit.
     """
+    tenant_id = raw_events[0].tenant_id if raw_events else "default"
+    if raw_events:
+        other = {str(e.tenant_id) for e in raw_events if str(e.tenant_id) != str(tenant_id)}
+        if other:
+            raise ValueError(f"run_pipeline does not support mixed-tenant batches: {sorted(other)} vs {tenant_id}")
+
     configs = strategy_configs if strategy_configs is not None else load_strategy_configs()
     active_configs = [c for c in configs if c.active]
 
@@ -210,8 +273,8 @@ def run_pipeline(
         repo = Repository(db_path=db_path)
         with repo.transaction():
             for cfg, _ in strategies:
-                repo.persist_strategy(cfg)
-            repo.persist_strategy(consensus_config)
+                repo.persist_strategy(cfg, tenant_id=str(tenant_id))
+            repo.persist_strategy(consensus_config, tenant_id=str(tenant_id))
 
     raw_event_rows: list[dict[str, Any]] = []
     scored_event_rows: list[dict[str, Any]] = []
@@ -228,9 +291,10 @@ def run_pipeline(
 
     with (repo.transaction() if repo is not None else nullcontext()):
         for raw in raw_events:
-            price_context = price_contexts.get(raw.id, {})
+            features_ctx, _ = _split_context(price_contexts.get(raw.id, {}))
+            price_context = features_ctx
             if repo is not None:
-                repo.persist_raw_event(raw)
+                repo.persist_raw_event(raw, tenant_id=str(tenant_id))
 
             raw_event_rows.append(
                 {
@@ -244,7 +308,7 @@ def run_pipeline(
 
             scored = score_event(raw)
             if repo is not None:
-                repo.persist_scored_event(scored, raw_event_id=raw.id)
+                repo.persist_scored_event(scored, raw_event_id=raw.id, tenant_id=str(tenant_id))
 
             scored_event_rows.append(
                 {
@@ -265,7 +329,7 @@ def run_pipeline(
 
             mra = compute_mra(scored, price_context)
             if repo is not None:
-                repo.persist_mra_outcome(mra, scored_event_id=scored.id)
+                repo.persist_mra_outcome(mra, scored_event_id=scored.id, tenant_id=str(tenant_id))
 
             mra_rows.append(
                 {
@@ -316,6 +380,15 @@ def run_pipeline(
                 if mode_override is not None:
                     pred.mode = mode_override
 
+                pred.id = _stable_prediction_id(
+                    prefix="pred",
+                    tenant_id=raw.tenant_id,
+                    strategy_id=pred.strategy_id,
+                    raw_event_id=raw.id,
+                    horizon=str(pred.horizon),
+                    mode=str(pred.mode),
+                )
+
                 pred.feature_snapshot.setdefault("regime", vol_regime)
                 pred.feature_snapshot.setdefault("trend_strength", regime_snapshot.trend_strength)
                 pred.feature_snapshot.setdefault("regime_snapshot", regime_payload)
@@ -326,7 +399,22 @@ def run_pipeline(
                 event_predictions.append((track, cfg, pred))
 
                 if repo is not None:
-                    repo.persist_prediction(pred)
+                    repo.persist_prediction(pred, tenant_id=str(tenant_id))
+                    try:
+                        repo.persist_signal(
+                            prediction_id=str(pred.id),
+                            strategy_id=str(pred.strategy_id),
+                            ticker=str(pred.ticker),
+                            timestamp=pred.timestamp,
+                            direction=str(pred.prediction),
+                            confidence=float(pred.confidence),
+                            track=str(track),
+                            regime=str(vol_regime) if vol_regime is not None else None,
+                            tenant_id=str(tenant_id),
+                        )
+                    except Exception:
+                        # Signals are a UI read model; never break the pipeline.
+                        pass
 
                 prediction_rows.append(
                     {
@@ -371,7 +459,14 @@ def run_pipeline(
                 )
 
                 consensus_pred = Prediction(
-                    id=f"cons_{best_sentiment.id[:8]}_{best_quant.id[:8]}",
+                    id=_stable_prediction_id(
+                        prefix="cons",
+                        tenant_id=raw.tenant_id,
+                        strategy_id=consensus_config.id,
+                        raw_event_id=raw.id,
+                        horizon=str(best_sentiment.horizon or best_quant.horizon),
+                        mode=str(mode_override or "backtest"),
+                    ),
                     strategy_id=consensus_config.id,
                     scored_event_id=scored.id,
                     ticker=scored.primary_ticker,
@@ -394,7 +489,53 @@ def run_pipeline(
                 predictions.append(consensus_pred)
 
                 if repo is not None:
-                    repo.persist_prediction(consensus_pred)
+                    repo.persist_prediction(consensus_pred, tenant_id=str(tenant_id))
+                    try:
+                        meta = dict(consensus_payload.get("metadata", {}) or {})
+                    except Exception:
+                        meta = {}
+
+                    ss = None
+                    qs = None
+                    try:
+                        ss = float(sentiment_stability) if sentiment_stability is not None else None
+                    except Exception:
+                        ss = None
+                    try:
+                        qs = float(quant_stability) if quant_stability is not None else None
+                    except Exception:
+                        qs = None
+
+                    stability_score = None
+                    if ss is not None and qs is not None:
+                        stability_score = (ss + qs) / 2.0
+                    elif ss is not None:
+                        stability_score = ss
+                    elif qs is not None:
+                        stability_score = qs
+
+                    try:
+                        repo.persist_consensus_signal(
+                            prediction_id=str(consensus_pred.id),
+                            ticker=str(consensus_pred.ticker),
+                            timestamp=consensus_pred.timestamp,
+                            direction=str(consensus_pred.prediction),
+                            confidence=float(consensus_pred.confidence),
+                            regime=str(consensus_payload.get("regime")) if consensus_payload.get("regime") is not None else None,
+                            sentiment_strategy_id=str(best_sentiment.strategy_id),
+                            quant_strategy_id=str(best_quant.strategy_id),
+                            sentiment_score=float(consensus_payload.get("sentiment_confidence")) if consensus_payload.get("sentiment_confidence") is not None else None,
+                            quant_score=float(consensus_payload.get("quant_confidence")) if consensus_payload.get("quant_confidence") is not None else None,
+                            ws=float(meta.get("ws")) if meta.get("ws") is not None else None,
+                            wq=float(meta.get("wq")) if meta.get("wq") is not None else None,
+                            agreement_bonus=float(meta.get("agreement_bonus")) if meta.get("agreement_bonus") is not None else None,
+                            p_final=float(consensus_payload.get("weighted_consensus")) if consensus_payload.get("weighted_consensus") is not None else None,
+                            stability_score=stability_score,
+                            tenant_id=str(tenant_id),
+                        )
+                    except Exception:
+                        # Consensus signals are a UI read-model convenience; never break the pipeline.
+                        pass
 
                 prediction_rows.append(
                     {
@@ -437,12 +578,13 @@ def run_pipeline(
             raw_event_id = scored_to_raw.get(pred.scored_event_id)
             if raw_event_id is None:
                 continue
-            price_context = price_contexts.get(raw_event_id, {})
-            out = evaluate_prediction(pred, price_context)
+            _, outcomes_ctx = _split_context(price_contexts.get(raw_event_id, {}))
+            out = evaluate_prediction(pred, outcomes_ctx)
+            out.id = _stable_outcome_id(prefix="out", tenant_id=str(tenant_id), prediction_id=str(pred.id))
             outcomes.append(out)
 
             if repo is not None:
-                repo.persist_outcome(out)
+                repo.persist_outcome(out, tenant_id=str(tenant_id))
 
             outcome_rows.append(
                 {
@@ -480,6 +622,56 @@ def run_pipeline(
 
     if repo is not None:
         repo.close()
+
+    # === SELF-LEARNING CLOSED LOOP HOOK ===
+    if evaluate_outcomes and learner and registry:
+        for out in outcomes:
+            pred_row = pred_by_id.get(out.prediction_id)
+            if not pred_row or pred_row.get("track") == "consensus":
+                continue
+
+            # Convert prediction string to integer direction
+            raw_pred = pred_row.get("prediction", "flat")
+            direction = 1 if raw_pred == "up" else (-1 if raw_pred == "down" else 0)
+
+            # Route Signal -> ContinuousLearner
+            sig = Signal(
+                id=pred_row["id"],
+                strategy_id=pred_row["strategy_id"],
+                ticker=pred_row.get("ticker", "UNKNOWN"),
+                direction=direction,
+                confidence=float(pred_row.get("confidence", 0)),
+                timestamp=pred_row.get("timestamp", ""),
+                regime=pred_row.get("regime", "UNKNOWN")
+            )
+            sig_out = SignalOutcome(
+                signal_id=out.prediction_id,
+                actual_return_pct=float(out.return_pct)
+            )
+            learner.ingest_pairing(sig, sig_out)
+
+        # Triggers evaluation metrics for WeightEngine
+        all_perfs = learner.evaluate_all()
+
+        # Gate performance boundaries
+        if promotion_engine:
+            champs = registry.get_champions()
+            challs = registry.get_challengers()
+            champ_ids = {c.strategy_id for c in champs}
+            chall_ids = {c.strategy_id for c in challs}
+            
+            promotion_engine.review_champions({k: v for k, v in all_perfs.items() if k in champ_ids})
+            promotion_engine.evaluate_candidates({k: v for k, v in all_perfs.items() if k in chall_ids})
+
+        # Process new candidates dynamically
+        if genetic_optimizer:
+            challs = registry.get_challengers()
+            chall_ids = {c.strategy_id for c in challs}
+            genetic_optimizer.run_generation(
+                {k: v for k, v in all_perfs.items() if k in chall_ids}, 
+                current_generation=generation_counter, 
+                population_size=10
+            )
 
     return {
         "raw_event_rows": raw_event_rows,

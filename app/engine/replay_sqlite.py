@@ -17,6 +17,7 @@ from app.engine.replay_worker import (
     PredictionRepository,
     PriceRepository,
 )
+from app.engine.continuous_learning import ContinuousLearner, Signal, SignalOutcome
 
 
 def _isoz(dt: datetime) -> str:
@@ -143,7 +144,7 @@ class SQLitePriceRepository(PriceRepository):
         self.repo = repo
         self.tenant_id = tenant_id
 
-    def get_exit_price(self, ticker: str, at: datetime) -> float | None:
+    def get_exit_price_at_or_after(self, ticker: str, at: datetime) -> float | None:
         ts = _isoz(at)
         row = self.repo.conn.execute(
             """
@@ -151,8 +152,11 @@ class SQLitePriceRepository(PriceRepository):
             FROM price_bars
             WHERE tenant_id = ?
               AND ticker = ?
-              AND timestamp <= ?
-            ORDER BY timestamp DESC
+              AND timeframe IN ('1m','1h','1d')
+              AND timestamp >= ?
+            ORDER BY
+              timestamp ASC,
+              CASE timeframe WHEN '1m' THEN 0 WHEN '1h' THEN 1 WHEN '1d' THEN 2 ELSE 3 END ASC
             LIMIT 1
             """,
             (self.tenant_id, ticker, ts),
@@ -230,6 +234,7 @@ class SQLiteMetricsUpdater(MetricsUpdater):
              AND o.tenant_id = p.tenant_id
             WHERE p.tenant_id = ?
               AND p.strategy_id = ?
+              AND o.exit_reason = 'horizon'
             ORDER BY o.evaluated_at ASC
             """,
             (self.tenant_id, strategy_id),
@@ -301,6 +306,7 @@ class SQLiteMetricsUpdater(MetricsUpdater):
               ON o.prediction_id = p.id
              AND o.tenant_id = p.tenant_id
             WHERE p.tenant_id = ?
+              AND o.exit_reason = 'horizon'
             """,
             (self.tenant_id,),
         ).fetchall()
@@ -373,6 +379,76 @@ class SQLiteMetricsUpdater(MetricsUpdater):
         )
 
     def refresh_weight_engine_inputs(self) -> None:
-        # Placeholder hook: in a fuller system this would precompute/denormalize
-        # weight-engine inputs from the latest performance/stability snapshots.
-        return
+        # Materialize per-strategy weight-engine inputs via ContinuousLearner, persisted to `strategy_weights`.
+        # This keeps the UI and the routing weights grounded in the same computed artifacts.
+        rows = self.repo.conn.execute(
+            """
+            SELECT
+              p.id as prediction_id,
+              p.strategy_id as strategy_id,
+              p.ticker as ticker,
+              p.timestamp as timestamp,
+              p.prediction as direction,
+              p.confidence as confidence,
+              p.regime as regime,
+              p.feature_snapshot_json as feature_snapshot_json,
+              o.return_pct as return_pct
+            FROM predictions p
+            JOIN prediction_outcomes o
+              ON o.prediction_id = p.id
+             AND o.tenant_id = p.tenant_id
+            WHERE p.tenant_id = ?
+              AND o.exit_reason = 'horizon'
+            ORDER BY o.evaluated_at DESC
+            LIMIT 5000
+            """,
+            (self.tenant_id,),
+        ).fetchall()
+
+        learner = ContinuousLearner()
+
+        def dir_i(d: str) -> int:
+            dl = str(d).strip().lower()
+            if dl in {"up", "long", "buy", "1", "+1"}:
+                return 1
+            if dl in {"down", "short", "sell", "-1"}:
+                return -1
+            return 0
+
+        for r in rows:
+            pred_id = str(r["prediction_id"])
+            strategy_id = str(r["strategy_id"])
+            ticker = str(r["ticker"])
+            ts = str(r["timestamp"])
+            regime = str(r["regime"]) if r["regime"] is not None and str(r["regime"]) else _extract_regime(str(r["feature_snapshot_json"])) or "UNKNOWN"
+            conf = float(r["confidence"])
+            ret = float(r["return_pct"])
+
+            signal = Signal(
+                id=pred_id,
+                strategy_id=strategy_id,
+                ticker=ticker,
+                direction=dir_i(str(r["direction"])),
+                confidence=conf,
+                timestamp=ts,
+                regime=regime,
+            )
+            outcome = SignalOutcome(signal_id=pred_id, actual_return_pct=ret)
+            learner.ingest_pairing(signal, outcome)
+
+        performances = learner.evaluate_all()
+        now = datetime.now(timezone.utc)
+        for sid, perf in performances.items():
+            try:
+                self.repo.upsert_strategy_weight(
+                    strategy_id=str(sid),
+                    win_rate=float(perf.win_rate),
+                    alpha=float(perf.alpha),
+                    stability=float(perf.stability),
+                    confidence_weight=float(perf.confidence_weight),
+                    regime_strength_json=json.dumps(dict(perf.regime_strength or {}), sort_keys=True),
+                    tenant_id=self.tenant_id,
+                    updated_at=now,
+                )
+            except Exception:
+                continue

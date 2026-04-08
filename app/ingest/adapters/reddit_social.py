@@ -9,9 +9,11 @@ class RedditSocialAdapter:
         _keys = ctx.key_manager.get("reddit")
         subreddit = spec.options.get("subreddit", "wallstreetbets")
         
+        ts = ctx.start_date or ctx.run_timestamp
+        
         return [
             {
-                "created_utc": ctx.run_timestamp,
+                "created_utc": ts,
                 "detected": "NVDA",
                 "title": f"Sample Reddit sentiment event from r/{subreddit}",
                 "body": "It's going to the moon!",
@@ -19,4 +21,3 @@ class RedditSocialAdapter:
                 "provider": "reddit",
             }
         ]
-

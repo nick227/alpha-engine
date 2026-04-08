@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +11,8 @@ from dateutil.parser import isoparse
 from app.core.repository import Repository
 from app.core.types import RawEvent
 from app.core.price_context import build_price_context_for_event
+from app.core.bars import BarsCache, bar_window_for_events, build_bars_provider
+from app.core.target_stocks import get_target_stocks, get_target_stocks_registry
 from app.engine.champion_state import load_active_champion_configs, refresh_active_champions_from_ranked
 from app.engine.runner import run_pipeline
 from app.engine.strategy_store import bootstrap_strategies_from_experiments, load_active_strategy_configs_from_db
@@ -21,10 +24,25 @@ class LiveLoopService:
         self.db_path = str(db_path)
         self.tenant_id = str(tenant_id)
 
+    def _bars_cache(self) -> BarsCache | None:
+        name = (str(os.getenv("HISTORICAL_BARS_PROVIDER", "") or "").strip().lower() or None)
+        if not name:
+            return None
+        try:
+            provider = build_bars_provider(name)
+        except Exception:
+            return None
+        return BarsCache(db_path=self.db_path, provider=provider, tenant_id=self.tenant_id)
+
     def run_once(self, now: datetime | None = None) -> dict:
         now = now or datetime.now(timezone.utc)
         repo = Repository(self.db_path)
         bootstrap_strategies_from_experiments(repo)
+
+        # Target Stocks: canonical universe (fails fast if empty).
+        reg = get_target_stocks_registry()
+        targets = get_target_stocks(asof=now)
+        targets_set = set(targets)
 
         # Ingest new raw events from a simple inbox file.
         inbox = Path("data/live/raw_events.jsonl")
@@ -117,31 +135,67 @@ class LiveLoopService:
             repo.close()
             return {"mode": "live", "ran_at": now.isoformat(), "status": "ok", "processed_events": 0}
 
-        # Build per-event price_context from bars stored in SQLite.
-        price_contexts: dict[str, dict] = {}
-        tickers = sorted({(evt.tickers[0] if evt.tickers else "") for evt in raw_events} - {""})
-        if tickers:
-            placeholders = ",".join(["?"] * len(tickers))
-            bars_all = repo.query_df(
-                f"""
-                SELECT ticker, timestamp, open, high, low, close, volume
-                FROM price_bars
-                WHERE tenant_id = 'default' AND ticker IN ({placeholders})
-                ORDER BY ticker, timestamp ASC
-                """,
-                params=tuple(tickers),
-            )
-            if not bars_all.empty:
-                bars_all["timestamp"] = pd.to_datetime(bars_all["timestamp"], utc=True)
-                by_ticker = {t: df for t, df in bars_all.groupby("ticker")}
+        # Target Stocks filtering: events enrich the universe; they do not define it.
+        filtered: list[RawEvent] = []
+        ignored_ids: list[str] = []
+        for evt in raw_events:
+            t = (evt.tickers[0] if evt.tickers else "")
+            ticker = str(t).strip().upper() if t else ""
+            if ticker and ticker not in targets_set:
+                ignored_ids.append(evt.id)
+                continue
+            # Normalize ticker casing if present.
+            if ticker:
+                evt.tickers = [ticker]
+            filtered.append(evt)
+        raw_events = filtered
 
-                for evt in raw_events:
-                    ticker = evt.tickers[0] if evt.tickers else None
-                    if not ticker or ticker not in by_ticker:
-                        continue
-                    ctx = build_price_context_for_event(ticker_bars=by_ticker[ticker], event_ts=evt.timestamp)
-                    if ctx:
-                        price_contexts[evt.id] = ctx
+        if ignored_ids:
+            processed_at = now.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            with repo.transaction():
+                for rid in ignored_ids:
+                    repo.set_raw_event_queue_status(rid, "PROCESSED", processed_at=processed_at, next_retry_at=None, last_error="not_target_stock")
+
+        if not raw_events:
+            repo.add_heartbeat("live", "ok", f"ignored {len(ignored_ids)} non-target events")
+            repo.close()
+            return {"mode": "live", "ran_at": now.isoformat(), "status": "ok", "processed_events": 0, "ignored_events": len(ignored_ids)}
+
+        bars_cache = self._bars_cache()
+        can_ensure = True
+        if bars_cache is None:
+            # Offline-safe mode: read from existing cached bars without fetching.
+            bars_cache = BarsCache(db_path=self.db_path, provider=build_bars_provider("mock"), tenant_id=self.tenant_id)
+            can_ensure = False
+
+        # Determine the live window and ensure bars for the whole universe (deterministic).
+        window = bar_window_for_events(event_times=[evt.timestamp for evt in raw_events] + [now])
+        if can_ensure:
+            bars_cache.ensure_policy(tickers=targets, start=window.start, end=window.end, now=now)
+
+        seg_1m_start = max(window.start, now - timedelta(days=5))
+        seg_1h_start = max(window.start, now - timedelta(days=90))
+        seg_1d_end = min(window.end, now - timedelta(days=90))
+
+        coverage_1m = bars_cache.coverage_pct(tickers=targets, timeframe="1m", start=seg_1m_start, end=window.end) if seg_1m_start < window.end else 0.0
+        coverage_1h = bars_cache.coverage_pct(tickers=targets, timeframe="1h", start=seg_1h_start, end=window.end) if seg_1h_start < window.end else 0.0
+        coverage_1d = bars_cache.coverage_pct(tickers=targets, timeframe="1d", start=window.start, end=seg_1d_end) if window.start < seg_1d_end else 0.0
+
+        # Build per-event price_context from cached multi-timeframe bars.
+        price_contexts: dict[str, dict] = {}
+        tickers_needed = sorted({(evt.tickers[0] if evt.tickers else "") for evt in raw_events} - {""})
+        if tickers_needed:
+            bars_by_tf = {
+                "1m": bars_cache.fetch_bars_df(timeframe="1m", tickers=tickers_needed, start=window.start, end=window.end),
+                "1h": bars_cache.fetch_bars_df(timeframe="1h", tickers=tickers_needed, start=window.start, end=window.end),
+                "1d": bars_cache.fetch_bars_df(timeframe="1d", tickers=tickers_needed, start=window.start, end=window.end),
+            }
+            from app.core.price_context import build_price_contexts_from_bars_multi
+
+            price_contexts = build_price_contexts_from_bars_multi(
+                raw_events=raw_events,
+                bars_by_timeframe=bars_by_tf,
+            )
 
         strategies = load_active_champion_configs(repo, tenant_id=self.tenant_id)
         if not strategies:
@@ -187,7 +241,14 @@ class LiveLoopService:
                     repo.set_raw_event_queue_status(evt.id, "DEFERRED", next_retry_at=retry_at, last_error="missing_bars")
 
         deferred = len(raw_events) - len(processable_events)
-        repo.add_heartbeat("live", "ok", f"processed {len(processable_events)} events, deferred {deferred}")
+        targets_processed = len({(e.tickers[0] if e.tickers else "") for e in processable_events} - {""})
+        repo.add_heartbeat(
+            "live",
+            "ok",
+            f"processed {len(processable_events)} deferred {deferred} targets {targets_processed}/{len(targets)} "
+            f"coverage_1m={coverage_1m:.1f}% coverage_1h={coverage_1h:.1f}% coverage_1d={coverage_1d:.1f}% "
+            f"universe={reg.target_universe_version[:10]}",
+        )
         repo.close()
         return {
             "mode": "live",
@@ -196,4 +257,9 @@ class LiveLoopService:
             "processed_events": len(processable_events),
             "deferred_events": deferred,
             "predictions": len(result.get("prediction_rows", [])),
+            "ignored_events": len(ignored_ids),
+            "targets_total": len(targets),
+            "targets_processed": targets_processed,
+            "bars_coverage_pct": {"1m": coverage_1m, "1h": coverage_1h, "1d": coverage_1d},
+            "target_universe_version": reg.target_universe_version,
         }

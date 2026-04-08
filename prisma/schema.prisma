@@ -155,6 +155,7 @@ model PredictionOutcome {
 model PriceBar {
   tenantId  String
   ticker     String
+  timeframe  String
   timestamp  DateTime
   open       Float
   high       Float
@@ -162,8 +163,8 @@ model PriceBar {
   close      Float
   volume     Float
 
-  @@id([tenantId, ticker, timestamp])
-  @@index([tenantId, ticker, timestamp])
+  @@id([tenantId, ticker, timeframe, timestamp])
+  @@index([tenantId, ticker, timeframe, timestamp])
 }
 
 model StrategyPerformance {
@@ -257,4 +258,85 @@ model SystemLoopHeartbeat {
   createdAt   DateTime @default(now())
 
   @@index([tenantId, loopType, createdAt])
+}
+
+model PredictionRun {
+  id               String   @id @default(cuid())
+  tenantId         String   @default("default")
+  ingressStart     DateTime
+  ingressEnd       DateTime
+  predictionStart  DateTime
+  predictionEnd    DateTime
+  timeframe        String   @default("1d")
+  regime           String?
+  createdAt        DateTime @default(now())
+
+  predictedSeries  PredictedSeriesPoint[]
+  actualSeries     ActualSeriesPoint[]
+  scores           PredictionScore[]
+
+  @@index([tenantId, predictionStart, predictionEnd])
+}
+
+model PredictedSeriesPoint {
+  id              String   @id @default(cuid())
+  tenantId        String   @default("default")
+  runId           String
+  strategyId      String
+  strategyVersion String?
+  ticker          String
+  timeframe       String
+  timestamp       DateTime
+  value           Float
+  createdAt       DateTime @default(now())
+
+  run PredictionRun @relation(fields: [runId], references: [id])
+
+  @@unique([tenantId, runId, strategyId, ticker, timeframe, timestamp])
+  @@index([tenantId, runId, ticker, timeframe, timestamp])
+  @@index([tenantId, strategyId, ticker, timeframe, timestamp])
+}
+
+model ActualSeriesPoint {
+  id        String   @id @default(cuid())
+  tenantId  String   @default("default")
+  runId     String
+  ticker    String
+  timeframe String
+  timestamp DateTime
+  value     Float
+  createdAt DateTime @default(now())
+
+  run PredictionRun @relation(fields: [runId], references: [id])
+
+  @@unique([tenantId, runId, ticker, timeframe, timestamp])
+  @@index([tenantId, runId, ticker, timeframe, timestamp])
+}
+
+model PredictionScore {
+  id                 String   @id @default(cuid())
+  tenantId           String   @default("default")
+  runId              String
+  strategyId         String
+  strategyVersion    String?
+  ticker             String
+  timeframe          String
+  regime             String?
+  forecastDays       Int
+  directionHitRate   Float
+  syncRate           Float
+  totalReturnActual  Float
+  totalReturnPred    Float
+  totalReturnError   Float
+  magnitudeError     Float
+  horizonWeight      Float
+  efficiencyRating   Float
+  attributionJson    String  @default("{}")
+  createdAt          DateTime @default(now())
+
+  run PredictionRun @relation(fields: [runId], references: [id])
+
+  @@unique([tenantId, runId, strategyId, ticker, timeframe])
+  @@index([tenantId, ticker, timeframe, efficiencyRating])
+  @@index([tenantId, strategyId, timeframe, efficiencyRating])
 }

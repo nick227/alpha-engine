@@ -3,6 +3,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 class Event(BaseModel):
+    id: str | None = None
     source_id: str
     source_type: str
     timestamp: str
