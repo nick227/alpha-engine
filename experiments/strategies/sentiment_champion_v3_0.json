@@ -1,0 +1,11 @@
+{
+  "name": "sentiment_champion_v3_0",
+  "track": "sentiment",
+  "version": "3.0",
+  "status": "ACTIVE",
+  "regime_focus": "HIGH_VOL",
+  "notes": "Sentiment champion scaffold for v3.0 recursive engine.",
+  "uses_recursive_weighting": true,
+  "uses_consensus": true,
+  "uses_rollback_guardrail": true
+}

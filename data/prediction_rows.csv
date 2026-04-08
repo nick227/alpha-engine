@@ -1,0 +1,19 @@
+strategy_name,strategy_type,mode,ticker,category,horizon,confidence,return_pct,direction_correct,prediction,event_text,event_timestamp
+baseline_momentum_v1,baseline_momentum,backtest,NVDA,datacenter_demand,15m,0.36,0.015,True,up,Nvidia datacenter capex surge points to stronger AI infrastructure demand,2026-04-08T06:44:45.656058
+technical_vwap_v1,technical_vwap_reclaim,backtest,NVDA,datacenter_demand,15m,0.764,0.015,True,up,Nvidia datacenter capex surge points to stronger AI infrastructure demand,2026-04-08T06:44:45.656058
+text_mra_v1,text_mra,backtest,NVDA,datacenter_demand,15m,0.952,0.015,True,up,Nvidia datacenter capex surge points to stronger AI infrastructure demand,2026-04-08T06:44:45.656058
+baseline_momentum_v1,baseline_momentum,backtest,AMD,supplier_disruption,15m,0.3,-0.013,True,down,AMD supplier disruption sparks concern over delayed server shipments,2026-04-08T06:49:45.656058
+technical_vwap_v1,technical_vwap_reclaim,backtest,AMD,supplier_disruption,15m,0.664,-0.013,True,down,AMD supplier disruption sparks concern over delayed server shipments,2026-04-08T06:49:45.656058
+text_mra_v2,text_mra,backtest,AMD,supplier_disruption,15m,0.8647999999999999,-0.013,True,down,AMD supplier disruption sparks concern over delayed server shipments,2026-04-08T06:49:45.656058
+technical_vwap_v1,technical_vwap_reclaim,backtest,AAPL,guidance_raise,15m,0.632,0.009,True,up,Apple raises guidance after record services growth of 12%,2026-04-08T06:54:45.656058
+text_mra_v1,text_mra,backtest,AAPL,guidance_raise,15m,0.7759999999999999,0.009,True,up,Apple raises guidance after record services growth of 12%,2026-04-08T06:54:45.656058
+technical_vwap_v1,technical_vwap_reclaim,backtest,TSLA,dilution_risk,15m,0.6,-0.008,True,down,Tesla secondary offering revives dilution concern despite EV demand,2026-04-08T06:59:45.656058
+text_mra_v2,text_mra,backtest,TSLA,dilution_risk,15m,0.7861999999999999,-0.008,True,down,Tesla secondary offering revives dilution concern despite EV demand,2026-04-08T06:59:45.656058
+baseline_momentum_v1,baseline_momentum,backtest,SMCI,regulatory_approval,15m,0.3,0.012,True,up,Super Micro wins regulatory approval for new datacenter rack deployment,2026-04-08T07:04:45.656058
+technical_vwap_v1,technical_vwap_reclaim,backtest,SMCI,regulatory_approval,15m,0.708,0.012,True,up,Super Micro wins regulatory approval for new datacenter rack deployment,2026-04-08T07:04:45.656058
+text_mra_v1,text_mra,backtest,SMCI,regulatory_approval,15m,0.9039999999999999,0.012,True,up,Super Micro wins regulatory approval for new datacenter rack deployment,2026-04-08T07:04:45.656058
+technical_bollinger_v1,technical_bollinger_reversion,backtest,NVDA,general_media,15m,0.8,-0.009,True,down,Nvidia pulls back after sharp breakout as RSI reaches extreme territory,2026-04-08T07:09:45.656058
+technical_rsi_v1,technical_rsi_reversion,backtest,NVDA,general_media,15m,0.625,-0.009,True,down,Nvidia pulls back after sharp breakout as RSI reaches extreme territory,2026-04-08T07:09:45.656058
+technical_vwap_v1,technical_vwap_reclaim,backtest,NVDA,general_media,15m,0.5960000000000001,-0.009,True,down,Nvidia pulls back after sharp breakout as RSI reaches extreme territory,2026-04-08T07:09:45.656058
+baseline_momentum_v1,baseline_momentum,backtest,TSLA,general_media,15m,0.24,0.011,True,up,Tesla reclaims VWAP with heavy volume into midday session,2026-04-08T07:14:45.656058
+technical_vwap_v1,technical_vwap_reclaim,backtest,TSLA,general_media,15m,0.76,0.011,True,up,Tesla reclaims VWAP with heavy volume into midday session,2026-04-08T07:14:45.656058

@@ -1,0 +1,11 @@
+{
+  "name": "hybrid_dual_track_v2_8",
+  "family": "hybrid",
+  "version": "2.8",
+  "notes": "Replay-aware hybrid strategy scaffold. Uses strategy/regime performance to feed future weighting.",
+  "uses_regime_weighting": true,
+  "uses_replay_feedback": true,
+  "sentiment_weight_source": "weight_engine",
+  "quant_weight_source": "weight_engine",
+  "consensus_bonus": 0.05
+}

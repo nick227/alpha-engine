@@ -1,0 +1,18 @@
+{
+  "name": "hybrid_dual_track_v2",
+  "family": "hybrid",
+  "version": "v2.0",
+  "status": "backtest",
+  "min_confidence": 0.6,
+  "min_stability": 0.6,
+  "sentiment_weight_bias": 0.5,
+  "agreement_bonus": 0.1,
+  "horizon_minutes": 15,
+  "regime": {
+    "primary_filter": "volatility",
+    "secondary_filter": "trend_strength",
+    "volatility_window": 20,
+    "adx_window": 14
+  },
+  "notes": "Volatility-first recursive dual-track strategy. Trend strength acts as secondary modifier."
+}

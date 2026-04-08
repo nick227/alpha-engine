@@ -1,0 +1,18 @@
+{
+  "name": "hybrid_dual_track_v1",
+  "family": "hybrid",
+  "status": "backtest",
+  "tracks": ["sentiment", "quantitative"],
+  "horizon": "15m",
+  "filters": {
+    "min_confidence": 0.55,
+    "require_consensus": false
+  },
+  "weights": {
+    "sentiment": 0.5,
+    "quantitative": 0.5,
+    "agreement_bonus": 0.15,
+    "historical_stability": 0.20
+  },
+  "notes": "Starter config for combining both tracks while preserving rolling slice evaluation."
+}

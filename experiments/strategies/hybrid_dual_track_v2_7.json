@@ -1,0 +1,32 @@
+{
+  "name": "hybrid_dual_track_v2_7",
+  "family": "hybrid",
+  "version": "2.7",
+  "description": "Regime-aware dual track strategy with volatility-first weighting and ADX secondary modifier.",
+  "consensus_formula": "P = Ws*Ss + Wq*Sq + bonus",
+  "weights": {
+    "high_vol": {
+      "sentiment": 0.8,
+      "quant": 0.2
+    },
+    "normal_vol": {
+      "sentiment": 0.5,
+      "quant": 0.5
+    },
+    "low_vol": {
+      "sentiment": 0.2,
+      "quant": 0.8
+    }
+  },
+  "adx_modifier": {
+    "strong_trend": {
+      "sentiment_delta": -0.1,
+      "quant_delta": 0.1
+    },
+    "weak_trend": {
+      "sentiment_delta": 0.05,
+      "quant_delta": -0.05
+    }
+  },
+  "agreement_bonus": 0.05
+}

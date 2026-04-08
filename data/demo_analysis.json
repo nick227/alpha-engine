@@ -1,0 +1,95 @@
+{
+  "backtest": {
+    "mode": "backtest",
+    "slice_report": {
+      "slices": [
+        {
+          "slice_label": "Jan",
+          "prediction_count": 18,
+          "accuracy": 0.6666666666666666,
+          "avg_return": 0.0055,
+          "avg_confidence": 0.655,
+          "calibration_gap": 0.011666666666666603,
+          "hit_rate": 0.6666666666666666,
+          "sample_size_ok": true
+        },
+        {
+          "slice_label": "Feb",
+          "prediction_count": 18,
+          "accuracy": 0.6666666666666666,
+          "avg_return": 0.0085,
+          "avg_confidence": 0.655,
+          "calibration_gap": 0.011666666666666603,
+          "hit_rate": 0.6666666666666666,
+          "sample_size_ok": true
+        },
+        {
+          "slice_label": "Mar",
+          "prediction_count": 18,
+          "accuracy": 0.9444444444444444,
+          "avg_return": 0.0115,
+          "avg_confidence": 0.655,
+          "calibration_gap": 0.2894444444444444,
+          "hit_rate": 0.9444444444444444,
+          "sample_size_ok": true
+        }
+      ],
+      "comparisons": [
+        {
+          "train_label": "Jan",
+          "forward_label": "Feb",
+          "train_accuracy": 0.6666666666666666,
+          "forward_accuracy": 0.6666666666666666,
+          "accuracy_drift": 0.0,
+          "train_avg_return": 0.0055,
+          "forward_avg_return": 0.0085,
+          "return_drift": 0.003000000000000001,
+          "stability_score": 0.9985
+        },
+        {
+          "train_label": "Feb",
+          "forward_label": "Mar",
+          "train_accuracy": 0.6666666666666666,
+          "forward_accuracy": 0.9444444444444444,
+          "accuracy_drift": 0.2777777777777778,
+          "train_avg_return": 0.0085,
+          "forward_avg_return": 0.0115,
+          "return_drift": 0.002999999999999999,
+          "stability_score": 0.8596111111111111
+        }
+      ]
+    },
+    "track_overlay": [
+      {
+        "prediction_count": 27,
+        "avg_confidence": 0.68,
+        "avg_return": 0.009,
+        "accuracy": 0.7777777777777778,
+        "track": "quantitative"
+      },
+      {
+        "prediction_count": 27,
+        "avg_confidence": 0.63,
+        "avg_return": 0.008,
+        "accuracy": 0.7407407407407407,
+        "track": "sentiment"
+      }
+    ]
+  },
+  "live": {
+    "mode": "live",
+    "active_prediction_count": 6,
+    "avg_confidence": 0.735,
+    "tickers": [
+      "AMD",
+      "NVDA",
+      "TSLA"
+    ]
+  },
+  "recommendation": {
+    "recommendation": "keep_and_iterate",
+    "reason": "slice stability acceptable; continue parallel testing",
+    "avg_stability": 0.9290555555555555,
+    "avg_live_confidence": 0.735
+  }
+}

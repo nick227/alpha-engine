@@ -1,0 +1,7 @@
+strategy,strategy_type,mode,horizon,total_predictions,accuracy,weighted_accuracy,avg_return,sharpe_proxy,calibration_score,avg_confidence
+baseline_momentum_v1,baseline_momentum,backtest,15m,4,1.0,0.3,0.00625,0.557486010064114,0.30000000000000004,0.3
+technical_bollinger_v1,technical_bollinger_reversion,backtest,15m,1,1.0,0.8,-0.009,0.0,0.8,0.8
+technical_rsi_v1,technical_rsi_reversion,backtest,15m,1,1.0,0.625,-0.009,0.0,0.625,0.625
+technical_vwap_v1,technical_vwap_reclaim,backtest,15m,7,1.0,0.6748571428571428,0.0024285714285714284,0.22120869825011477,0.6748571428571428,0.6748571428571428
+text_mra_v1,text_mra,backtest,15m,3,1.0,0.8773333333333333,0.012,4.898979485566356,0.8773333333333333,0.8773333333333333
+text_mra_v2,text_mra,backtest,15m,2,1.0,0.8254999999999999,-0.010499999999999999,-4.2,0.8254999999999999,0.8254999999999999
