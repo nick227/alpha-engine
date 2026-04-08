@@ -16,6 +16,39 @@ from app.engine.runner import _strategy_track
 class OptimizerLoopService:
     """Optimizer mutation loop scaffold."""
 
+    def __init__(self, cache_size: int = 4) -> None:
+        self._cache_size = int(cache_size)
+        # cache_key -> (raw_events_version, bars_version, (train_pre, fwd_pre))
+        self._window_cache: dict[tuple, tuple] = {}
+        self._window_cache_lru: list[tuple] = []
+
+    def _cache_get(self, key: tuple):
+        if key not in self._window_cache:
+            return None
+        # refresh LRU
+        try:
+            self._window_cache_lru.remove(key)
+        except ValueError:
+            pass
+        self._window_cache_lru.append(key)
+        return self._window_cache[key]
+
+    def _cache_put(self, key: tuple, value: tuple) -> None:
+        if key in self._window_cache:
+            self._window_cache[key] = value
+            try:
+                self._window_cache_lru.remove(key)
+            except ValueError:
+                pass
+            self._window_cache_lru.append(key)
+            return
+
+        self._window_cache[key] = value
+        self._window_cache_lru.append(key)
+        while len(self._window_cache_lru) > self._cache_size:
+            old = self._window_cache_lru.pop(0)
+            self._window_cache.pop(old, None)
+
     def run_once(self, now: datetime | None = None) -> dict:
         now = now or datetime.now(timezone.utc)
         repo = Repository("data/alpha.db")
@@ -97,6 +130,7 @@ class OptimizerLoopService:
             return {"mode": "optimizer", "ran_at": now.isoformat(), "status": "ok", "notes": "no bars"}
 
         bars = pd.DataFrame([dict(br) for br in bar_rows])
+        bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
 
         # Ensure strategy_state exists for actives.
         active = load_active_strategy_configs_from_db(repo)
@@ -118,17 +152,36 @@ class OptimizerLoopService:
         service = GeneticOptimizerService(repo)
         candidates = service.propose_candidates(parent, max_children=6)
 
+        # Precompute train/forward windows, cached across ticks keyed by (ticker set, time window).
+        # Invalidation: version stamps from raw_events / price_bars.
+        raw_events_version = repo.conn.execute("SELECT COALESCE(MAX(ingested_at), '') as v FROM raw_events WHERE tenant_id='default'").fetchone()["v"]
+        bars_version = repo.conn.execute("SELECT COALESCE(MAX(timestamp), '') as v FROM price_bars WHERE tenant_id='default'").fetchone()["v"]
+        cache_key = (tuple(tickers), min_ts, max_ts, 0.3)
+
+        cached = self._cache_get(cache_key)
+        if cached is None or cached[0] != str(raw_events_version) or cached[1] != str(bars_version):
+            train_pre, fwd_pre = service.precompute_windows(raw_events=raw_events, bars=bars, forward_ratio=0.3)
+            self._cache_put(cache_key, (str(raw_events_version), str(bars_version), (train_pre, fwd_pre)))
+        else:
+            train_pre, fwd_pre = cached[2]
+        parent_train = service.evaluate_strategy_on_window(strategy=parent, window=train_pre)
+        parent_fwd = service.evaluate_strategy_on_window(strategy=parent, window=fwd_pre)
+
         promoted = 0
         evaluated = 0
         for cand in candidates:
             evaluated += 1
             service.persist_candidate(parent=parent, candidate=cand, status="CANDIDATE")
-            passed, gate_logs = service.evaluate_forward_gate(
-                raw_events=raw_events,
-                bars=bars,
+
+            cand_train = service.evaluate_strategy_on_window(strategy=cand, window=train_pre)
+            cand_fwd = service.evaluate_strategy_on_window(strategy=cand, window=fwd_pre)
+            passed, gate_logs = service.gate_decision(
                 parent=parent,
                 candidate=cand,
-                forward_ratio=0.3,
+                parent_train=parent_train,
+                parent_forward=parent_fwd,
+                candidate_train=cand_train,
+                candidate_forward=cand_fwd,
                 min_stability_required=0.6,
                 min_sample_size=5,
             )

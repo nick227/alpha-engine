@@ -50,13 +50,22 @@ def build_price_context_for_event(
     ticker_bars: pd.DataFrame,
     event_ts: datetime,
     horizons_minutes: Iterable[int] = (1, 5, 15, 60),
+    assume_sorted: bool = False,
 ) -> dict:
     """
     Produces a feature-rich price_context dict from 1-minute OHLCV bars.
     Designed to satisfy current strategy + MRA + evaluation expectations.
     """
-    bars = ticker_bars.sort_values("timestamp").reset_index(drop=True).copy()
-    bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
+    if assume_sorted:
+        bars = ticker_bars.reset_index(drop=True).copy(deep=False)
+    else:
+        bars = ticker_bars.sort_values("timestamp").reset_index(drop=True).copy(deep=False)
+
+    if not pd.api.types.is_datetime64_any_dtype(bars["timestamp"]):
+        bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
+    else:
+        # Ensure timezone-aware UTC for searchsorted comparisons.
+        bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
 
     idx = _nearest_bar_index(bars, event_ts)
     if idx is None:
@@ -170,12 +179,14 @@ def build_price_contexts_from_bars(
     raw_events: list[RawEvent],
     bars: pd.DataFrame,
     horizons_minutes: Iterable[int] = (1, 5, 15, 60),
+    bars_already_utc: bool = False,
 ) -> dict[str, dict]:
     """
     Builds a price_context dict keyed by raw_event.id from a multi-ticker bars DataFrame.
     """
-    df = bars.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = bars if bars_already_utc else bars.copy()
+    if not bars_already_utc:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     ctxs: dict[str, dict] = {}
 
     for evt in raw_events:
@@ -189,6 +200,6 @@ def build_price_contexts_from_bars(
             ticker_bars=ticker_bars,
             event_ts=_to_utc(evt.timestamp),
             horizons_minutes=horizons_minutes,
+            assume_sorted=True,
         )
     return ctxs
-

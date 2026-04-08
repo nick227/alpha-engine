@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime
 from dataclasses import asdict
 from pathlib import Path
@@ -13,11 +14,7 @@ from app.core.repository import Repository
 from app.core.scoring import score_event
 from app.core.types import RawEvent, StrategyConfig, Prediction, PredictionOutcome
 from app.engine.evaluate import evaluate_prediction, summarize_outcomes
-from app.strategies.baseline_momentum import BaselineMomentumStrategy
-from app.strategies.technical.bollinger_reversion import BollingerReversionStrategy
-from app.strategies.technical.rsi_reversion import RSIMeanReversionStrategy
-from app.strategies.technical.vwap_reclaim import VWAPReclaimStrategy
-from app.strategies.text_mra import TextMRAStrategy
+from app.engine.strategy_factory import build_strategy_instance
 
 
 class Runner:
@@ -125,6 +122,9 @@ def load_strategy_configs(
     and ignores overlay scaffolds that don't match that shape.
     """
     base = Path(strategy_dir)
+    if not base.is_absolute():
+        project_root = Path(__file__).resolve().parents[2]
+        base = project_root / base
     if not base.exists():
         return []
 
@@ -167,17 +167,7 @@ def _build_strategy_instance(config: StrategyConfig):
     Returns a StrategyBase instance for configs that map to the current StrategyBase API.
     Unknown strategy_type returns None so pipeline can skip it safely.
     """
-    mapping: dict[str, Callable[[StrategyConfig], Any]] = {
-        "text_mra": TextMRAStrategy,
-        "baseline_momentum": BaselineMomentumStrategy,
-        "technical_vwap_reclaim": VWAPReclaimStrategy,
-        "technical_rsi_reversion": RSIMeanReversionStrategy,
-        "technical_bollinger_reversion": BollingerReversionStrategy,
-    }
-    cls = mapping.get(config.strategy_type)
-    if cls is None:
-        return None
-    return cls(config)
+    return build_strategy_instance(config)
 
 
 def run_pipeline(
@@ -218,9 +208,10 @@ def run_pipeline(
     repo: Repository | None = None
     if persist:
         repo = Repository(db_path=db_path)
-        for cfg, _ in strategies:
-            repo.persist_strategy(cfg)
-        repo.persist_strategy(consensus_config)
+        with repo.transaction():
+            for cfg, _ in strategies:
+                repo.persist_strategy(cfg)
+            repo.persist_strategy(consensus_config)
 
     raw_event_rows: list[dict[str, Any]] = []
     scored_event_rows: list[dict[str, Any]] = []
@@ -233,194 +224,198 @@ def run_pipeline(
 
     runner = Runner()
     regime_manager = RegimeManager()
+    summary_rows: list[dict[str, Any]] = []
 
-    for raw in raw_events:
-        price_context = price_contexts.get(raw.id, {})
-        if repo is not None:
-            repo.persist_raw_event(raw)
-        raw_event_rows.append(
-            {
-                "id": raw.id,
-                "timestamp": raw.timestamp.isoformat(),
-                "source": raw.source,
-                "text": raw.text,
-                "tickers": ",".join(raw.tickers),
-            }
-        )
-
-        scored = score_event(raw)
-        if repo is not None:
-            repo.persist_scored_event(scored, raw_event_id=raw.id)
-        scored_event_rows.append(
-            {
-                "id": scored.id,
-                "raw_event_id": scored.raw_event_id,
-                "primary_ticker": scored.primary_ticker,
-                "category": scored.category,
-                "materiality": scored.materiality,
-                "direction": scored.direction,
-                "confidence": scored.confidence,
-                "company_relevance": scored.company_relevance,
-                "concept_tags": json.dumps(scored.concept_tags),
-                "explanation_terms": json.dumps(scored.explanation_terms),
-                "scorer_version": scored.scorer_version,
-                "taxonomy_version": scored.taxonomy_version,
-            }
-        )
-
-        mra = compute_mra(scored, price_context)
-        if repo is not None:
-            repo.persist_mra_outcome(mra, scored_event_id=scored.id)
-        mra_rows.append(
-            {
-                "id": mra.id,
-                "scored_event_id": mra.scored_event_id,
-                "return_1m": mra.return_1m,
-                "return_5m": mra.return_5m,
-                "return_15m": mra.return_15m,
-                "return_1h": mra.return_1h,
-                "volume_ratio": mra.volume_ratio,
-                "vwap_distance": mra.vwap_distance,
-                "range_expansion": mra.range_expansion,
-                "continuation_slope": mra.continuation_slope,
-                "pullback_depth": mra.pullback_depth,
-                "mra_score": mra.mra_score,
-            }
-        )
-
-        event_predictions: list[tuple[str, StrategyConfig, Prediction]] = []
-
-        realized_vol = _estimate_realized_volatility(price_context)
-        hist_window = price_context.get("historical_volatility_window")
-        if not isinstance(hist_window, list) or not hist_window:
-            hist_window = [realized_vol for _ in range(20)]
-
-        adx_value: float | None = None
-        for key in ("adx", "adx_14", "adx_value"):
-            if key in price_context:
-                try:
-                    adx_value = float(price_context[key])
-                except (TypeError, ValueError):
-                    adx_value = None
-                break
-
-        regime_snapshot = regime_manager.classify(
-            realized_volatility=float(realized_vol),
-            historical_volatility_window=[float(x) for x in hist_window],
-            adx_value=adx_value,
-        )
-        regime_payload = asdict(regime_snapshot)
-        vol_regime = str(regime_snapshot.volatility_regime)
-
-        for cfg, strat in strategies:
-            pred = strat.maybe_predict(scored, mra, price_context, raw.timestamp)
-            if pred is None:
-                continue
-
-            if mode_override is not None:
-                pred.mode = mode_override
-
-            pred.feature_snapshot.setdefault("regime", vol_regime)
-            pred.feature_snapshot.setdefault("trend_strength", regime_snapshot.trend_strength)
-            pred.feature_snapshot.setdefault("regime_snapshot", regime_payload)
-
-            track = _strategy_track(cfg.strategy_type)
-            strategy_name = _strategy_display_name(cfg)
-            predictions.append(pred)
-            event_predictions.append((track, cfg, pred))
-
+    with (repo.transaction() if repo is not None else nullcontext()):
+        for raw in raw_events:
+            price_context = price_contexts.get(raw.id, {})
             if repo is not None:
-                repo.persist_prediction(pred)
+                repo.persist_raw_event(raw)
 
-            prediction_rows.append(
+            raw_event_rows.append(
                 {
-                    "id": pred.id,
-                    "strategy_id": pred.strategy_id,
-                    "strategy_name": strategy_name,
-                    "strategy_type": cfg.strategy_type,
-                    "track": track,
-                    "scored_event_id": pred.scored_event_id,
-                    "ticker": pred.ticker,
-                    "timestamp": pred.timestamp.isoformat(),
-                    "prediction": pred.prediction,
-                    "confidence": pred.confidence,
-                    "horizon": pred.horizon,
-                    "entry_price": pred.entry_price,
-                    "mode": pred.mode,
-                    "regime": vol_regime,
-                    "trend_strength": regime_snapshot.trend_strength,
+                    "id": raw.id,
+                    "timestamp": raw.timestamp.isoformat(),
+                    "source": raw.source,
+                    "text": raw.text,
+                    "tickers": ",".join(raw.tickers),
                 }
             )
 
-        # Optional: consensus if we have both sentiment + quant predictions for this event.
-        sentiment = [t for t in event_predictions if t[0] == "sentiment"]
-        quant = [t for t in event_predictions if t[0] == "quant"]
-        if sentiment and quant:
-            best_sentiment = sorted(sentiment, key=lambda r: r[2].confidence, reverse=True)[0][2]
-            best_quant = sorted(quant, key=lambda r: r[2].confidence, reverse=True)[0][2]
+            scored = score_event(raw)
+            if repo is not None:
+                repo.persist_scored_event(scored, raw_event_id=raw.id)
 
-            sentiment_stability = repo.get_strategy_stability_score(best_sentiment.strategy_id) if repo is not None else None
-            quant_stability = repo.get_strategy_stability_score(best_quant.strategy_id) if repo is not None else None
+            scored_event_rows.append(
+                {
+                    "id": scored.id,
+                    "raw_event_id": scored.raw_event_id,
+                    "primary_ticker": scored.primary_ticker,
+                    "category": scored.category,
+                    "materiality": scored.materiality,
+                    "direction": scored.direction,
+                    "confidence": scored.confidence,
+                    "company_relevance": scored.company_relevance,
+                    "concept_tags": json.dumps(scored.concept_tags),
+                    "explanation_terms": json.dumps(scored.explanation_terms),
+                    "scorer_version": scored.scorer_version,
+                    "taxonomy_version": scored.taxonomy_version,
+                }
+            )
 
-            consensus_payload = runner.build_prediction(
-                ticker=scored.primary_ticker,
-                sentiment_direction=best_sentiment.prediction,
-                sentiment_confidence=float(best_sentiment.confidence),
-                quant_direction=best_quant.prediction,
-                quant_confidence=float(best_quant.confidence),
+            mra = compute_mra(scored, price_context)
+            if repo is not None:
+                repo.persist_mra_outcome(mra, scored_event_id=scored.id)
+
+            mra_rows.append(
+                {
+                    "id": mra.id,
+                    "scored_event_id": mra.scored_event_id,
+                    "return_1m": mra.return_1m,
+                    "return_5m": mra.return_5m,
+                    "return_15m": mra.return_15m,
+                    "return_1h": mra.return_1h,
+                    "volume_ratio": mra.volume_ratio,
+                    "vwap_distance": mra.vwap_distance,
+                    "range_expansion": mra.range_expansion,
+                    "continuation_slope": mra.continuation_slope,
+                    "pullback_depth": mra.pullback_depth,
+                    "mra_score": mra.mra_score,
+                }
+            )
+
+            event_predictions: list[tuple[str, StrategyConfig, Prediction]] = []
+
+            realized_vol = _estimate_realized_volatility(price_context)
+            hist_window = price_context.get("historical_volatility_window")
+            if not isinstance(hist_window, list) or not hist_window:
+                hist_window = [realized_vol for _ in range(20)]
+
+            adx_value: float | None = None
+            for key in ("adx", "adx_14", "adx_value"):
+                if key in price_context:
+                    try:
+                        adx_value = float(price_context[key])
+                    except (TypeError, ValueError):
+                        adx_value = None
+                    break
+
+            regime_snapshot = regime_manager.classify(
                 realized_volatility=float(realized_vol),
                 historical_volatility_window=[float(x) for x in hist_window],
                 adx_value=adx_value,
-                sentiment_stability=sentiment_stability,
-                quant_stability=quant_stability,
             )
+            regime_payload = asdict(regime_snapshot)
+            vol_regime = str(regime_snapshot.volatility_regime)
 
-            consensus_pred = Prediction(
-                id=f"cons_{best_sentiment.id[:8]}_{best_quant.id[:8]}",
-                strategy_id=consensus_config.id,
-                scored_event_id=scored.id,
-                ticker=scored.primary_ticker,
-                timestamp=raw.timestamp,
-                prediction=str(consensus_payload["prediction"]),  # type: ignore[arg-type]
-                confidence=float(consensus_payload["confidence"]),
-                horizon=str(best_sentiment.horizon or best_quant.horizon),
-                entry_price=float(price_context.get("entry_price", 100.0)),
-                mode=mode_override or "backtest",
-                feature_snapshot={
-                    "regime": consensus_payload.get("regime"),
-                    "regime_snapshot": consensus_payload.get("regime_snapshot"),
-                    "trend_strength": regime_snapshot.trend_strength,
-                    "sentiment_confidence": consensus_payload.get("sentiment_confidence"),
-                    "quant_confidence": consensus_payload.get("quant_confidence"),
-                    "weighted_consensus": consensus_payload.get("weighted_consensus"),
-                },
-            )
-            predictions.append(consensus_pred)
+            for cfg, strat in strategies:
+                pred = strat.maybe_predict(scored, mra, price_context, raw.timestamp)
+                if pred is None:
+                    continue
 
-            if repo is not None:
-                repo.persist_prediction(consensus_pred)
+                if mode_override is not None:
+                    pred.mode = mode_override
 
-            prediction_rows.append(
-                {
-                    "id": consensus_pred.id,
-                    "strategy_id": consensus_pred.strategy_id,
-                    "strategy_name": _strategy_display_name(consensus_config),
-                    "strategy_type": consensus_config.strategy_type,
-                    "track": "consensus",
-                    "scored_event_id": consensus_pred.scored_event_id,
-                    "ticker": consensus_pred.ticker,
-                    "timestamp": consensus_pred.timestamp.isoformat(),
-                    "prediction": consensus_pred.prediction,
-                    "confidence": consensus_pred.confidence,
-                    "horizon": consensus_pred.horizon,
-                    "entry_price": consensus_pred.entry_price,
-                    "mode": consensus_pred.mode,
-                    "regime": vol_regime,
-                    "trend_strength": regime_snapshot.trend_strength,
-                }
-            )
+                pred.feature_snapshot.setdefault("regime", vol_regime)
+                pred.feature_snapshot.setdefault("trend_strength", regime_snapshot.trend_strength)
+                pred.feature_snapshot.setdefault("regime_snapshot", regime_payload)
 
-    # Evaluate outcomes using price_context contracts.
+                track = _strategy_track(cfg.strategy_type)
+                strategy_name = _strategy_display_name(cfg)
+                predictions.append(pred)
+                event_predictions.append((track, cfg, pred))
+
+                if repo is not None:
+                    repo.persist_prediction(pred)
+
+                prediction_rows.append(
+                    {
+                        "id": pred.id,
+                        "strategy_id": pred.strategy_id,
+                        "strategy_name": strategy_name,
+                        "strategy_type": cfg.strategy_type,
+                        "track": track,
+                        "scored_event_id": pred.scored_event_id,
+                        "ticker": pred.ticker,
+                        "timestamp": pred.timestamp.isoformat(),
+                        "prediction": pred.prediction,
+                        "confidence": pred.confidence,
+                        "horizon": pred.horizon,
+                        "entry_price": pred.entry_price,
+                        "mode": pred.mode,
+                        "regime": vol_regime,
+                        "trend_strength": regime_snapshot.trend_strength,
+                    }
+                )
+
+            sentiment = [t for t in event_predictions if t[0] == "sentiment"]
+            quant = [t for t in event_predictions if t[0] == "quant"]
+            if sentiment and quant:
+                best_sentiment = sorted(sentiment, key=lambda r: r[2].confidence, reverse=True)[0][2]
+                best_quant = sorted(quant, key=lambda r: r[2].confidence, reverse=True)[0][2]
+
+                sentiment_stability = repo.get_strategy_stability_score(best_sentiment.strategy_id) if repo is not None else None
+                quant_stability = repo.get_strategy_stability_score(best_quant.strategy_id) if repo is not None else None
+
+                consensus_payload = runner.build_prediction(
+                    ticker=scored.primary_ticker,
+                    sentiment_direction=best_sentiment.prediction,
+                    sentiment_confidence=float(best_sentiment.confidence),
+                    quant_direction=best_quant.prediction,
+                    quant_confidence=float(best_quant.confidence),
+                    realized_volatility=float(realized_vol),
+                    historical_volatility_window=[float(x) for x in hist_window],
+                    adx_value=adx_value,
+                    sentiment_stability=sentiment_stability,
+                    quant_stability=quant_stability,
+                )
+
+                consensus_pred = Prediction(
+                    id=f"cons_{best_sentiment.id[:8]}_{best_quant.id[:8]}",
+                    strategy_id=consensus_config.id,
+                    scored_event_id=scored.id,
+                    ticker=scored.primary_ticker,
+                    timestamp=raw.timestamp,
+                    prediction=str(consensus_payload["prediction"]),  # type: ignore[arg-type]
+                    confidence=float(consensus_payload["confidence"]),
+                    horizon=str(best_sentiment.horizon or best_quant.horizon),
+                    entry_price=float(price_context.get("entry_price", 100.0)),
+                    mode=mode_override or "backtest",
+                    feature_snapshot={
+                        "regime": consensus_payload.get("regime"),
+                        "regime_snapshot": consensus_payload.get("regime_snapshot"),
+                        "trend_strength": regime_snapshot.trend_strength,
+                        "sentiment_confidence": consensus_payload.get("sentiment_confidence"),
+                        "quant_confidence": consensus_payload.get("quant_confidence"),
+                        "weighted_consensus": consensus_payload.get("weighted_consensus"),
+                        "consensus_metadata": consensus_payload.get("metadata", {}),
+                    },
+                )
+                predictions.append(consensus_pred)
+
+                if repo is not None:
+                    repo.persist_prediction(consensus_pred)
+
+                prediction_rows.append(
+                    {
+                        "id": consensus_pred.id,
+                        "strategy_id": consensus_pred.strategy_id,
+                        "strategy_name": _strategy_display_name(consensus_config),
+                        "strategy_type": consensus_config.strategy_type,
+                        "track": "consensus",
+                        "scored_event_id": consensus_pred.scored_event_id,
+                        "ticker": consensus_pred.ticker,
+                        "timestamp": consensus_pred.timestamp.isoformat(),
+                        "prediction": consensus_pred.prediction,
+                        "confidence": consensus_pred.confidence,
+                        "horizon": consensus_pred.horizon,
+                        "entry_price": consensus_pred.entry_price,
+                        "mode": consensus_pred.mode,
+                        "regime": vol_regime,
+                        "trend_strength": regime_snapshot.trend_strength,
+                    }
+                )
+
     if not evaluate_outcomes:
         if repo is not None:
             repo.close()
@@ -434,36 +429,35 @@ def run_pipeline(
             "db_path": str(db_path),
         }
 
-    # Build quick raw_event_id -> scored_id map from scored_event_rows
     raw_to_scored: dict[str, str] = {row["raw_event_id"]: row["id"] for row in scored_event_rows}
     scored_to_raw: dict[str, str] = {scored_id: raw_id for raw_id, scored_id in raw_to_scored.items()}
 
-    for pred in predictions:
-        raw_event_id = scored_to_raw.get(pred.scored_event_id)
-        if raw_event_id is None:
-            continue
-        price_context = price_contexts.get(raw_event_id, {})
-        out = evaluate_prediction(pred, price_context)
-        outcomes.append(out)
+    with (repo.transaction() if repo is not None else nullcontext()):
+        for pred in predictions:
+            raw_event_id = scored_to_raw.get(pred.scored_event_id)
+            if raw_event_id is None:
+                continue
+            price_context = price_contexts.get(raw_event_id, {})
+            out = evaluate_prediction(pred, price_context)
+            outcomes.append(out)
 
-        if repo is not None:
-            repo.persist_outcome(out)
+            if repo is not None:
+                repo.persist_outcome(out)
 
-        outcome_rows.append(
-            {
-                "id": out.id,
-                "prediction_id": out.prediction_id,
-                "exit_price": out.exit_price,
-                "return_pct": out.return_pct,
-                "direction_correct": out.direction_correct,
-                "max_runup": out.max_runup,
-                "max_drawdown": out.max_drawdown,
-                "evaluated_at": out.evaluated_at.isoformat(),
-                "exit_reason": out.exit_reason,
-            }
-        )
+            outcome_rows.append(
+                {
+                    "id": out.id,
+                    "prediction_id": out.prediction_id,
+                    "exit_price": out.exit_price,
+                    "return_pct": out.return_pct,
+                    "direction_correct": out.direction_correct,
+                    "max_runup": out.max_runup,
+                    "max_drawdown": out.max_drawdown,
+                    "evaluated_at": out.evaluated_at.isoformat(),
+                    "exit_reason": out.exit_reason,
+                }
+            )
 
-    # Build summary rows compatible with app.engine.evaluate.summarize_outcomes
     pred_by_id: dict[str, dict[str, Any]] = {row["id"]: row for row in prediction_rows}
     joined: list[dict[str, Any]] = []
     for out in outcomes:

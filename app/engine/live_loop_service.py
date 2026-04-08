@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 from pathlib import Path
 
@@ -25,22 +25,23 @@ class LiveLoopService:
         inbox = Path("data/live/raw_events.jsonl")
         if inbox.exists():
             lines = inbox.read_text(encoding="utf-8").splitlines()
-            for line in lines:
-                if not line.strip():
-                    continue
-                try:
-                    payload = json.loads(line)
-                    raw = RawEvent(
-                        id=str(payload["id"]),
-                        timestamp=isoparse(str(payload["timestamp"])),
-                        source=str(payload.get("source", "live")),
-                        text=str(payload.get("text", "")),
-                        tickers=list(payload.get("tickers") or []),
-                        metadata=dict(payload.get("metadata") or {}),
-                    )
-                    repo.persist_raw_event(raw)
-                except Exception:
-                    continue
+            with repo.transaction():
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        payload = json.loads(line)
+                        raw = RawEvent(
+                            id=str(payload["id"]),
+                            timestamp=isoparse(str(payload["timestamp"])),
+                            source=str(payload.get("source", "live")),
+                            text=str(payload.get("text", "")),
+                            tickers=list(payload.get("tickers") or []),
+                            metadata=dict(payload.get("metadata") or {}),
+                        )
+                        repo.persist_raw_event(raw)
+                    except Exception:
+                        continue
 
             # Best-effort archive to avoid re-reading the whole file every tick.
             if lines:
@@ -53,25 +54,39 @@ class LiveLoopService:
                     # If archiving fails, leave the inbox intact (idempotent inserts still protect correctness).
                     pass
 
-        last_ingested = repo.get_kv("live:last_ingested_at") or ""
+        # Pull NEW + due DEFERRED events from the queue. This prevents cursor stall when bars are missing.
+        now_iso = now.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         rows = repo.conn.execute(
             """
-            SELECT id, timestamp, source, text, tickers_json, metadata_json, COALESCE(ingested_at, '') as ingested_at
-            FROM raw_events
-            WHERE tenant_id = 'default' AND COALESCE(ingested_at, '') > ?
-            ORDER BY ingested_at ASC
+            SELECT
+              q.raw_event_id,
+              r.timestamp,
+              r.source,
+              r.text,
+              r.tickers_json,
+              r.metadata_json
+            FROM raw_event_queue q
+            JOIN raw_events r
+              ON r.tenant_id = q.tenant_id
+             AND r.id = q.raw_event_id
+            WHERE q.tenant_id = 'default'
+              AND (
+                q.status = 'NEW'
+                OR (q.status = 'DEFERRED' AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?))
+              )
+            ORDER BY q.status DESC, COALESCE(q.next_retry_at, '') ASC
             LIMIT 50
             """,
-            (last_ingested,),
+            (now_iso,),
         ).fetchall()
 
+        if not rows:
+            repo.add_heartbeat("live", "ok", "queue empty")
+            repo.close()
+            return {"mode": "live", "ran_at": now.isoformat(), "status": "ok", "processed_events": 0}
+
         raw_events: list[RawEvent] = []
-        ingested_by_id: dict[str, str] = {}
-        max_ingested = last_ingested
         for r in rows:
-            ingested_at = str(r["ingested_at"] or "")
-            if ingested_at > max_ingested:
-                max_ingested = ingested_at
             try:
                 tickers = json.loads(str(r["tickers_json"] or "[]"))
             except Exception:
@@ -80,8 +95,7 @@ class LiveLoopService:
                 metadata = json.loads(str(r["metadata_json"] or "{}"))
             except Exception:
                 metadata = {}
-            raw_id = str(r["id"])
-            ingested_by_id[raw_id] = ingested_at
+            raw_id = str(r["raw_event_id"])
             raw_events.append(
                 RawEvent(
                     id=raw_id,
@@ -94,27 +108,25 @@ class LiveLoopService:
             )
 
         if not raw_events:
-            repo.add_heartbeat("live", "ok", "no new raw events")
+            repo.add_heartbeat("live", "ok", "queue items missing from raw_events")
             repo.close()
             return {"mode": "live", "ran_at": now.isoformat(), "status": "ok", "processed_events": 0}
 
         # Build per-event price_context from bars stored in SQLite.
         price_contexts: dict[str, dict] = {}
-        processed_max_ingested = last_ingested
         tickers = sorted({(evt.tickers[0] if evt.tickers else "") for evt in raw_events} - {""})
         if tickers:
             placeholders = ",".join(["?"] * len(tickers))
-            bar_rows = repo.conn.execute(
+            bars_all = repo.query_df(
                 f"""
                 SELECT ticker, timestamp, open, high, low, close, volume
                 FROM price_bars
                 WHERE tenant_id = 'default' AND ticker IN ({placeholders})
                 ORDER BY ticker, timestamp ASC
                 """,
-                tuple(tickers),
-            ).fetchall()
-            if bar_rows:
-                bars_all = pd.DataFrame([dict(br) for br in bar_rows])
+                params=tuple(tickers),
+            )
+            if not bars_all.empty:
                 bars_all["timestamp"] = pd.to_datetime(bars_all["timestamp"], utc=True)
                 by_ticker = {t: df for t, df in bars_all.groupby("ticker")}
 
@@ -125,16 +137,23 @@ class LiveLoopService:
                     ctx = build_price_context_for_event(ticker_bars=by_ticker[ticker], event_ts=evt.timestamp)
                     if ctx:
                         price_contexts[evt.id] = ctx
-                        ia = ingested_by_id.get(evt.id, "")
-                        if ia and ia > processed_max_ingested:
-                            processed_max_ingested = ia
 
         strategies = load_active_strategy_configs_from_db(repo)
         processable_events = [evt for evt in raw_events if evt.id in price_contexts]
         if not processable_events:
+            # Defer queue items to retry later, but do not block newer events.
+            retry_at = (now + timedelta(minutes=5)).astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            for evt in raw_events:
+                repo.set_raw_event_queue_status(evt.id, "DEFERRED", next_retry_at=retry_at, last_error="missing_bars")
             repo.add_heartbeat("live", "ok", f"deferred {len(raw_events)} events (missing bars)")
             repo.close()
-            return {"mode": "live", "ran_at": now.isoformat(), "status": "ok", "processed_events": 0, "deferred_events": len(raw_events)}
+            return {
+                "mode": "live",
+                "ran_at": now.isoformat(),
+                "status": "ok",
+                "processed_events": 0,
+                "deferred_events": len(raw_events),
+            }
 
         result = run_pipeline(
             processable_events,
@@ -146,9 +165,15 @@ class LiveLoopService:
             evaluate_outcomes=False,
         )
 
-        # Cursor by ingested_at for only the events we actually processed.
-        if processed_max_ingested and processed_max_ingested > last_ingested:
-            repo.set_kv("live:last_ingested_at", processed_max_ingested)
+        processed_at = now.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        processed_ids = {e.id for e in processable_events}
+        retry_at = (now + timedelta(minutes=5)).astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        with repo.transaction():
+            for evt in raw_events:
+                if evt.id in processed_ids:
+                    repo.set_raw_event_queue_status(evt.id, "PROCESSED", processed_at=processed_at, next_retry_at=None, last_error=None)
+                else:
+                    repo.set_raw_event_queue_status(evt.id, "DEFERRED", next_retry_at=retry_at, last_error="missing_bars")
 
         deferred = len(raw_events) - len(processable_events)
         repo.add_heartbeat("live", "ok", f"processed {len(processable_events)} events, deferred {deferred}")

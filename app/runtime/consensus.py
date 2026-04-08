@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Any
 
-from app.core.regime import RegimeManager, RegimeSnapshot
+from app.core.regime import build_regime_snapshot
 from app.runtime.weighting import derive_track_weights_from_stability
 
 
@@ -35,8 +35,8 @@ class ConsensusEngine:
     Canonical implementation - replaces app/engine/consensus_engine.py and app/intelligence/consensus_engine.py
     """
 
-    def __init__(self, regime_manager: RegimeManager | None = None) -> None:
-        self.regime_manager = regime_manager or RegimeManager()
+    def __init__(self) -> None:
+        pass
 
     def combine(
         self,
@@ -48,9 +48,9 @@ class ConsensusEngine:
         sentiment_stability: float | None = None,
         quant_stability: float | None = None,
     ) -> ConsensusPrediction:
-        snapshot = self.regime_manager.classify(
-            realized_volatility=realized_volatility,
-            historical_volatility_window=historical_volatility_window,
+        snapshot = build_regime_snapshot(
+            current_volatility=realized_volatility,
+            recent_volatilities=historical_volatility_window,
             adx_value=adx_value,
         )
 
@@ -74,10 +74,10 @@ class ConsensusEngine:
         else:
             ws, wq = ws_raw / total, wq_raw / total
 
-        bonus = snapshot.agreement_bonus if same_direction else 0.0
+        # Simplified consensus calculation for now
         weighted_confidence = max(
             0.0,
-            min(1.0, (ws * sentiment_signal.confidence) + (wq * quant_signal.confidence) + bonus),
+            min(1.0, (ws * sentiment_signal.confidence) + (wq * quant_signal.confidence)),
         )
 
         direction = (

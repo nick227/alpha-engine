@@ -9,7 +9,7 @@ from uuid import uuid4
 from dateutil.parser import isoparse
 
 from app.core.repository import Repository
-from app.engine.performance_engine import compute_stability, summarize_regime_performance, summarize_strategy_performance
+from app.engine.performance_engine import compute_stability, summarize_regime_performance
 from app.engine.replay_worker import (
     MetricsUpdater,
     OutcomeWriter,
@@ -60,6 +60,7 @@ def _strategy_track(strategy_type: str) -> str:
 
 
 def _extract_regime(feature_snapshot_json: str) -> str | None:
+    # Backwards-compat fallback for older predictions without `predictions.regime`.
     try:
         snap = json.loads(feature_snapshot_json or "{}")
     except Exception:
@@ -94,6 +95,7 @@ class SQLitePredictionRepository(PredictionRepository):
               p.entry_price,
               p.prediction,
               p.feature_snapshot_json,
+              p.regime,
               s.strategy_type
             FROM predictions p
             JOIN strategies s
@@ -114,7 +116,7 @@ class SQLitePredictionRepository(PredictionRepository):
             horizon_minutes = _horizon_to_minutes(str(row["horizon"]))
             strategy_type = str(row["strategy_type"])
             track = _strategy_track(strategy_type)
-            regime = _extract_regime(str(row["feature_snapshot_json"]))
+            regime = str(row["regime"]) if row["regime"] is not None and str(row["regime"]) else _extract_regime(str(row["feature_snapshot_json"]))
             yield PredictionRecord(
                 id=str(row["id"]),
                 strategy_id=str(row["strategy_id"]),
@@ -217,7 +219,7 @@ class SQLiteMetricsUpdater(MetricsUpdater):
             SELECT
               p.strategy_id as strategy_id,
               p.mode as mode,
-              p.feature_snapshot_json as feature_snapshot_json,
+              p.regime as regime,
               o.return_pct as return_pct,
               o.residual_alpha as residual_alpha,
               o.direction_correct as direction_correct,
@@ -235,7 +237,7 @@ class SQLiteMetricsUpdater(MetricsUpdater):
 
         out: list[_PerfRow] = []
         for row in rows:
-            regime = _extract_regime(str(row["feature_snapshot_json"]))
+            regime = str(row["regime"]) if row["regime"] is not None and str(row["regime"]) else None
             out.append(
                 _PerfRow(
                     strategy_id=str(row["strategy_id"]),
@@ -290,6 +292,7 @@ class SQLiteMetricsUpdater(MetricsUpdater):
         rows = self.repo.conn.execute(
             """
             SELECT
+              p.regime as regime,
               p.feature_snapshot_json as feature_snapshot_json,
               o.return_pct as return_pct,
               o.direction_correct as direction_correct
@@ -304,7 +307,7 @@ class SQLiteMetricsUpdater(MetricsUpdater):
 
         outcomes: list[dict] = []
         for row in rows:
-            reg = _extract_regime(str(row["feature_snapshot_json"])) or "UNKNOWN"
+            reg = (str(row["regime"]) if row["regime"] is not None and str(row["regime"]) else None) or _extract_regime(str(row["feature_snapshot_json"])) or "UNKNOWN"
             outcomes.append(
                 {
                     "regime": reg,
@@ -373,4 +376,3 @@ class SQLiteMetricsUpdater(MetricsUpdater):
         # Placeholder hook: in a fuller system this would precompute/denormalize
         # weight-engine inputs from the latest performance/stability snapshots.
         return
-
