@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from statistics import mean, pstdev
 from uuid import uuid4
 
@@ -34,7 +34,7 @@ def evaluate_prediction(prediction: Prediction, price_context: dict) -> Predicti
         direction_correct=correct,
         max_runup=float(price_context.get("max_runup", max(realized_return, 0.0))),
         max_drawdown=float(price_context.get("max_drawdown", min(realized_return, 0.0))),
-        evaluated_at=datetime.utcnow(),
+        evaluated_at=datetime.now(timezone.utc),
     )
 
 

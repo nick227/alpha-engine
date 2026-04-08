@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from statistics import mean
 from typing import Any
 
 import pandas as pd
@@ -112,21 +110,23 @@ class GeneticOptimizerService:
         # Prepare bars timestamp once; contexts assume sorted bars.
         bars_prepared = bars
         if "timestamp" in bars_prepared.columns:
-            if not pd.api.types.is_datetime64_any_dtype(bars_prepared["timestamp"]):
-                bars_prepared = bars_prepared.copy()
-                bars_prepared["timestamp"] = pd.to_datetime(bars_prepared["timestamp"], utc=True)
+            ts = bars_prepared["timestamp"]
+            if not pd.api.types.is_datetime64_any_dtype(ts):
+                bars_prepared = bars_prepared.copy(deep=False)
+                bars_prepared["timestamp"] = pd.to_datetime(ts, utc=True)
             else:
-                # Ensure timezone-aware UTC
-                bars_prepared = bars_prepared.copy()
-                bars_prepared["timestamp"] = pd.to_datetime(bars_prepared["timestamp"], utc=True)
+                tz = getattr(ts.dtype, "tz", None)
+                if tz is None or str(tz) != "UTC":
+                    bars_prepared = bars_prepared.copy(deep=False)
+                    bars_prepared["timestamp"] = pd.to_datetime(ts, utc=True)
 
-        train_ctx = build_price_contexts_from_bars(raw_events=train_events, bars=bars_prepared, bars_already_utc=True)
-        fwd_ctx = build_price_contexts_from_bars(raw_events=forward_events, bars=bars_prepared, bars_already_utc=True)
+        all_events = list(train_events) + list(forward_events)
+        ctx_all = build_price_contexts_from_bars(raw_events=all_events, bars=bars_prepared, bars_already_utc=True)
 
-        def precompute(events: list[RawEvent], ctxs: dict[str, dict]) -> list[GeneticOptimizerService.PrecomputedEvent]:
+        def precompute(events: list[RawEvent]) -> list[GeneticOptimizerService.PrecomputedEvent]:
             out: list[GeneticOptimizerService.PrecomputedEvent] = []
             for evt in events:
-                ctx = ctxs.get(evt.id)
+                ctx = ctx_all.get(evt.id)
                 if not ctx:
                     continue
                 scored = score_event(evt)
@@ -134,7 +134,7 @@ class GeneticOptimizerService:
                 out.append(GeneticOptimizerService.PrecomputedEvent(raw=evt, scored=scored, mra=mra, price_context=ctx))
             return out
 
-        return precompute(train_events, train_ctx), precompute(forward_events, fwd_ctx)
+        return precompute(train_events), precompute(forward_events)
 
     def evaluate_strategy_on_window(
         self,

@@ -1,0 +1,14 @@
+alpaca:
+  key: "ENV:ALPACA_KEY"
+  secret: "ENV:ALPACA_SECRET"
+
+polygon:
+  key: "ENV:POLYGON_KEY"
+
+fred:
+  key: "ENV:FRED_KEY"
+
+reddit:
+  client_id: "ENV:REDDIT_CLIENT_ID"
+  secret: "ENV:REDDIT_SECRET"
+  user_agent: "ENV:REDDIT_USER_AGENT"

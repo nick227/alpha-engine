@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import List
+from uuid import uuid4
 
 import pandas as pd
 
@@ -48,13 +49,14 @@ def evaluate_predictions(predictions: List[Prediction], bars: pd.DataFrame) -> L
         direction_correct = return_pct > 0
         outcomes.append(
             PredictionOutcome(
+                id=str(uuid4()),
                 prediction_id=pred.id,
                 exit_price=exit_price,
                 return_pct=float(return_pct),
                 direction_correct=direction_correct,
                 max_runup=float(max_runup),
                 max_drawdown=float(max_drawdown),
-                evaluated_at=str(window.iloc[-1]["timestamp"]),
+                evaluated_at=pd.to_datetime(window.iloc[-1]["timestamp"], utc=True).to_pydatetime(),
             )
         )
 

@@ -1,0 +1,28 @@
+[
+  {
+    "timestamp": "2026-04-08T12:00:00Z",
+    "ticker": "NVDA",
+    "text": "Datacenter cooling demand rising with AI buildouts",
+    "tags": [
+      "bundle",
+      "ai_supply",
+      "cooling"
+    ],
+    "numeric_features": {
+      "bundle_score": 0.82
+    }
+  },
+  {
+    "timestamp": "2026-04-08T12:05:00Z",
+    "ticker": "AMD",
+    "text": "Server rack lead times tightening across hyperscaler orders",
+    "tags": [
+      "bundle",
+      "ai_supply",
+      "server"
+    ],
+    "numeric_features": {
+      "bundle_score": 0.77
+    }
+  }
+]

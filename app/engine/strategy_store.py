@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from app.core.repository import Repository
 from app.core.types import StrategyConfig
@@ -56,4 +55,3 @@ def bootstrap_strategies_from_experiments(repo: Repository, tenant_id: str = "de
     for cfg in configs:
         repo.persist_strategy(cfg, tenant_id=tenant_id)
     return len(configs)
-

@@ -10,15 +10,20 @@ from dateutil.parser import isoparse
 from app.core.repository import Repository
 from app.core.types import RawEvent
 from app.core.price_context import build_price_context_for_event
+from app.engine.champion_state import load_active_champion_configs, refresh_active_champions_from_ranked
 from app.engine.runner import run_pipeline
 from app.engine.strategy_store import bootstrap_strategies_from_experiments, load_active_strategy_configs_from_db
 
 class LiveLoopService:
     """Live prediction loop scaffold."""
 
+    def __init__(self, db_path: str = "data/alpha.db", tenant_id: str = "default") -> None:
+        self.db_path = str(db_path)
+        self.tenant_id = str(tenant_id)
+
     def run_once(self, now: datetime | None = None) -> dict:
         now = now or datetime.now(timezone.utc)
-        repo = Repository("data/alpha.db")
+        repo = Repository(self.db_path)
         bootstrap_strategies_from_experiments(repo)
 
         # Ingest new raw events from a simple inbox file.
@@ -138,7 +143,13 @@ class LiveLoopService:
                     if ctx:
                         price_contexts[evt.id] = ctx
 
-        strategies = load_active_strategy_configs_from_db(repo)
+        strategies = load_active_champion_configs(repo, tenant_id=self.tenant_id)
+        if not strategies:
+            refresh_active_champions_from_ranked(repo, tenant_id=self.tenant_id, min_predictions=5, now=now)
+            strategies = load_active_champion_configs(repo, tenant_id=self.tenant_id)
+
+        if not strategies:
+            strategies = load_active_strategy_configs_from_db(repo, tenant_id=self.tenant_id)
         processable_events = [evt for evt in raw_events if evt.id in price_contexts]
         if not processable_events:
             # Defer queue items to retry later, but do not block newer events.
@@ -159,7 +170,7 @@ class LiveLoopService:
             processable_events,
             price_contexts,
             persist=True,
-            db_path="data/alpha.db",
+            db_path=self.db_path,
             strategy_configs=strategies,
             mode_override="live",
             evaluate_outcomes=False,

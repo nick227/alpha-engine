@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
-
 import json
+from datetime import datetime, timedelta, timezone
+
 import pandas as pd
+from dateutil.parser import isoparse
 
 from app.core.repository import Repository
-from app.core.types import RawEvent, StrategyConfig
+from app.core.types import RawEvent
 from app.engine.genetic_optimizer_service import GeneticOptimizerService
-from app.engine.strategy_store import bootstrap_strategies_from_experiments, load_active_strategy_configs_from_db
 from app.engine.reaper_engine import should_reap
-from dateutil.parser import isoparse
 from app.engine.runner import _strategy_track
+from app.engine.strategy_store import bootstrap_strategies_from_experiments, load_active_strategy_configs_from_db
+from app.engine.champion_state import set_active_champion
+
 
 class OptimizerLoopService:
     """Optimizer mutation loop scaffold."""
@@ -189,13 +191,22 @@ class OptimizerLoopService:
 
             if passed:
                 # Promote candidate: mark active in strategies + state; archive parent.
-                repo.set_strategy_active(cand.id, True)
-                repo.set_strategy_active(parent.id, False)
                 cand_track = _strategy_track(cand.strategy_type)
                 parent_track = _strategy_track(parent.strategy_type)
-                repo.upsert_strategy_state(strategy_id=cand.id, track=cand_track, status="ACTIVE", parent_id=parent.id, version=cand.version, notes=cand.name)
-                repo.upsert_strategy_state(strategy_id=parent.id, track=parent_track, status="ARCHIVED", parent_id=None, version=parent.version, notes=parent.name)
-                repo.add_promotion_event(strategy_id=cand.id, parent_id=parent.id, track=cand_track, action="promoted", reason="forward_gate_pass", gate_logs=gate_logs)
+                with repo.transaction():
+                    repo.set_strategy_active(cand.id, True)
+                    repo.set_strategy_active(parent.id, False)
+                    repo.upsert_strategy_state(strategy_id=cand.id, track=cand_track, status="ACTIVE", parent_id=parent.id, version=cand.version, notes=cand.name)
+                    repo.upsert_strategy_state(strategy_id=parent.id, track=parent_track, status="ARCHIVED", parent_id=None, version=parent.version, notes=parent.name)
+                    repo.add_promotion_event(strategy_id=cand.id, parent_id=parent.id, track=cand_track, action="promoted", reason="forward_gate_pass", gate_logs=gate_logs)
+                    set_active_champion(
+                        repo,
+                        track=cand_track,
+                        strategy_id=cand.id,
+                        reason="optimizer_promoted",
+                        meta={"parent_id": parent.id, "gate": gate_logs},
+                        now=now,
+                    )
                 promoted += 1
                 break
 
@@ -253,11 +264,28 @@ class OptimizerLoopService:
             if not reap:
                 continue
 
-            repo.set_strategy_active(strategy_id, False)
-            repo.set_strategy_active(parent_id, True)
-            repo.upsert_strategy_state(strategy_id=strategy_id, track=track_for_strategy_id(strategy_id), status="ROLLED_BACK", parent_id=parent_id)
-            repo.upsert_strategy_state(strategy_id=parent_id, track=track_for_strategy_id(parent_id), status="ACTIVE", parent_id=None)
-            repo.add_promotion_event(strategy_id=strategy_id, parent_id=parent_id, track=track_for_strategy_id(strategy_id), action="rolled_back", reason=reason, gate_logs={"stability": stability, "underperformance_pct": under})
+            track = track_for_strategy_id(strategy_id)
+            with repo.transaction():
+                repo.set_strategy_active(strategy_id, False)
+                repo.set_strategy_active(parent_id, True)
+                repo.upsert_strategy_state(strategy_id=strategy_id, track=track, status="ROLLED_BACK", parent_id=parent_id)
+                repo.upsert_strategy_state(strategy_id=parent_id, track=track_for_strategy_id(parent_id), status="ACTIVE", parent_id=None)
+                repo.add_promotion_event(
+                    strategy_id=strategy_id,
+                    parent_id=parent_id,
+                    track=track,
+                    action="rolled_back",
+                    reason=reason,
+                    gate_logs={"stability": stability, "underperformance_pct": under},
+                )
+                set_active_champion(
+                    repo,
+                    track=track,
+                    strategy_id=parent_id,
+                    reason="optimizer_rolled_back",
+                    meta={"child_id": strategy_id, "stability": stability, "underperformance_pct": under},
+                    now=now,
+                )
             rolled_back += 1
 
         repo.add_heartbeat("optimizer", "ok", f"evaluated={evaluated} promoted={promoted} rolled_back={rolled_back}")

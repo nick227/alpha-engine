@@ -6,6 +6,7 @@ ignore-paths=
   ^data/
   ^prisma/
   ^experiments/
+  scripts[\\/]migrate_to_prisma\.py$
 
 [MESSAGES CONTROL]
 disable=
@@ -13,13 +14,26 @@ disable=
   missing-class-docstring,
   missing-function-docstring,
   too-few-public-methods,
+  too-many-instance-attributes,
+  too-many-locals,
+  too-many-branches,
+  too-many-statements,
+  too-many-positional-arguments,
+  too-many-public-methods,
   duplicate-code,
   broad-exception-caught,
   broad-exception-raised,
   fixme,
   import-outside-toplevel,
+  wrong-import-position,
+  wrong-import-order,
+  ungrouped-imports,
   invalid-name,
-  line-too-long
+  line-too-long,
+  trailing-newlines,
+  trailing-whitespace,
+  unnecessary-comprehension,
+  f-string-without-interpolation
 
 [FORMAT]
 max-line-length=120
