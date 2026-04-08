@@ -57,17 +57,24 @@ def main() -> None:
     parent = load_parent_strategy("experiments/strategies/technical_vwap_v1.json")
     candidates = service.propose_candidates(parent, max_children=8)
 
+    train_pre, fwd_pre = service.precompute_windows(raw_events=raw_events, bars=bars, forward_ratio=0.3)
+    parent_train = service.evaluate_strategy_on_window(strategy=parent, window=train_pre)
+    parent_fwd = service.evaluate_strategy_on_window(strategy=parent, window=fwd_pre)
+
     print(f"Parent: {parent.name} ({parent.strategy_type})")
     print(f"Candidates: {len(candidates)}")
 
     for cand in candidates:
         service.persist_candidate(parent=parent, candidate=cand, status="CANDIDATE")
-        passed, gate_logs = service.evaluate_forward_gate(
-            raw_events=raw_events,
-            bars=bars,
+        cand_train = service.evaluate_strategy_on_window(strategy=cand, window=train_pre)
+        cand_fwd = service.evaluate_strategy_on_window(strategy=cand, window=fwd_pre)
+        passed, gate_logs = service.gate_decision(
             parent=parent,
             candidate=cand,
-            forward_ratio=0.3,
+            parent_train=parent_train,
+            parent_forward=parent_fwd,
+            candidate_train=cand_train,
+            candidate_forward=cand_fwd,
             min_stability_required=0.55,
             min_sample_size=2,
         )
@@ -80,4 +87,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

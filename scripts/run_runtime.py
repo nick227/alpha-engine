@@ -11,9 +11,13 @@ from app.runtime.scheduler import RuntimeScheduler
 
 
 def main() -> None:
-    RuntimeScheduler(interval_seconds=5).start()
+    import os
+
+    interval = int(os.environ.get("ALPHA_RUNTIME_INTERVAL", "5"))
+    max_ticks_raw = os.environ.get("ALPHA_RUNTIME_MAX_TICKS")
+    max_ticks = int(max_ticks_raw) if max_ticks_raw else None
+    RuntimeScheduler(interval_seconds=interval).start(max_ticks=max_ticks)
 
 
 if __name__ == "__main__":
     main()
-

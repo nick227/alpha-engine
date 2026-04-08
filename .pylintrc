@@ -1,0 +1,29 @@
+[MASTER]
+ignore-paths=
+  ^\\.venv/
+  ^node_modules/
+  ^outputs/
+  ^data/
+  ^prisma/
+  ^experiments/
+
+[MESSAGES CONTROL]
+disable=
+  missing-module-docstring,
+  missing-class-docstring,
+  missing-function-docstring,
+  too-few-public-methods,
+  duplicate-code,
+  broad-exception-caught,
+  broad-exception-raised,
+  fixme,
+  import-outside-toplevel,
+  invalid-name,
+  line-too-long
+
+[FORMAT]
+max-line-length=120
+
+[DESIGN]
+max-args=12
+max-locals=30

@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 import pandas as pd
 
 from app.core.types import RawEvent
-from app.engine.runner import run_pipeline
+from app.runtime.pipeline import run_pipeline
 
 OUTPUT_DIR = Path("outputs")
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -46,22 +46,17 @@ price_contexts = {
     "evt-7": {"entry_price": 100.0, "return_1m": 0.002, "return_5m": 0.006, "return_15m": 0.011, "return_1h": 0.014, "volume_ratio": 2.7, "vwap_distance": 0.007, "range_expansion": 1.8, "continuation_slope": 0.72, "pullback_depth": 0.001, "short_trend": 0.004, "future_return_5m": 0.006, "future_return_15m": 0.011, "future_return_1h": 0.014, "rsi_14": 54.0, "zscore_20": 0.9, "vwap_reclaim": True},
 }
 
-result = run_pipeline(raw_events, price_contexts, persist=True, db_path="data/alpha.db")
+result = run_pipeline(raw_events, price_contexts, persist=True)
 
-pd.DataFrame(result["raw_event_rows"]).to_csv(OUTPUT_DIR / "raw_events.csv", index=False)
-pd.DataFrame(result["scored_event_rows"]).to_csv(OUTPUT_DIR / "scored_events.csv", index=False)
-pd.DataFrame(result["mra_rows"]).to_csv(OUTPUT_DIR / "mra_outcomes.csv", index=False)
-pd.DataFrame(result["prediction_rows"]).to_csv(OUTPUT_DIR / "predictions.csv", index=False)
-pd.DataFrame(result["outcome_rows"]).to_csv(OUTPUT_DIR / "prediction_outcomes.csv", index=False)
-pd.DataFrame(result["summary"]).to_csv(OUTPUT_DIR / "strategy_performance.csv", index=False)
+pd.DataFrame(result["scored_events"]).to_csv(OUTPUT_DIR / "scored_events.csv", index=False)
+pd.DataFrame(result["mra_outcomes"]).to_csv(OUTPUT_DIR / "mra_outcomes.csv", index=False)
+pd.DataFrame(result["predictions"]).to_csv(OUTPUT_DIR / "predictions.csv", index=False)
+pd.DataFrame([result["summary"]]).to_csv(OUTPUT_DIR / "strategy_performance.csv", index=False)
 
 print("Generated:")
-print("-", OUTPUT_DIR / "raw_events.csv")
 print("-", OUTPUT_DIR / "scored_events.csv")
 print("-", OUTPUT_DIR / "mra_outcomes.csv")
 print("-", OUTPUT_DIR / "predictions.csv")
-print("-", OUTPUT_DIR / "prediction_outcomes.csv")
 print("-", OUTPUT_DIR / "strategy_performance.csv")
-print("-", Path(result["db_path"]))
 print("\nSummary:")
 print(pd.DataFrame(result["summary"]).to_string(index=False))

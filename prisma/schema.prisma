@@ -4,7 +4,7 @@ datasource db {
 }
 
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client-py"
 }
 
 enum StrategyStatus {
@@ -16,20 +16,80 @@ enum StrategyStatus {
   ARCHIVED
 }
 
+model RawEvent {
+  id            String   @id @default(cuid())
+  tenantId      String   @default("default")
+  timestamp     DateTime
+  source        String
+  text          String
+  tickersJson   String
+  metadataJson  String
+
+  scoredEvents  ScoredEvent[]
+
+  @@index([tenantId, timestamp])
+}
+
+model ScoredEvent {
+  id                   String   @id @default(cuid())
+  tenantId             String   @default("default")
+  rawEventId           String
+  primaryTicker         String
+  category             String
+  materiality          Float
+  direction            String
+  confidence           Float
+  companyRelevance     Float
+  conceptTagsJson      String
+  explanationTermsJson  String
+  scorerVersion        String
+  taxonomyVersion      String
+
+  rawEvent     RawEvent     @relation(fields: [rawEventId], references: [id])
+  mraOutcomes  MraOutcome[]
+  predictions  Prediction[]
+
+  @@index([tenantId, rawEventId])
+}
+
+model MraOutcome {
+  id                   String   @id @default(cuid())
+  tenantId             String   @default("default")
+  scoredEventId        String
+  return1m             Float
+  return5m             Float
+  return15m            Float
+  return1h             Float
+  volumeRatio          Float
+  vwapDistance         Float
+  rangeExpansion       Float
+  continuationSlope    Float
+  pullbackDepth        Float
+  mraScore             Float
+  marketContextJson     String
+
+  scoredEvent ScoredEvent @relation(fields: [scoredEventId], references: [id])
+
+  @@index([tenantId, scoredEventId])
+}
+
 model Strategy {
   id                      String         @id @default(cuid())
+  tenantId                String         @default("default")
   track                   String         // sentiment | quant
   parentId                String?
   parent                  Strategy?      @relation("StrategyLineage", fields: [parentId], references: [id])
   children                Strategy[]     @relation("StrategyLineage")
   name                    String
   version                 String
+  strategyType            String
+  mode                    String
+  active                  Boolean        @default(true)
+  configJson              String
   status                  StrategyStatus @default(CANDIDATE)
   regimeFocus             String?
-  configJson              String
   gateLogs                String?
   isChampion              Boolean        @default(false)
-  isActive                Boolean        @default(false)
   backtestScore           Float          @default(0)
   forwardScore            Float          @default(0)
   liveScore               Float          @default(0)
@@ -39,12 +99,121 @@ model Strategy {
   activatedAt             DateTime?
   deactivatedAt           DateTime?
 
-  @@index([track, status])
+  predictions      Prediction[]
+  promotionEvents PromotionEvent[]
+  performance     StrategyPerformance[]
+  stability       StrategyStability[]
+
+  @@index([tenantId, track, status])
   @@index([parentId])
+}
+
+model Prediction {
+  id                  String   @id @default(cuid())
+  tenantId            String   @default("default")
+  strategyId          String
+  scoredEventId       String
+  ticker              String
+  timestamp           DateTime
+  prediction          String
+  confidence          Float
+  horizon             String
+  entryPrice          Float
+  mode                String
+  featureSnapshotJson String
+  regime              String?
+  trendStrength        String?
+  scoredOutcomeId     String?
+  scoredAt            DateTime?
+
+  strategy      Strategy          @relation(fields: [strategyId], references: [id])
+  scoredEvent   ScoredEvent       @relation(fields: [scoredEventId], references: [id])
+  outcome       PredictionOutcome?
+
+  @@index([tenantId, strategyId])
+  @@index([tenantId, ticker, timestamp])
+}
+
+model PredictionOutcome {
+  id              String   @id @default(cuid())
+  tenantId        String   @default("default")
+  predictionId    String
+  exitPrice       Float
+  returnPct       Float
+  directionCorrect Boolean
+  maxRunup        Float
+  maxDrawdown     Float
+  evaluatedAt      DateTime
+  exitReason       String
+  residualAlpha    Float     @default(0.0)
+
+  prediction Prediction @relation(fields: [predictionId], references: [id])
+
+  @@index([tenantId, predictionId])
+}
+
+model PriceBar {
+  tenantId  String
+  ticker     String
+  timestamp  DateTime
+  open       Float
+  high       Float
+  low        Float
+  close      Float
+  volume     Float
+
+  @@id([tenantId, ticker, timestamp])
+  @@index([tenantId, ticker, timestamp])
+}
+
+model StrategyPerformance {
+  id                String   @id @default(cuid())
+  tenantId          String   @default("default")
+  strategyId        String
+  horizon           String
+  predictionCount   Int
+  accuracy          Float
+  avgReturn         Float
+  avgResidualAlpha  Float
+  updatedAt         DateTime @default(now())
+
+  strategy Strategy @relation(fields: [strategyId], references: [id])
+
+  @@unique([tenantId, strategyId, horizon])
+  @@index([tenantId, strategyId])
+}
+
+model RegimePerformance {
+  id               String   @id @default(cuid())
+  tenantId         String   @default("default")
+  regime           String
+  predictionCount  Int
+  accuracy         Float
+  avgReturn        Float
+  updatedAt        DateTime @default(now())
+
+  @@unique([tenantId, regime])
+  @@index([tenantId, regime])
+}
+
+model StrategyStability {
+  id                String   @id @default(cuid())
+  tenantId          String   @default("default")
+  strategyId        String
+  backtestAccuracy  Float
+  liveAccuracy      Float
+  stabilityScore    Float
+  updatedAt        DateTime @default(now())
+
+  strategy Strategy @relation(fields: [strategyId], references: [id])
+
+  @@unique([tenantId, strategyId])
+  @@index([tenantId, strategyId])
 }
 
 model PromotionEvent {
   id              String   @id @default(cuid())
+  tenantId        String   @default("default")
   strategyId      String
   parentId        String?
   track           String
@@ -53,12 +222,15 @@ model PromotionEvent {
   gateLogs        String?
   createdAt       DateTime @default(now())
 
-  @@index([strategyId, action])
-  @@index([track, createdAt])
+  strategy Strategy @relation(fields: [strategyId], references: [id])
+
+  @@index([tenantId, strategyId, action])
+  @@index([tenantId, track, createdAt])
 }
 
 model ConsensusSignal {
   id                    String   @id @default(cuid())
+  tenantId              String   @default("default")
   ticker                String
   regime                String
   sentimentStrategyId   String
@@ -72,16 +244,17 @@ model ConsensusSignal {
   stabilityScore        Float
   createdAt             DateTime @default(now())
 
-  @@index([ticker, createdAt])
-  @@index([regime])
+  @@index([tenantId, ticker, createdAt])
+  @@index([tenantId, regime])
 }
 
 model SystemLoopHeartbeat {
   id          String   @id @default(cuid())
+  tenantId    String   @default("default")
   loopType    String   // live | replay | optimizer
   status      String
   notes       String?
   createdAt   DateTime @default(now())
 
-  @@index([loopType, createdAt])
+  @@index([tenantId, loopType, createdAt])
 }
