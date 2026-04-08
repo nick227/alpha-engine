@@ -1,0 +1,21 @@
+{
+  "id": "text-mra-v2",
+  "name": "text_mra_v2",
+  "version": "v2",
+  "strategy_type": "text_mra",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "required_categories": [
+      "supplier_disruption",
+      "dilution_risk",
+      "guidance_cut"
+    ],
+    "min_materiality": 0.4,
+    "min_company_relevance": 0.25,
+    "min_mra_score": 0.15,
+    "horizon": "15m",
+    "text_weight": 0.7,
+    "mra_weight": 0.3
+  }
+}

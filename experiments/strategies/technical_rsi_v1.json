@@ -1,0 +1,13 @@
+{
+  "id": "technical-rsi-v1",
+  "name": "technical_rsi_v1",
+  "version": "v1",
+  "strategy_type": "technical_rsi_reversion",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "oversold": 30,
+    "overbought": 70,
+    "horizon": "15m"
+  }
+}

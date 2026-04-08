@@ -1,0 +1,87 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./alpha.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum StrategyStatus {
+  CANDIDATE
+  PROBATION
+  ACTIVE
+  DEGRADED
+  ROLLED_BACK
+  ARCHIVED
+}
+
+model Strategy {
+  id                      String         @id @default(cuid())
+  track                   String         // sentiment | quant
+  parentId                String?
+  parent                  Strategy?      @relation("StrategyLineage", fields: [parentId], references: [id])
+  children                Strategy[]     @relation("StrategyLineage")
+  name                    String
+  version                 String
+  status                  StrategyStatus @default(CANDIDATE)
+  regimeFocus             String?
+  configJson              String
+  gateLogs                String?
+  isChampion              Boolean        @default(false)
+  isActive                Boolean        @default(false)
+  backtestScore           Float          @default(0)
+  forwardScore            Float          @default(0)
+  liveScore               Float          @default(0)
+  stabilityScore          Float          @default(0)
+  sampleSize              Int            @default(0)
+  createdAt               DateTime       @default(now())
+  activatedAt             DateTime?
+  deactivatedAt           DateTime?
+
+  @@index([track, status])
+  @@index([parentId])
+}
+
+model PromotionEvent {
+  id              String   @id @default(cuid())
+  strategyId      String
+  parentId        String?
+  track           String
+  action          String   // nominated | promoted | rolled_back | archived | reaped
+  reason          String?
+  gateLogs        String?
+  createdAt       DateTime @default(now())
+
+  @@index([strategyId, action])
+  @@index([track, createdAt])
+}
+
+model ConsensusSignal {
+  id                    String   @id @default(cuid())
+  ticker                String
+  regime                String
+  sentimentStrategyId   String
+  quantStrategyId       String
+  sentimentScore        Float
+  quantScore            Float
+  ws                    Float
+  wq                    Float
+  agreementBonus        Float
+  pFinal                Float
+  stabilityScore        Float
+  createdAt             DateTime @default(now())
+
+  @@index([ticker, createdAt])
+  @@index([regime])
+}
+
+model SystemLoopHeartbeat {
+  id          String   @id @default(cuid())
+  loopType    String   // live | replay | optimizer
+  status      String
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@index([loopType, createdAt])
+}

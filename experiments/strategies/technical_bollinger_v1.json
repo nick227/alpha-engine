@@ -1,0 +1,12 @@
+{
+  "id": "technical-bollinger-v1",
+  "name": "technical_bollinger_v1",
+  "version": "v1",
+  "strategy_type": "technical_bollinger_reversion",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "zscore_threshold": 2.0,
+    "horizon": "15m"
+  }
+}

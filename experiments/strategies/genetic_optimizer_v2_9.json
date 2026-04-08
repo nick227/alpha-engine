@@ -1,0 +1,15 @@
+{
+  "name": "genetic_optimizer_v2_9",
+  "family": "optimizer",
+  "version": "2.9",
+  "mutation_fields": [
+    "confidence_threshold",
+    "hold_minutes",
+    "consensus_bonus"
+  ],
+  "tournament_metric": "stability_score",
+  "forward_gate_required": true,
+  "probation_enabled": true,
+  "rollback_enabled": true,
+  "reaper_enabled": true
+}

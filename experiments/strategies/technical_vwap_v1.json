@@ -1,0 +1,12 @@
+{
+  "id": "technical-vwap-v1",
+  "name": "technical_vwap_v1",
+  "version": "v1",
+  "strategy_type": "technical_vwap_reclaim",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "min_volume_ratio": 1.5,
+    "horizon": "15m"
+  }
+}

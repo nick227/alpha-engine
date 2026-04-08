@@ -1,0 +1,21 @@
+{
+  "id": "text-mra-v1",
+  "name": "text_mra_v1",
+  "version": "v1",
+  "strategy_type": "text_mra",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "required_categories": [
+      "datacenter_demand",
+      "guidance_raise",
+      "regulatory_approval"
+    ],
+    "min_materiality": 0.45,
+    "min_company_relevance": 0.35,
+    "min_mra_score": 0.2,
+    "horizon": "15m",
+    "text_weight": 0.6,
+    "mra_weight": 0.4
+  }
+}
