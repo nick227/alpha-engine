@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any
 from app.ingest.source_spec import SourceSpec
 from app.ingest.event_model import Event
+from app.core.time_utils import normalize_timestamp
 
 class Extractor:
     def parse(self, expression: str, payload: dict[str, Any]) -> str | None:
@@ -34,8 +35,7 @@ class Extractor:
         
         # Base event fields
         timestamp = self.parse(extract.timestamp, raw) if extract and extract.timestamp else raw.get("timestamp")
-        if not timestamp:
-            timestamp = "1970-01-01T00:00:00Z" # Fallback if missing
+        timestamp = normalize_timestamp(timestamp)
             
         ticker = self.parse(extract.ticker, raw) if extract and extract.ticker else raw.get("ticker", raw.get("symbol"))
         text = self.parse(extract.text, raw) if extract and extract.text else raw.get("text")

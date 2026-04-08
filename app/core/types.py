@@ -89,3 +89,24 @@ class PredictionOutcome:
     max_drawdown: float
     evaluated_at: datetime
     exit_reason: str = "horizon"
+
+
+@dataclass(slots=True)
+class SignalScore:
+    name: str
+    value: float
+    timestamp: datetime
+    confidence: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class TargetRanking:
+    ticker: str
+    score: float
+    conviction: float
+    attribution: Dict[str, float]
+    regime: str
+    timestamp: datetime
+    tenant_id: str = "default"
+

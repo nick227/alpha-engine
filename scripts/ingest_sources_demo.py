@@ -1,20 +1,15 @@
 from __future__ import annotations
-from app.ingest.registry import fetch_all_sources
+import asyncio
+
+from app.ingest.async_runner import fetch_all_sources_async
 
 def main() -> None:
-    events = fetch_all_sources("config/sources.yaml")
-    print(f"Loaded {len(events)} normalized events")
-    for event in events[:10]:
-        print({
-            "source_id": event.source_id,
-            "type": event.source_type,
-            "ticker": event.ticker,
-            "timestamp": event.timestamp,
-            "text": event.text,
-            "numeric_features": event.numeric_features,
-            "tags": event.tags,
-            "weight": event.weight,
-        })
+    routed = asyncio.run(fetch_all_sources_async("config/sources.yaml"))
+    total = sum(len(v) for v in routed.values())
+    print(f"Loaded {total} normalized events across {len(routed)} routes")
+    for route, events in routed.items():
+        for event in events[:3]:
+            print({"route": route, "source_id": event.source_id, "ticker": event.ticker, "timestamp": event.timestamp, "text": event.text})
 
 if __name__ == "__main__":
     main()

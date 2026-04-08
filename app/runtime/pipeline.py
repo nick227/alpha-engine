@@ -15,6 +15,7 @@ from app.runtime.consensus import ConsensusEngine, TrackSignal
 from app.runtime.weighting import derive_track_weights
 from app.core.regime import build_regime_snapshot
 from app.db.repository import AlphaRepository
+from app.engine.ranking_engine import RankingEngine
 
 
 class AlphaPipeline:
@@ -26,6 +27,7 @@ class AlphaPipeline:
     def __init__(self, repository: AlphaRepository | None = None) -> None:
         self.repository = repository or AlphaRepository()
         self.consensus_engine = ConsensusEngine()
+        self.ranking_engine = RankingEngine(repository=self.repository)
 
     def run_pipeline(
         self,
@@ -151,6 +153,12 @@ class AlphaPipeline:
             "predictions": [asdict(pred) for pred in predictions],
             "consensus_signals": [asdict(consensus) for consensus in consensus_signals]
         }
+
+    def finalize_run(self, tenant_id: str = "default") -> List[Any]:
+        """
+        After pipeline processing is complete, update global rankings.
+        """
+        return self.ranking_engine.recompute(tenant_id)
 
     def _create_simple_prediction(
         self,

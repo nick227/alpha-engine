@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from app.core.regime_manager import RegimeManager
+from app.core.regime_manager import RegimeManager, RegimeSnapshot
 
 
 @dataclass(frozen=True)
@@ -27,25 +27,35 @@ class ConsensusPrediction:
     metadata: dict[str, Any]
 
 
-def _weights_from_stability(sentiment_stability: float | None, quant_stability: float | None) -> tuple[float, float]:
-    s = max(0.0, float(sentiment_stability or 0.0))
-    q = max(0.0, float(quant_stability or 0.0))
-    total = s + q
-    if total <= 0.0:
-        return 0.5, 0.5
-    return s / total, q / total
-
-
 class ConsensusEngine:
     """
-    Dual-track consensus that blends:
-      - regime-based base weights (volatility + trend),
-      - stability-based preference (winning track),
-      - agreement bonus when both tracks align.
+    Canonical v2.7+ dual-track consensus combiner used by `app/engine/runner.py`.
+
+    Contract:
+    - takes one sentiment TrackSignal and one quant TrackSignal for the same ticker
+    - uses RegimeManager to compute base weights + agreement bonus
+    - if `sentiment_stability`/`quant_stability` are supplied, they override base weights
+      (this is what the tests expect, and keeps the behavior simple + explainable)
     """
 
     def __init__(self, regime_manager: RegimeManager | None = None) -> None:
         self.regime_manager = regime_manager or RegimeManager()
+
+    @staticmethod
+    def _stability_weights(
+        sentiment_stability: float | None,
+        quant_stability: float | None,
+        snapshot: RegimeSnapshot,
+    ) -> tuple[float, float]:
+        if sentiment_stability is None and quant_stability is None:
+            return float(snapshot.sentiment_weight), float(snapshot.quant_weight)
+
+        ss = float(sentiment_stability or 0.0)
+        qs = float(quant_stability or 0.0)
+        total = ss + qs
+        if total <= 0:
+            return float(snapshot.sentiment_weight), float(snapshot.quant_weight)
+        return ss / total, qs / total
 
     def combine(
         self,
@@ -58,56 +68,63 @@ class ConsensusEngine:
         sentiment_stability: float | None = None,
         quant_stability: float | None = None,
     ) -> ConsensusPrediction:
-        regime_snapshot = self.regime_manager.classify(
+        if sentiment_signal.ticker != quant_signal.ticker:
+            raise ValueError("TrackSignal tickers must match for consensus.")
+
+        snapshot = self.regime_manager.classify(
             realized_volatility=float(realized_volatility),
-            historical_volatility_window=[float(x) for x in historical_volatility_window],
+            historical_volatility_window=[float(v) for v in historical_volatility_window],
             adx_value=adx_value,
         )
 
-        base_ws = float(regime_snapshot.sentiment_weight)
-        base_wq = float(regime_snapshot.quant_weight)
-
-        stab_ws, stab_wq = _weights_from_stability(sentiment_stability, quant_stability)
-
-        # Blend base (regime) with stability, then renormalize.
-        ws_raw = max(0.0, base_ws * float(stab_ws))
-        wq_raw = max(0.0, base_wq * float(stab_wq))
-        total = ws_raw + wq_raw
-        if total <= 0.0:
-            ws, wq = 0.5, 0.5
-        else:
-            ws, wq = ws_raw / total, wq_raw / total
-
+        ws, wq = self._stability_weights(sentiment_stability, quant_stability, snapshot)
         same_direction = str(sentiment_signal.direction) == str(quant_signal.direction)
-        agreement_bonus = float(regime_snapshot.agreement_bonus) if same_direction else 0.0
 
-        weighted = (ws * float(sentiment_signal.confidence)) + (wq * float(quant_signal.confidence))
-        confidence = max(0.0, min(1.0, weighted + agreement_bonus))
+        # Choose a final direction even on disagreement.
+        direction = (
+            str(sentiment_signal.direction)
+            if same_direction or (ws * float(sentiment_signal.confidence)) >= (wq * float(quant_signal.confidence))
+            else str(quant_signal.direction)
+        )
 
-        # Pick direction: aligned direction, else the heavier track signal.
-        if same_direction:
-            direction = str(sentiment_signal.direction)
-        else:
-            left = ws * float(sentiment_signal.confidence)
-            right = wq * float(quant_signal.confidence)
-            direction = str(sentiment_signal.direction) if left >= right else str(quant_signal.direction)
+        # P = Ws*Ss + Wq*Sq (+ bonus if same direction)
+        weighted = self.regime_manager.weighted_consensus(
+            sentiment_score=float(sentiment_signal.confidence),
+            quant_score=float(quant_signal.confidence),
+            snapshot=RegimeSnapshot(
+                volatility_regime=snapshot.volatility_regime,
+                volatility_value=snapshot.volatility_value,
+                volatility_zscore=snapshot.volatility_zscore,
+                adx_value=snapshot.adx_value,
+                trend_strength=snapshot.trend_strength,
+                sentiment_weight=ws,
+                quant_weight=wq,
+                agreement_bonus=snapshot.agreement_bonus,
+            ),
+            same_direction=same_direction,
+        )
+
+        regime_payload = asdict(snapshot)
+        # Make the persisted value stable (Enum -> value).
+        if "volatility_regime" in regime_payload and getattr(snapshot.volatility_regime, "value", None) is not None:
+            regime_payload["volatility_regime"] = snapshot.volatility_regime.value
 
         return ConsensusPrediction(
             ticker=str(sentiment_signal.ticker),
             direction=direction,
-            confidence=float(confidence),
+            confidence=float(weighted),
             sentiment_confidence=float(sentiment_signal.confidence),
             quant_confidence=float(quant_signal.confidence),
-            regime=asdict(regime_snapshot),
+            regime=regime_payload,
             weighted_consensus=float(weighted),
             metadata={
-                "ws": round(ws, 4),
-                "wq": round(wq, 4),
-                "base_ws": round(base_ws, 4),
-                "base_wq": round(base_wq, 4),
-                "stability_ws": round(stab_ws, 4),
-                "stability_wq": round(stab_wq, 4),
-                "agreement_bonus": agreement_bonus,
+                "same_direction": same_direction,
+                "ws": ws,
+                "wq": wq,
+                "agreement_bonus": snapshot.agreement_bonus,
+                "sentiment_track": dict(sentiment_signal.metadata or {}),
+                "quant_track": dict(quant_signal.metadata or {}),
+                "sentiment_stability": sentiment_stability,
+                "quant_stability": quant_stability,
             },
         )
-

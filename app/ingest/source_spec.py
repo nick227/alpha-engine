@@ -16,6 +16,7 @@ class SourceSpec(BaseModel):
     enabled: bool = True
     poll: str | None = None
     weight: float = 1.0
+    backfill_days: int | None = None
     symbols: str | list[str] | None = None
     endpoint: str | None = None
     extract: ExtractSpec | None = None
