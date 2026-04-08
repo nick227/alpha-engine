@@ -37,6 +37,8 @@ class PredictionScoringRunner:
             return 0
         start = str(run["prediction_start"])
         end = str(run["prediction_end"])
+
+        # Prefer exact timeframe bars; fallback to deriving daily closes from intraday if needed.
         rows = self.repo.conn.execute(
             """
             SELECT timestamp, close as value
@@ -50,6 +52,31 @@ class PredictionScoringRunner:
             """,
             (tenant_id, str(ticker), str(timeframe), start, end),
         ).fetchall()
+
+        if not rows and str(timeframe).strip().lower() == "1d":
+            rows = self.repo.conn.execute(
+                """
+                WITH daily AS (
+                  SELECT substr(timestamp, 1, 10) as day, MAX(timestamp) as ts
+                  FROM price_bars
+                  WHERE tenant_id = ?
+                    AND ticker = ?
+                    AND timeframe IN ('1m','1h')
+                    AND timestamp >= ?
+                    AND timestamp <= ?
+                  GROUP BY substr(timestamp, 1, 10)
+                  ORDER BY day ASC
+                )
+                SELECT pb.timestamp as timestamp, pb.close as value
+                FROM daily d
+                JOIN price_bars pb
+                  ON pb.tenant_id = ?
+                 AND pb.ticker = ?
+                 AND pb.timestamp = d.ts
+                ORDER BY pb.timestamp ASC
+                """,
+                (tenant_id, str(ticker), start, end, tenant_id, str(ticker)),
+            ).fetchall()
         points = [(str(r["timestamp"]), float(r["value"])) for r in rows]
         return self.repo.upsert_actual_series_points(
             run_id=run_id,
@@ -69,8 +96,19 @@ class PredictionScoringRunner:
         strategy_id: str | None = None,
         config: EfficiencyConfig | None = None,
         materialize_actual: bool = True,
+        autobuild_predicted_series: bool = False,
     ) -> list[dict[str, Any]]:
         cfg = config or EfficiencyConfig()
+
+        if autobuild_predicted_series:
+            try:
+                from app.engine.predicted_series_builder import PredictedSeriesBuilder, BuildConfig
+
+                builder = PredictedSeriesBuilder(repository=self.repo)
+                builder.build_for_run(run_id=run_id, tickers=([ticker] if ticker else None), config=BuildConfig(tenant_id=tenant_id))
+            except Exception:
+                # Scoring should remain best-effort; failing to autobuild should not crash the run.
+                pass
 
         run = self.repo.get_prediction_run(run_id=run_id, tenant_id=tenant_id) or {}
         run_regime = run.get("regime")

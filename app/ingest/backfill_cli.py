@@ -34,6 +34,12 @@ async def main():
         help="Replay after fetch (use --no-replay to skip)",
     )
     range_parser.add_argument(
+        "--skip-completed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip fetching slices already marked complete per source (use --no-skip-completed to refetch)",
+    )
+    range_parser.add_argument(
         "--fail-fast",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -86,6 +92,7 @@ async def main():
             start_time=start_dt,
             end_time=end_dt,
             replay=args.replay,
+            skip_completed=args.skip_completed,
             fail_fast=args.fail_fast,
             max_zero_insert_slices=args.max_zero_insert_slices,
         )
