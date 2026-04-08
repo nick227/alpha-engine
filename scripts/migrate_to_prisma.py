@@ -7,9 +7,7 @@ Run this once to migrate existing data, then delete the old SQL repository.
 """
 from __future__ import annotations
 
-import asyncio
 import sqlite3
-from datetime import datetime
 from pathlib import Path
 
 # TODO: Uncomment after Prisma generation

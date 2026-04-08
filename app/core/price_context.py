@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
@@ -57,15 +56,19 @@ def build_price_context_for_event(
     Designed to satisfy current strategy + MRA + evaluation expectations.
     """
     if assume_sorted:
-        bars = ticker_bars.reset_index(drop=True).copy(deep=False)
+        bars = ticker_bars.reset_index(drop=True)
     else:
-        bars = ticker_bars.sort_values("timestamp").reset_index(drop=True).copy(deep=False)
+        bars = ticker_bars.sort_values("timestamp").reset_index(drop=True)
 
-    if not pd.api.types.is_datetime64_any_dtype(bars["timestamp"]):
-        bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
+    ts = bars["timestamp"]
+    if not pd.api.types.is_datetime64_any_dtype(ts):
+        bars = bars.copy(deep=False)
+        bars["timestamp"] = pd.to_datetime(ts, utc=True)
     else:
-        # Ensure timezone-aware UTC for searchsorted comparisons.
-        bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
+        tz = getattr(ts.dtype, "tz", None)
+        if tz is None or str(tz) != "UTC":
+            bars = bars.copy(deep=False)
+            bars["timestamp"] = pd.to_datetime(ts, utc=True)
 
     idx = _nearest_bar_index(bars, event_ts)
     if idx is None:
@@ -128,8 +131,7 @@ def build_price_context_for_event(
     # VWAP reclaim/reject (simple 1-step cross).
     if idx >= 1:
         prev_close = float(bars.iloc[idx - 1]["close"])
-        prev_window = bars.iloc[max(0, idx - 21) : idx].copy()
-        prev_window["timestamp"] = pd.to_datetime(prev_window["timestamp"], utc=True)
+        prev_window = bars.iloc[max(0, idx - 21) : idx]
         pv = prev_window["volume"].astype(float)
         pt = (prev_window["high"].astype(float) + prev_window["low"].astype(float) + prev_window["close"].astype(float)) / 3.0
         prev_vwap = float((pt * pv).sum() / pv.sum()) if float(pv.sum()) > 0 else float(prev_window["close"].astype(float).mean()) if not prev_window.empty else vwap
@@ -184,17 +186,25 @@ def build_price_contexts_from_bars(
     """
     Builds a price_context dict keyed by raw_event.id from a multi-ticker bars DataFrame.
     """
-    df = bars if bars_already_utc else bars.copy()
+    df = bars if bars_already_utc else bars.copy(deep=False)
     if not bars_already_utc:
+        df = df.copy(deep=False)
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+
+    # Avoid repeated DataFrame filtering per event (O(events * bars)).
+    # Group once and reuse per ticker.
+    bars_by_ticker: dict[str, pd.DataFrame] = {
+        str(ticker): grp.reset_index(drop=True)
+        for ticker, grp in df.groupby("ticker", sort=False)
+    }
     ctxs: dict[str, dict] = {}
 
     for evt in raw_events:
         ticker = evt.tickers[0] if evt.tickers else None
         if not ticker:
             continue
-        ticker_bars = df[df["ticker"] == ticker]
-        if ticker_bars.empty:
+        ticker_bars = bars_by_ticker.get(str(ticker))
+        if ticker_bars is None or ticker_bars.empty:
             continue
         ctxs[evt.id] = build_price_context_for_event(
             ticker_bars=ticker_bars,

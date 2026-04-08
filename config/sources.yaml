@@ -1,0 +1,60 @@
+- id: alpaca_news_main
+  type: news
+  adapter: alpaca_news
+  enabled: true
+  poll: "60s"
+  weight: 1.0
+  symbols: ["NVDA", "AAPL", "AMD"]
+  extract:
+    text: "headline + summary"
+    timestamp: "created_at"
+    ticker: "symbols"
+
+- id: yahoo_market_watch
+  type: market
+  adapter: yahoo_finance
+  enabled: true
+  poll: "120s"
+  weight: 0.7
+  symbols: ["SPY", "QQQ"]
+  extract:
+    text: "headline"
+    timestamp: "published_at"
+    ticker: "symbol"
+
+- id: fred_rates
+  type: macro
+  adapter: fred_macro
+  enabled: true
+  poll: "1h"
+  weight: 0.6
+  options:
+    series: "FEDFUNDS"
+  extract:
+    timestamp: "date"
+
+- id: reddit_wsb
+  type: social
+  adapter: reddit_social
+  enabled: true
+  poll: "120s"
+  weight: 0.3
+  options:
+    subreddit: "wallstreetbets"
+  extract:
+    text: "title + body"
+    timestamp: "created_utc"
+    ticker: "detected"
+
+- id: developer_bundle_ai_supply
+  type: bundle
+  adapter: custom_bundle
+  enabled: true
+  poll:
+  weight: 0.8
+  options:
+    file: "bundles/ai_supply.json"
+  extract:
+    text: "text"
+    timestamp: "timestamp"
+    ticker: "ticker"

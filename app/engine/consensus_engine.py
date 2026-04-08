@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from app.core.regime_manager import RegimeManager
-from app.engine.weight_engine import derive_track_weights_from_stability
 
 
-@dataclass
+@dataclass(frozen=True)
 class TrackSignal:
     ticker: str
     direction: str
@@ -16,7 +15,7 @@ class TrackSignal:
     metadata: dict[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ConsensusPrediction:
     ticker: str
     direction: str
@@ -28,15 +27,21 @@ class ConsensusPrediction:
     metadata: dict[str, Any]
 
 
+def _weights_from_stability(sentiment_stability: float | None, quant_stability: float | None) -> tuple[float, float]:
+    s = max(0.0, float(sentiment_stability or 0.0))
+    q = max(0.0, float(quant_stability or 0.0))
+    total = s + q
+    if total <= 0.0:
+        return 0.5, 0.5
+    return s / total, q / total
+
+
 class ConsensusEngine:
     """
-    Combines sentiment and quant track signals into one adaptive dual-track prediction.
-
-    Weighting:
-    - Base weights come from regime (HIGH VOL -> sentiment heavy, LOW VOL -> quant heavy)
-    - Stability weights (if provided) bias toward the more stable track
-    - Final weights are the renormalized product of base * stability weights
-    - Agreement bonus is trend-aware via RegimeManager.classify()
+    Dual-track consensus that blends:
+      - regime-based base weights (volatility + trend),
+      - stability-based preference (winning track),
+      - agreement bonus when both tracks align.
     """
 
     def __init__(self, regime_manager: RegimeManager | None = None) -> None:
@@ -44,6 +49,7 @@ class ConsensusEngine:
 
     def combine(
         self,
+        *,
         sentiment_signal: TrackSignal,
         quant_signal: TrackSignal,
         realized_volatility: float,
@@ -52,61 +58,56 @@ class ConsensusEngine:
         sentiment_stability: float | None = None,
         quant_stability: float | None = None,
     ) -> ConsensusPrediction:
-        snapshot = self.regime_manager.classify(
-            realized_volatility=realized_volatility,
-            historical_volatility_window=historical_volatility_window,
+        regime_snapshot = self.regime_manager.classify(
+            realized_volatility=float(realized_volatility),
+            historical_volatility_window=[float(x) for x in historical_volatility_window],
             adx_value=adx_value,
         )
 
-        same_direction = sentiment_signal.direction == quant_signal.direction
+        base_ws = float(regime_snapshot.sentiment_weight)
+        base_wq = float(regime_snapshot.quant_weight)
 
-        base_ws, base_wq = snapshot.sentiment_weight, snapshot.quant_weight
+        stab_ws, stab_wq = _weights_from_stability(sentiment_stability, quant_stability)
 
-        stab_ws, stab_wq = 0.5, 0.5
-        if sentiment_stability is not None or quant_stability is not None:
-            stab = derive_track_weights_from_stability(sentiment_stability, quant_stability)
-            stab_ws, stab_wq = stab["ws"], stab["wq"]
-
-        ws_raw = max(0.0, float(base_ws) * float(stab_ws))
-        wq_raw = max(0.0, float(base_wq) * float(stab_wq))
+        # Blend base (regime) with stability, then renormalize.
+        ws_raw = max(0.0, base_ws * float(stab_ws))
+        wq_raw = max(0.0, base_wq * float(stab_wq))
         total = ws_raw + wq_raw
-        if total <= 0:
+        if total <= 0.0:
             ws, wq = 0.5, 0.5
         else:
             ws, wq = ws_raw / total, wq_raw / total
 
-        bonus = snapshot.agreement_bonus if same_direction else 0.0
-        weighted_confidence = max(
-            0.0,
-            min(1.0, (ws * sentiment_signal.confidence) + (wq * quant_signal.confidence) + bonus),
-        )
+        same_direction = str(sentiment_signal.direction) == str(quant_signal.direction)
+        agreement_bonus = float(regime_snapshot.agreement_bonus) if same_direction else 0.0
 
-        direction = (
-            sentiment_signal.direction
-            if same_direction or (ws * sentiment_signal.confidence) >= (wq * quant_signal.confidence)
-            else quant_signal.direction
-        )
+        weighted = (ws * float(sentiment_signal.confidence)) + (wq * float(quant_signal.confidence))
+        confidence = max(0.0, min(1.0, weighted + agreement_bonus))
+
+        # Pick direction: aligned direction, else the heavier track signal.
+        if same_direction:
+            direction = str(sentiment_signal.direction)
+        else:
+            left = ws * float(sentiment_signal.confidence)
+            right = wq * float(quant_signal.confidence)
+            direction = str(sentiment_signal.direction) if left >= right else str(quant_signal.direction)
 
         return ConsensusPrediction(
-            ticker=sentiment_signal.ticker,
+            ticker=str(sentiment_signal.ticker),
             direction=direction,
-            confidence=weighted_confidence,
-            sentiment_confidence=sentiment_signal.confidence,
-            quant_confidence=quant_signal.confidence,
-            regime=asdict(snapshot),
-            weighted_consensus=weighted_confidence,
+            confidence=float(confidence),
+            sentiment_confidence=float(sentiment_signal.confidence),
+            quant_confidence=float(quant_signal.confidence),
+            regime=asdict(regime_snapshot),
+            weighted_consensus=float(weighted),
             metadata={
-                "same_direction": same_direction,
                 "ws": round(ws, 4),
                 "wq": round(wq, 4),
                 "base_ws": round(base_ws, 4),
                 "base_wq": round(base_wq, 4),
                 "stability_ws": round(stab_ws, 4),
                 "stability_wq": round(stab_wq, 4),
-                "sentiment_stability": sentiment_stability,
-                "quant_stability": quant_stability,
-                "sentiment_track": sentiment_signal.metadata,
-                "quant_track": quant_signal.metadata,
+                "agreement_bonus": agreement_bonus,
             },
         )
 

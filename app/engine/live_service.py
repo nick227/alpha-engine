@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from statistics import mean
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable
 
 
 def run_live_signal_summary(predictions: Iterable[Dict[str, Any]]) -> Dict[str, Any]:

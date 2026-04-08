@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, Sequence
 
 from app.core.time_analysis import SliceWindow, build_rolling_slice_report
 from app.core.track_aggregation import build_track_overlay

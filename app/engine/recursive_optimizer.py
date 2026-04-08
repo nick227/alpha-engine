@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from itertools import count
-from typing import Iterable
 import copy
+from dataclasses import dataclass
+from itertools import count
 
 
 @dataclass

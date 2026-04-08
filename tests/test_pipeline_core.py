@@ -2,14 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pandas as pd
-
 from app.core.mra import compute_mra
 from app.core.regime_manager import RegimeManager
 from app.core.scoring import score_event
 from app.core.types import RawEvent, StrategyConfig
 from app.engine.consensus_engine import ConsensusEngine, TrackSignal
-from app.engine.evaluate import evaluate_prediction
 from app.engine.mutation_engine import mutate_strategy_config
 from app.engine.promotion_gate import passes_forward_gate
 from app.engine.reaper_engine import should_reap

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 import json
 
 from app.engine.consensus_engine import ConsensusEngine, TrackSignal
@@ -68,7 +68,7 @@ class Runner:
 
         return {
             "ticker": ticker,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "prediction": consensus.direction,
             "confidence": consensus.confidence,
             "track": "hybrid",
