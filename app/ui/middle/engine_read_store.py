@@ -910,7 +910,7 @@ class EngineReadStore:
                     drawdown=abs(min(0.0, float(r["min_total_return_actual"] or 0.0))),
                 )
             )
-        return out
+        return sorted(out, key=lambda x: x.avg_efficiency_rating, reverse=True)
 
     def get_efficiency_champion(
         self,

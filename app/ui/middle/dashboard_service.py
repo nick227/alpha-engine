@@ -280,8 +280,7 @@ class DashboardService:
         rows = self.store.get_latest_rankings(tenant_id=tenant_id, limit=limit)
         return [self._ranking_view(r) for r in rows]
 
-    @staticmethod
-    def _efficiency_view(r: StrategyEfficiencyRow) -> StrategyEfficiencyView:
+    def _efficiency_view(self, r: StrategyEfficiencyRow) -> StrategyEfficiencyView:
         return StrategyEfficiencyView(
             strategy_id=r.strategy_id,
             strategy_version=r.strategy_version,

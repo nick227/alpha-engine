@@ -276,6 +276,10 @@ class AlphaRepository:
             horizon_weight REAL NOT NULL,
             efficiency_rating REAL NOT NULL,
             alpha_prediction REAL NOT NULL DEFAULT 0.0,
+            alpha_version TEXT NOT NULL DEFAULT 'legacy',
+            alpha_sample_count INTEGER DEFAULT 0,
+            alpha_window_days INTEGER DEFAULT 0,
+            alpha_prev REAL,
             attribution_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(tenant_id, run_id, strategy_id, ticker, timeframe)
@@ -325,6 +329,17 @@ class AlphaRepository:
                 self.conn.execute("ALTER TABLE prediction_scores ADD COLUMN alpha_prediction REAL NOT NULL DEFAULT 0.0;")
             except Exception:
                 pass
+        for col, col_type in [
+            ("alpha_version", "TEXT NOT NULL DEFAULT 'legacy'"),
+            ("alpha_sample_count", "INTEGER DEFAULT 0"),
+            ("alpha_window_days", "INTEGER DEFAULT 0"),
+            ("alpha_prev", "REAL"),
+        ]:
+            if ps_cols and col not in ps_cols:
+                try:
+                    self.conn.execute(f"ALTER TABLE prediction_scores ADD COLUMN {col} {col_type};")
+                except Exception:
+                    pass
 
         try:
             self.conn.execute(
@@ -528,8 +543,9 @@ class AlphaRepository:
             INSERT OR REPLACE INTO prediction_scores
               (id, tenant_id, run_id, strategy_id, strategy_version, ticker, timeframe, regime, forecast_days,
                direction_hit_rate, sync_rate, total_return_actual, total_return_pred, total_return_error,
-               magnitude_error, horizon_weight, efficiency_rating, alpha_prediction, attribution_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               magnitude_error, horizon_weight, efficiency_rating, alpha_prediction, 
+               alpha_version, alpha_sample_count, alpha_window_days, alpha_prev, attribution_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sid,
@@ -550,6 +566,10 @@ class AlphaRepository:
                 float(score_data["horizon_weight"]),
                 float(score_data["efficiency_rating"]),
                 alpha_prediction,
+                score_data.get("alpha_version", "legacy"),
+                int(score_data.get("alpha_sample_count", 0)),
+                int(score_data.get("alpha_window_days", 0)),
+                score_data.get("alpha_prev"),
                 str(attribution_json),
             ),
         )

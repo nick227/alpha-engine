@@ -30,6 +30,25 @@ class EventStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ticker ON events(ticker)")
 
+            # Backfill slice markers to avoid refetching windows already completed.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS backfill_slice_markers (
+                    source_id TEXT NOT NULL,
+                    start_ts TEXT NOT NULL,
+                    end_ts TEXT NOT NULL,
+                    ok INTEGER NOT NULL,
+                    fetched_count INTEGER NOT NULL,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (source_id, start_ts, end_ts)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_backfill_slice_markers_range ON backfill_slice_markers(start_ts, end_ts);"
+            )
+
     def count_events_in_range(self, *, start_ts: str, end_ts: str) -> int:
         """
         Returns count of events in [start_ts, end_ts].
@@ -39,6 +58,33 @@ class EventStore:
                 "SELECT COUNT(*) FROM events WHERE timestamp BETWEEN ? AND ?",
                 (start_ts, end_ts),
             ).fetchone()
+            return int(row[0] or 0)
+
+    def count_events_for_source_in_range(
+        self,
+        *,
+        source_id: str,
+        start_ts: str,
+        end_ts: str,
+        end_inclusive: bool = False,
+    ) -> int:
+        """
+        Returns count of events for a source within a timestamp window.
+
+        By default this uses a half-open range [start_ts, end_ts) to match typical slice semantics.
+        Set `end_inclusive=True` to use [start_ts, end_ts].
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            if end_inclusive:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE source = ? AND timestamp BETWEEN ? AND ?",
+                    (str(source_id), str(start_ts), str(end_ts)),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE source = ? AND timestamp >= ? AND timestamp < ?",
+                    (str(source_id), str(start_ts), str(end_ts)),
+                ).fetchone()
             return int(row[0] or 0)
 
     def save_batch(self, events: list[Event]) -> int:
@@ -75,6 +121,48 @@ class EventStore:
             # sqlite3's cursor.rowcount is unreliable for executemany() + INSERT OR IGNORE
             # (it can reflect only the last statement). total_changes is stable per-connection.
             return conn.total_changes - before_changes
+
+    def is_slice_completed(self, *, source_id: str, start_ts: str, end_ts: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT ok
+                FROM backfill_slice_markers
+                WHERE source_id = ? AND start_ts = ? AND end_ts = ?
+                LIMIT 1
+                """,
+                (str(source_id), str(start_ts), str(end_ts)),
+            ).fetchone()
+            return bool(row and int(row[0] or 0) == 1)
+
+    def record_slice_marker(
+        self,
+        *,
+        source_id: str,
+        start_ts: str,
+        end_ts: str,
+        ok: bool,
+        fetched_count: int,
+        last_error: str | None = None,
+    ) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO backfill_slice_markers
+                  (source_id, start_ts, end_ts, ok, fetched_count, last_error, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(source_id),
+                    str(start_ts),
+                    str(end_ts),
+                    1 if ok else 0,
+                    int(fetched_count),
+                    (str(last_error) if last_error else None),
+                    now,
+                ),
+            )
 
     def get_events_chronological(
         self,

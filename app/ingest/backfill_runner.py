@@ -59,6 +59,14 @@ def _provider_group(spec) -> str:
     return str(getattr(spec, "id", "unknown") or "unknown")
 
 
+@dataclass(frozen=True)
+class SliceFetchResult:
+    source_id: str
+    events: list[Event]
+    ok: bool
+    error: str | None = None
+
+
 async def _fetch_slice(
     spec,
     start_date: datetime,
@@ -67,7 +75,7 @@ async def _fetch_slice(
     extractor: Extractor,
     *,
     cache_handle: dict[str, Any] | None = None,
-) -> list[Event]:
+) -> SliceFetchResult:
     # Optional shortcut: allow sources.yaml to opt into the canonical universe.
     try:
         if isinstance(getattr(spec, "symbols", None), str) and str(getattr(spec, "symbols", "")).strip().upper() == "TARGET_STOCKS":
@@ -81,7 +89,7 @@ async def _fetch_slice(
 
     adapter = resolve_adapter(spec.adapter)
     if not adapter:
-        return []
+        return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error="adapter_not_found")
 
     from app.ingest.async_runner import get_limiter
     provider = _provider_group(spec)
@@ -120,10 +128,10 @@ async def _fetch_slice(
         
         dt_total = time.perf_counter() - t0
         print(f"[{datetime.now(timezone.utc).isoformat()}] {spec.id}: {dt_total:.2f}s (fetch: {dt_fetch:.2f}s), {len(bounded)} events")
-        return bounded
+        return SliceFetchResult(source_id=str(spec.id), events=bounded, ok=True)
     except Exception as e:
         print(f"Backfill Error [{spec.id}]: {e}")
-        return []
+        return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error=str(e))
 
 class BackfillRunner:
     def __init__(self, db_path: str = "data/alpha.db", *, bars_provider: str | None = None):
@@ -179,6 +187,7 @@ class BackfillRunner:
         end_time: datetime,
         batch_size_days: int = 1,
         replay: bool = True,
+        skip_completed: bool = True,
         fail_fast: bool = True,
         max_zero_insert_slices: int = 2,
     ) -> None:
@@ -196,6 +205,35 @@ class BackfillRunner:
         try:
             specs = validate_sources_yaml()
 
+            # Optimization: if a custom bundle has no rows anywhere in the requested range,
+            # skip it for the whole run to avoid per-slice overhead.
+            effective_specs = []
+            for spec in specs:
+                if not getattr(spec, "enabled", True):
+                    continue
+                if str(getattr(spec, "adapter", "")).strip().lower() == "custom_bundle":
+                    try:
+                        adapter = resolve_adapter(spec.adapter)
+                        if adapter is None:
+                            continue
+                        ctx = FetchContext(
+                            provider=_provider_group(spec),
+                            key_manager=self.key_manager,
+                            rate_limiter=None,
+                            start_date=start_time.isoformat(),
+                            end_date=end_time.isoformat(),
+                            cache_handle=self._fetch_cache,
+                            run_metadata={"mode": "backfill", "source_id": spec.id, "prefilter": True},
+                        )
+                        raw_rows = await adapter.fetch_raw(spec, ctx)
+                        if not raw_rows:
+                            continue
+                    except Exception:
+                        # If prefilter fails, keep the source enabled (safer than skipping).
+                        pass
+                effective_specs.append(spec)
+            specs = effective_specs
+
             # Fetch slices.
             current_start = start_time
             while current_start < end_time:
@@ -203,10 +241,36 @@ class BackfillRunner:
                 print(f"[{datetime.now(timezone.utc).isoformat()}] Fetching slice: {current_start.date()} to {current_end.date()}")
                 
                 t_slice_start = time.perf_counter()
+                slice_start_ts = normalize_timestamp(current_start)
+                slice_end_ts = normalize_timestamp(current_end)
                 tasks = []
                 for spec in specs:
                     if not spec.enabled:
                         continue
+                    if skip_completed:
+                        sid = str(spec.id)
+                        if self.store.is_slice_completed(source_id=sid, start_ts=slice_start_ts, end_ts=slice_end_ts):
+                            continue
+                        # If events for this source already exist in the slice, treat as satisfied and skip refetch.
+                        try:
+                            existing_for_source = self.store.count_events_for_source_in_range(
+                                source_id=sid,
+                                start_ts=slice_start_ts,
+                                end_ts=slice_end_ts,
+                                end_inclusive=False,
+                            )
+                        except Exception:
+                            existing_for_source = 0
+                        if existing_for_source > 0:
+                            self.store.record_slice_marker(
+                                source_id=sid,
+                                start_ts=slice_start_ts,
+                                end_ts=slice_end_ts,
+                                ok=True,
+                                fetched_count=0,
+                                last_error="skipped_existing_events",
+                            )
+                            continue
                     tasks.append(
                         _fetch_slice(
                             spec,
@@ -218,6 +282,14 @@ class BackfillRunner:
                         )
                     )
 
+                if not tasks:
+                    # Fully satisfied slice (no sources needed). Avoid any network fetches.
+                    print(
+                        f"[{datetime.now(timezone.utc).isoformat()}] Slice already completed by markers; skipping fetch/store."
+                    )
+                    current_start = current_end
+                    continue
+
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 dt_fetch = time.perf_counter() - t_slice_start
                 
@@ -226,17 +298,28 @@ class BackfillRunner:
                 for r in results:
                     if isinstance(r, Exception):
                         continue
-                    all_events.extend(r)
+                    if isinstance(r, SliceFetchResult):
+                        all_events.extend(r.events)
 
                 deduper = Deduper()
                 unique_events, _ = deduper.process(all_events)
 
-                slice_start_ts = normalize_timestamp(current_start)
-                slice_end_ts = normalize_timestamp(current_end)
                 existing_in_slice = self.store.count_events_in_range(start_ts=slice_start_ts, end_ts=slice_end_ts)
                 inserted = self.store.save_batch(unique_events)
                 db_skipped = max(0, len(unique_events) - inserted)
                 dt_store = time.perf_counter() - t_store_start
+
+                # Record per-source slice markers (avoid refetching on reruns).
+                for r in results:
+                    if isinstance(r, SliceFetchResult):
+                        self.store.record_slice_marker(
+                            source_id=r.source_id,
+                            start_ts=slice_start_ts,
+                            end_ts=slice_end_ts,
+                            ok=bool(r.ok),
+                            fetched_count=len(r.events),
+                            last_error=r.error,
+                        )
 
                 if fail_fast:
                     if len(all_events) > 0 and len(unique_events) == 0:
