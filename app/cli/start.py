@@ -171,6 +171,9 @@ def _welcome() -> None:
         "  - You can always run the direct commands (see `.README.md`).",
         "",
         "Tools available:",
+        "  - Signal Audit UI  (adapters / events / strategy leaderboard / prediction log)",
+        "  - Dashboard UI     (main prediction view)",
+        "  - Full Pipeline Run (backfill -> score -> rank -> champion)",
         "  - Backfill ingest + manage Target Stocks universe",
         "  - Score predictions, backfill scores, rank strategies, promotions",
         "  - Demo pipeline runner",
@@ -464,6 +467,10 @@ def _run_score_predictions_cli() -> int:
     )
     cmd = cmds[idx]
     argv = _build_argv_for_subcommand(sub.choices[cmd], cmd)
+    # The interactive launcher primarily operates on the backfill tenant.
+    # Make tenant deterministic unless the user explicitly provided one.
+    if not any(str(a).startswith("--tenant-id") for a in argv):
+        argv.extend(["--tenant-id", "backfill"])
     _confirm_or_exit(["python", "-m", "app.engine.score_predictions_cli", *argv])
     return int(score_predictions_cli.main(argv))
 
@@ -476,6 +483,26 @@ def _run_demo_script() -> int:
     # Run in a subprocess so environment/side-effects match normal usage.
     _confirm_or_exit([sys.executable, str(script)])
     proc = subprocess.run([sys.executable, str(script)], cwd=str(_REPO_ROOT))
+    return int(proc.returncode)
+
+
+def _run_audit_ui() -> int:
+    audit = _REPO_ROOT / "app" / "ui" / "audit.py"
+    _confirm_or_exit(["streamlit", "run", str(audit)])
+    proc = subprocess.run(
+        ["streamlit", "run", str(audit)],
+        cwd=str(_REPO_ROOT),
+    )
+    return int(proc.returncode)
+
+
+def _run_dashboard_ui() -> int:
+    dashboard = _REPO_ROOT / "app" / "ui" / "dashboard.py"
+    _confirm_or_exit(["streamlit", "run", str(dashboard)])
+    proc = subprocess.run(
+        ["streamlit", "run", str(dashboard)],
+        cwd=str(_REPO_ROOT),
+    )
     return int(proc.returncode)
 
 
@@ -562,6 +589,21 @@ def main(argv: list[str] | None = None) -> int:
 def _launcher_items() -> list[_LauncherItem]:
     return [
         _LauncherItem(
+            label="Signal Audit (UI)",
+            description="Open flat-table audit view — adapters, events, strategy leaderboard, prediction log",
+            run=_run_audit_ui,
+        ),
+        _LauncherItem(
+            label="Dashboard (UI)",
+            description="Open main prediction dashboard",
+            run=_run_dashboard_ui,
+        ),
+        _LauncherItem(
+            label="Full Pipeline Run (recommended)",
+            description="Backfill -> generate predictions -> score -> rank -> select champion",
+            run=_run_full_pipeline_run,
+        ),
+        _LauncherItem(
             label="Backfill + Target Stocks",
             description="Ingest/backfill data and manage target universe",
             run=_run_backfill_cli,
@@ -570,11 +612,6 @@ def _launcher_items() -> list[_LauncherItem]:
             label="Scoring + Rankings",
             description="Score predictions, rank strategies, promotions",
             run=_run_score_predictions_cli,
-        ),
-        _LauncherItem(
-            label="Full Pipeline Run (recommended)",
-            description="Backfill -> generate predictions -> score -> rank -> select champion",
-            run=_run_full_pipeline_run,
         ),
         _LauncherItem(
             label="Demo Pipeline",
@@ -690,6 +727,7 @@ def _run_full_pipeline_run() -> int:
             start_time=start_dt,
             end_time=end_dt_exclusive,
             replay=True,
+            force_replay=True,
             skip_completed=True,
         )
     )

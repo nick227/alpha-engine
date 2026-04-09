@@ -60,7 +60,7 @@ def build_price_context_for_event(
     *,
     ticker_bars: pd.DataFrame,
     event_ts: datetime,
-    horizons_minutes: Iterable[int] = (1, 5, 15, 60, 240, 1440),
+    horizons_minutes: Iterable[int] = (1, 5, 15, 60, 240, 1440, 10080, 43200),
     assume_sorted: bool = False,
 ) -> dict:
     """
@@ -133,6 +133,12 @@ def build_price_context_for_event(
         elif minutes == 1440:
             ctx["return_1d"] = past_r
             ctx["future_return_1d"] = future_r
+        elif minutes == 10080:
+            ctx["return_7d"] = past_r
+            ctx["future_return_7d"] = future_r
+        elif minutes == 43200:
+            ctx["return_30d"] = past_r
+            ctx["future_return_30d"] = future_r
 
     # Short trend (5m lookback).
     if idx >= 5:

@@ -12,6 +12,8 @@ HORIZON_TO_RETURN_KEY = {
     "1h": "future_return_1h",
     "4h": "future_return_4h",
     "1d": "future_return_1d",
+    "7d": "future_return_7d",
+    "30d": "future_return_30d",
 }
 
 

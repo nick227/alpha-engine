@@ -269,6 +269,7 @@ CREATE TABLE IF NOT EXISTS consensus_signals (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL DEFAULT 'default',
     ticker TEXT NOT NULL,
+    horizon TEXT,
     regime TEXT,
     direction TEXT,
     confidence REAL,
@@ -389,6 +390,7 @@ class Repository:
         try:
             cs_cols = {str(r["name"]) for r in self.conn.execute("PRAGMA table_info(consensus_signals)").fetchall()}
             for col, ddl in (
+                ("horizon", "ALTER TABLE consensus_signals ADD COLUMN horizon TEXT;"),
                 ("direction", "ALTER TABLE consensus_signals ADD COLUMN direction TEXT;"),
                 ("confidence", "ALTER TABLE consensus_signals ADD COLUMN confidence REAL;"),
                 ("total_weight", "ALTER TABLE consensus_signals ADD COLUMN total_weight REAL;"),
@@ -652,6 +654,7 @@ class Repository:
         prediction_id: str,
         ticker: str,
         timestamp: datetime,
+        horizon: str | None,
         direction: str,
         confidence: float,
         regime: str | None,
@@ -680,15 +683,16 @@ class Repository:
         self.conn.execute(
             """
             INSERT OR REPLACE INTO consensus_signals
-              (id, tenant_id, ticker, regime, direction, confidence, total_weight, participating_strategies,
+              (id, tenant_id, ticker, horizon, regime, direction, confidence, total_weight, participating_strategies,
                sentiment_strategy_id, quant_strategy_id, sentiment_score, quant_score,
                ws, wq, agreement_bonus, p_final, stability_score, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 f"cs_{prediction_id}",
                 tenant_id,
                 str(ticker),
+                str(horizon) if horizon is not None else None,
                 regime,
                 str(direction),
                 float(confidence),

@@ -1,13 +1,26 @@
-"""
-Alpha Engine Dashboard - Canonical Implementation
-Single source of truth for dashboard functionality with performance optimizations
-"""
+""" 
+Alpha Engine Dashboard - Canonical Implementation 
+Single source of truth for dashboard functionality with performance optimizations 
+""" 
+ 
+from __future__ import annotations
 
-import streamlit as st
-import plotly.graph_objects as go
-import plotly.express as px
-from typing import Dict, List, Any, Tuple, Optional
-import pandas as pd
+import sys
+from pathlib import Path
+import textwrap
+
+# When launched via `streamlit run <abs path>`, Streamlit puts the script's directory
+# (e.g. `app/ui`) on `sys.path`, not necessarily the repo root. Ensure imports like
+# `from app...` work regardless of how the file is invoked.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+import streamlit as st 
+import plotly.graph_objects as go 
+import plotly.express as px 
+from typing import Dict, List, Any, Tuple, Optional 
+import pandas as pd 
 import numpy as np
 from datetime import datetime, timedelta
 import time
@@ -112,51 +125,46 @@ profiler = PerformanceProfiler()
 # OPTIMIZED DATA SERVICE
 # ============================================================================
 
-class OptimizedDashboardService:
-    """Optimized data service with performance improvements"""
+class OptimizedDashboardService: 
+    """Optimized data service with performance improvements""" 
     
     def __init__(self, service: DashboardService):
         self.service = service
         self._cached_series = {}  # Cache for series data
     
     @st.cache_data(ttl=30)  # Cache based only on true query inputs
-    def fetch_cards(self, inputs: DashboardInputs) -> List[Card]:
-        """Optimized card fetching with minimal recomputation"""
-        profiler.start("fetch_cards")
+    def fetch_cards(_self, _inputs: DashboardInputs, cache_key: str) -> List[Card]:
+        """Optimized card fetching with minimal recomputation""" 
+        profiler.start("fetch_cards") 
+        inputs = _inputs
+         
+        if not inputs.tenant: 
+            profiler.end("fetch_cards") 
+            return [] 
         
-        if not inputs.tenant:
-            profiler.end("fetch_cards")
-            return []
-        
-        # Generate deterministic cache key
-        cache_key = self._generate_cache_key(inputs)
-        
-        # Return cards based on view using optimized generation
-        if inputs.view == "best_picks":
-            cards = self._get_best_picks_optimized(inputs, cache_key)
+        if not cache_key:
+            raise ValueError("fetch_cards requires a non-empty cache_key")
+         
+        # Return cards based on view using optimized generation 
+        if inputs.view == "best_picks": 
+            cards = _self._get_best_picks_optimized(inputs, cache_key) 
         elif inputs.view == "dips":
-            cards = self._get_dips_optimized(inputs, cache_key)
+            cards = _self._get_dips_optimized(inputs, cache_key)
         elif inputs.view == "bundles":
-            cards = self._get_bundles_optimized(inputs, cache_key)
+            cards = _self._get_bundles_optimized(inputs, cache_key)
         elif inputs.view == "compare":
-            cards = self._get_compare_optimized(inputs, cache_key)
+            cards = _self._get_compare_optimized(inputs, cache_key)
         elif inputs.view == "backtest_analysis":
-            cards = self._get_backtest_optimized(inputs, cache_key)
+            cards = _self._get_backtest_optimized(inputs, cache_key)
         elif inputs.view == "mixed_test":
-            cards = self._get_mixed_test_optimized(inputs, cache_key)
+            cards = _self._get_mixed_test_optimized(inputs, cache_key)
         elif inputs.view == "top_ten_signals":
-            cards = self._get_top_ten_optimized(inputs, cache_key)
+            cards = _self._get_top_ten_optimized(inputs, cache_key)
         else:
             cards = []
         
-        # Precompute sorting keys in data service (avoid per-card sorting in renderer)
-        for card in cards:
-            if card.card_type == "chart":
-                chart_data = ChartData(**card.data)
-                card.data["primary_sort_key"] = chart_data.primary_sort_key
-        
-        profiler.end("fetch_cards")
-        return cards
+        profiler.end("fetch_cards") 
+        return cards 
     
     def _generate_cache_key(self, inputs: DashboardInputs) -> str:
         """Generate cache key from true query inputs only"""
@@ -589,7 +597,7 @@ class OptimizedChartRenderer:
                     name=label,
                     line=dict(color=colors[color_idx % len(colors)], width=2),
                     connectgaps=False,
-                    hovertemplate=f"<b>{label}</b><br>Date: %{x}<br>Price: %{y:.2f}"
+                    hovertemplate=f"<b>{label}</b><br>Date: %{{x}}<br>Price: %{{y:.2f}}"
                 )
             )
             color_idx += 1
@@ -651,8 +659,8 @@ class OptimizedChartRenderer:
             )
     
     @staticmethod
-    def _render_optimized_chart_container(fig: go.Figure, title: str) -> None:
-        """Render optimized chart container"""
+    def _render_optimized_chart_container(fig: go.Figure, title: str) -> None: 
+        """Render optimized chart container""" 
         # Use config to disable unnecessary features
         config = {
             'displayModeBar': False,
@@ -666,7 +674,7 @@ class OptimizedChartRenderer:
             }
         }
         
-        st.plotly_chart(fig, use_container_width=True, config=config)
+        st.plotly_chart(fig, width="stretch", config=config) 
     
     @staticmethod
     def _render_evaluation_metrics_optimized(chart_data: ChartData) -> None:
@@ -697,7 +705,7 @@ class OptimizedChartRenderer:
 # OPTIMIZED CARD RENDERER
 # ============================================================================
 
-class OptimizedCardRenderer:
+class OptimizedCardRenderer: 
     """Optimized card renderer with performance improvements"""
     
     @staticmethod
@@ -715,39 +723,46 @@ class OptimizedCardRenderer:
         profiler.end(f"render_{card.card_type}")
     
     @staticmethod
-    def _render_number_card_optimized(card: Card) -> None:
-        """Optimized number card rendering"""
-        data = card.data
-        primary_value = data.get("primary_value", "No data")
-        confidence = data.get("confidence")
-        
-        # Simple HTML without complex calculations
-        confidence_html = ""
-        if confidence is not None:
-            confidence_width = confidence * 100
-            confidence_color = "#10B981" if confidence > 0.7 else "#F59E0B" if confidence > 0.4 else "#EF4444"
-            confidence_html = f"""
-            <div style="margin-top: 8px;">
-                <div style="font-size: 12px; color: #6B7280; margin-bottom: 2px;">
-                    Confidence {confidence:.1%}
+    def _render_number_card_optimized(card: Card) -> None: 
+        """Optimized number card rendering""" 
+        data = card.data 
+        primary_value = data.get("primary_value", "No data") 
+        confidence = data.get("confidence") 
+         
+        # Simple HTML without complex calculations 
+        confidence_html = "" 
+        if confidence is not None: 
+            confidence_width = confidence * 100 
+            confidence_color = "#10B981" if confidence > 0.7 else "#F59E0B" if confidence > 0.4 else "#EF4444" 
+            confidence_html = textwrap.dedent(
+                f"""
+                <div style="margin-top: 8px;">
+                    <div style="font-size: 12px; color: #6B7280; margin-bottom: 2px;">
+                        Confidence {confidence:.1%}
+                    </div>
+                    <div style="width: 100%; height: 3px; background: #E5E7EB; border-radius: 4px;">
+                        <div style="width: {confidence_width}%; height: 100%; background: {confidence_color}; border-radius: 4px;"></div>
+                    </div>
                 </div>
-                <div style="width: 100%; height: 3px; background: #E5E7EB; border-radius: 4px;">
-                    <div style="width: {confidence_width}%; height: 100%; background: {confidence_color}; border-radius: 4px;"></div>
+                """
+            ).strip()
+         
+        st.markdown(
+            textwrap.dedent(
+                f"""
+                <div style="background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; padding: 16px; margin-bottom: 12px;">
+                    <div style="font-size: 12px; color: #6B7280; margin-bottom: 4px; text-transform: uppercase;">
+                        {card.title}
+                    </div>
+                    <div style="font-size: 24px; font-weight: bold; color: #111827;">
+                        {primary_value}
+                    </div>
+                    {confidence_html}
                 </div>
-            </div>
-            """
-        
-        st.markdown(f"""
-        <div style="background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; padding: 16px; margin-bottom: 12px;">
-            <div style="font-size: 12px; color: #6B7280; margin-bottom: 4px; text-transform: uppercase;">
-                {card.title}
-            </div>
-            <div style="font-size: 24px; font-weight: bold; color: #111827;">
-                {primary_value}
-            </div>
-            {confidence_html}
-        </div>
-        """, unsafe_allow_html=True)
+                """
+            ).strip(),
+            unsafe_allow_html=True,
+        )
     
     @staticmethod
     def _render_table_card_optimized(card: Card) -> None:
@@ -768,12 +783,12 @@ class OptimizedCardRenderer:
         df = pd.DataFrame(rows_to_show, columns=table_data.headers)
         
         # Use st.dataframe with minimal configuration
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            height=min(300, len(rows_to_show) * 35 + 50)  # Dynamic height
-        )
+        st.dataframe( 
+            df, 
+            width="stretch",
+            hide_index=True, 
+            height=min(300, len(rows_to_show) * 35 + 50)  # Dynamic height 
+        ) 
 
 
 # ============================================================================
@@ -911,47 +926,77 @@ def render_top_ten_signals(cards: List[Card]) -> None:
         # Create styled signal row
         col1, col2, col3, col4, col5, col6 = st.columns([1, 2, 2, 3, 2, 4])
         
-        with col1:
-            st.markdown(f"""
-            <div style="text-align: center; padding: 8px; background: {COLORS['neutral_100']}; border-radius: 8px; margin: 4px 0;">
-                <strong style="color: {COLORS['neutral_700']}; font-size: 16px;">{rank}</strong>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(f"""
-            <div style="text-align: center; padding: 8px; background: {direction_bg_color}; border-radius: 8px; margin: 4px 0; border: 1px solid {direction_color};">
-                <strong style="color: {direction_color}; font-size: 14px; font-weight: 600;">{direction}</strong>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown(f"""
-            <div style="text-align: center; padding: 8px; background: {COLORS['neutral_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['border_light']};">
-                <strong style="color: {COLORS['neutral_900']}; font-size: 14px; font-weight: 600;">{ticker}</strong>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col4:
-            st.markdown(f"""
-            <div style="text-align: center; padding: 8px; background: {COLORS['neutral_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['border_light']};">
-                <strong style="color: {COLORS['neutral_900']}; font-size: 14px;">{expected_move}</strong>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col5:
-            st.markdown(f"""
-            <div style="text-align: center; padding: 8px; background: {COLORS['primary_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['primary_300']};">
-                <strong style="color: {COLORS['primary_800']}; font-size: 14px; font-weight: 600;">{alpha}</strong>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col6:
-            st.markdown(f"""
-            <div style="text-align: left; padding: 8px; background: {COLORS['neutral_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['border_light']};">
-                <span style="color: {COLORS['neutral_700']}; font-size: 12px; font-style: italic;">{strategy}</span>
-            </div>
-            """, unsafe_allow_html=True)
+        with col1: 
+            st.markdown(
+                textwrap.dedent(
+                    f"""
+                    <div style="text-align: center; padding: 8px; background: {COLORS['neutral_100']}; border-radius: 8px; margin: 4px 0;">
+                        <strong style="color: {COLORS['neutral_700']}; font-size: 16px;">{rank}</strong>
+                    </div>
+                    """
+                ).strip(),
+                unsafe_allow_html=True,
+            )
+         
+        with col2: 
+            st.markdown(
+                textwrap.dedent(
+                    f"""
+                    <div style="text-align: center; padding: 8px; background: {direction_bg_color}; border-radius: 8px; margin: 4px 0; border: 1px solid {direction_color};">
+                        <strong style="color: {direction_color}; font-size: 14px; font-weight: 600;">{direction}</strong>
+                    </div>
+                    """
+                ).strip(),
+                unsafe_allow_html=True,
+            )
+         
+        with col3: 
+            st.markdown(
+                textwrap.dedent(
+                    f"""
+                    <div style="text-align: center; padding: 8px; background: {COLORS['neutral_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['border_light']};">
+                        <strong style="color: {COLORS['neutral_900']}; font-size: 14px; font-weight: 600;">{ticker}</strong>
+                    </div>
+                    """
+                ).strip(),
+                unsafe_allow_html=True,
+            )
+         
+        with col4: 
+            st.markdown(
+                textwrap.dedent(
+                    f"""
+                    <div style="text-align: center; padding: 8px; background: {COLORS['neutral_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['border_light']};">
+                        <strong style="color: {COLORS['neutral_900']}; font-size: 14px;">{expected_move}</strong>
+                    </div>
+                    """
+                ).strip(),
+                unsafe_allow_html=True,
+            )
+         
+        with col5: 
+            st.markdown(
+                textwrap.dedent(
+                    f"""
+                    <div style="text-align: center; padding: 8px; background: {COLORS['primary_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['primary_300']};">
+                        <strong style="color: {COLORS['primary_800']}; font-size: 14px; font-weight: 600;">{alpha}</strong>
+                    </div>
+                    """
+                ).strip(),
+                unsafe_allow_html=True,
+            )
+         
+        with col6: 
+            st.markdown(
+                textwrap.dedent(
+                    f"""
+                    <div style="text-align: left; padding: 8px; background: {COLORS['neutral_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['border_light']};">
+                        <span style="color: {COLORS['neutral_700']}; font-size: 12px; font-style: italic;">{strategy}</span>
+                    </div>
+                    """
+                ).strip(),
+                unsafe_allow_html=True,
+            )
         
         # Add separator except for last item
         if i < len(table_data.rows) - 1:
@@ -996,72 +1041,11 @@ def render_optimized_card_river(cards: List[Card], visible_count: int = 10) -> N
 # MAIN APPLICATION
 # ============================================================================
 
-def main():
-    """Main entry point - optimized dashboard"""
-    # Apply theme
-    apply_theme()
-    
-    # Initialize optimized service
-    service = DashboardService()
-    optimized_service = OptimizedDashboardService(service)
-    
-    # Render optimized controls
-    inputs, force_refresh = render_optimized_controls(service)
-    
-    # Render system status
-    render_system_status(inputs)
-    
-    # Fingerprint-based refresh gate
-    should_refresh = force_refresh or should_refresh_data(inputs)
-    
-    # Fetch data only when needed
-    if should_refresh and inputs.tenant:
-        cards = optimized_service.fetch_cards(inputs)
-    elif inputs.tenant:
-        cards = st.session_state.get("cached_cards", [])
-    else:
-        cards = []
-    
-    # Cache cards in session state (minimal)
-    if cards:
-        st.session_state.cached_cards = cards
-    
-    # Render header with help section
-    col1, col2 = st.columns([20, 1])
-    
-    with col1:
-        st.markdown("# Optimized Dashboard")
-        st.markdown("*Performance optimized while maintaining architecture*")
-    
-    with col2:
-        # Help icon with expander
-        with st.popover(""):
-            st.markdown("""
-            ## **Alpha Engine Dashboard**
-                        
-            Alpha Engine is an AI trading system that generates ranked future buy/sell predictions by running multiple sentiment and quantitative strategies, scoring them on historical accuracy, promoting top performers, and combining their outputs into weighted consensus signals like “NVDA BUY +3.2% 7d conf 0.74.” The dashboard lets you view strongest opportunities, dips, bundles, comparisons, and backtests, while key metrics (confidence, alpha, win rate, stability) indicate prediction quality. Data flows from market prices, technicals, news/sentiment, macro, and cross-asset inputs → strategies produce directional forecasts → signals are ranked and merged → top picks displayed → outcomes feed back to continuously improve future predictions.
-            """)
-    
-    # Performance debug info
-    if st.sidebar.checkbox("Show Performance"):
-        st.markdown("### Performance Metrics")
-        summary = profiler.get_summary()
-        for operation, time_ms in summary.items():
-            st.metric(operation.replace("_", " ").title(), f"{time_ms:.1f}ms")
-        
-        # Log bottlenecks
-        profiler.log_bottlenecks()
-        
-        # Session state info
-        st.markdown("### Session State")
-        st.json({
-            "inputs_fingerprint": st.session_state.get("inputs_fingerprint"),
-            "last_refresh_time": st.session_state.get("last_refresh_time"),
-            "cached_cards_count": len(st.session_state.get("cached_cards", []))
-        })
-    
-    # Render optimized card river
-    render_optimized_card_river(cards)
+def main(): 
+    """Legacy entrypoint kept for compatibility; delegates to the unified shell."""
+    from app.ui.app import main as unified_main
+
+    unified_main()
 
 
 if __name__ == "__main__":

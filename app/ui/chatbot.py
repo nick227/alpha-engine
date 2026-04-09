@@ -1,134 +1,126 @@
-import streamlit as st
-import os
-import time
-import subprocess
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
 from pathlib import Path
-import openai
 
-# Setup API Key (Assuming dotenv or set up elsewhere, falling back to os path for this snippet)
-client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", "your-api-key"))
+import streamlit as st
 
-# Directories
-BASE_DIR = Path(__file__).parent.parent.parent
-CONTEXT_DIR = BASE_DIR / "app" / "ai" / "context"
-EXPORTS_DIR = BASE_DIR / "data" / "exports"
-AUDIO_DIR = BASE_DIR / "outputs" / "audio"
 
-AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+@dataclass(frozen=True)
+class ContextDoc:
+    name: str
+    path: Path
 
-@st.cache_data
-def load_static_context():
-    """Load the monolithic static markdown files into memory only once."""
-    pipeline = (CONTEXT_DIR / "pipeline.md").read_text(encoding="utf-8", errors="ignore")
-    strategies = (CONTEXT_DIR / "strategies.md").read_text(encoding="utf-8", errors="ignore")
-    ui = (CONTEXT_DIR / "ui.md").read_text(encoding="utf-8", errors="ignore")
-    return pipeline, strategies, ui
 
-def get_dynamic_context():
-    """Load the frequently changing top-ten file on demand."""
-    try:
-        return (EXPORTS_DIR / "top_ten.md").read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return "Top ten metrics unavailable."
+DOCS: list[ContextDoc] = [
+    ContextDoc("pipeline", Path("app/ai/context/pipeline.md")),
+    ContextDoc("strategies", Path("app/ai/context/strategies.md")),
+    ContextDoc("ui", Path("app/ai/context/ui.md")),
+    ContextDoc("admin", Path("ADMIN_GUIDE.md")),
+]
 
-def build_system_message():
-    """Constructs the pure, single static monolithic system prompt."""
-    p_pipe, p_strat, p_ui = load_static_context()
-    p_top = get_dynamic_context()
-    
-    return f"""You are the advanced technical support and analytical guide for the Alpha Engine platform. Your primary purpose is to help the user navigate the app's interfaces, understand the data architecture, and grasp current strategy behaviors.
 
-HARD CONSTRAINTS:
-Only answer using provided context.
-If the answer is not present, say: "Not available in Alpha Engine context."
-Do not infer missing functionality.
+def _read_docs() -> tuple[dict[str, str], list[str]]:
+    docs: dict[str, str] = {}
+    missing: list[str] = []
+    for d in DOCS:
+        try:
+            docs[d.name] = d.path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            missing.append(str(d.path))
+    return docs, missing
 
---- pipeline.md ---
-{p_pipe}
 
---- strategies.md ---
-{p_strat}
+def _tokenize(text: str) -> list[str]:
+    tokens = re.findall(r"[a-zA-Z0-9_]{2,}", text.lower())
+    return [t for t in tokens if t not in {"the", "and", "for", "with", "this", "that", "from", "into", "what", "how"}]
 
---- ui.md ---
-{p_ui}
 
---- top_ten.md ---
-{p_top}
+def _top_snippets(docs: dict[str, str], query: str, *, max_snippets: int = 6) -> list[tuple[str, str]]:
+    q = query.strip()
+    if not q:
+        return []
+
+    q_tokens = set(_tokenize(q))
+    if not q_tokens:
+        return []
+
+    scored: list[tuple[int, str, str]] = []
+    for name, content in docs.items():
+        for line in content.splitlines():
+            l = line.strip()
+            if not l:
+                continue
+            score = sum(1 for t in q_tokens if t in l.lower())
+            if score:
+                scored.append((score, name, l))
+
+    scored.sort(key=lambda x: (x[0], len(x[2])), reverse=True)
+    out: list[tuple[str, str]] = []
+    seen = set()
+    for _, name, line in scored:
+        key = (name, line)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((name, line))
+        if len(out) >= max_snippets:
+            break
+    return out
+
+
+def render_chat_assistant(*, show_title: bool = True, input_key: str = "chat_assistant_question") -> None:
+    if show_title:
+        st.markdown("# Chat Assistant")
+        st.caption("Stateless helper: answers only from local markdown context files.")
+    else:
+        st.caption("Stateless helper: answers only from local markdown context files.")
+
+    docs, missing = _read_docs()
+    if missing:
+        st.warning("Missing context files (assistant still works with remaining docs):")
+        for m in missing:
+            st.code(m)
+
+    with st.expander("What this assistant can do", expanded=False):
+        st.markdown(
+            """
+- App navigation help (where to find Dashboard / IH / Audit / Backtest views)
+- Explain fields like confidence / alpha / efficiency (from project docs)
+- Explain what a page is showing (from UI docs)
+
+It is **stateless**: no conversation history is stored or used.
 """
-
-def generate_tts(text: str, output_path: str):
-    """
-    Generates audio using Piper TTS. 
-    Assumes piper is installed and accessible in the system PATH.
-    """
-    try:
-        # Example command using piper CLI
-        # Note: You need a local model e.g., en_US-lessac-medium.onnx
-        model_path = os.environ.get("PIPER_MODEL_PATH", "en_US-lessac-medium.onnx")
-        
-        # We shell out to the piper binary
-        process = subprocess.Popen(
-            ['piper', '--model', model_path, '--output_file', output_path],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
         )
-        process.communicate(input=text.encode('utf-8'))
-        return True
-    except Exception as e:
-        st.error(f"TTS Engine Error: {e}")
-        return False
 
-def render_chatbot():
-    st.title("The Tech Assistant")
-    
-    # UI Toggles
-    col1, col2 = st.columns([3,1])
-    with col1:
-        st.caption("Alpha Engine Quant & Navigation Helper")
-    with col2:
-        voice_mode = st.toggle("Voice Mode", value=True)
-    
-    st.divider()
+    prompt = st.text_input(
+        "Question",
+        placeholder="e.g. What does confidence mean? Where is the Signal Audit?",
+        key=input_key,
+    )
+    if not prompt:
+        return
 
-    # The interaction loop (stateless)
-    user_input = st.chat_input("Ask about the pipeline, strategies, or UI navigation...")
-    
-    if user_input:
-        # 1. Display user msg
-        with st.chat_message("user"):
-            st.write(user_input)
+    snippets = _top_snippets(docs, prompt)
+    if not snippets:
+        st.info("Not available in Alpha Engine context.")
+        return
 
-        # 2. Build purely stateless API call Payload
-        system_content = build_system_message()
-        messages = [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": user_input}
-        ]
-        
-        # 3. Stream Inference & Update UI
-        with st.chat_message("assistant"):
-            if voice_mode:
-                st.write("*(Voice mode engaged - Rendering response...)*")
-            
-            # OpenAI streamed response
-            stream = client.chat.completions.create(
-                model="gpt-4o",  # or gpt-3.5-turbo / local model
-                messages=messages,
-                stream=True
-            )
-            response_text = st.write_stream(stream)
-            
-            # 4. Handle Text-to-Speech (Piper)
-            if voice_mode and response_text:
-                audio_file = str(AUDIO_DIR / "latest_response.wav")
-                
-                # Show dynamic visualization placeholder
-                with st.spinner("Synthesizing Voice..."):
-                    success = generate_tts(response_text, audio_file)
-                
-                if success and Path(audio_file).exists():
-                    st.audio(audio_file, autoplay=True, format="audio/wav")
+    st.markdown("## Answer (from context)")
+    st.write(
+        "I can’t generate new facts here; these are the most relevant context lines I found. "
+        "If you want, rephrase with more specific keywords (page name, table name, metric name)."
+    )
+
+    for name, line in snippets:
+        st.markdown(f"- **{name}**: {line}")
+
+
+def chatbot_main() -> None:
+    render_chat_assistant(show_title=True, input_key="chat_assistant_full_page_question")
+
 
 if __name__ == "__main__":
-    render_chatbot()
+    st.set_page_config(page_title="Chat Assistant", layout="wide", page_icon="💬")
+    chatbot_main()

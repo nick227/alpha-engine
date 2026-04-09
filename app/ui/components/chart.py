@@ -160,7 +160,7 @@ class TimeSeriesChart:
     
     def render(self):
         """Render the chart in Streamlit."""
-        st.plotly_chart(self.fig, use_container_width=True)
+        st.plotly_chart(self.fig, width="stretch")
 
 
 def create_consensus_timeline(consensus_data: List[Dict], height: int = 400) -> TimeSeriesChart:

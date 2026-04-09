@@ -23,6 +23,7 @@ class StateEvent(Enum):
 @dataclass
 class IntelligenceHubState:
     """State container for Intelligence Hub interface"""
+    tenant_id: str = "default"
     ticker: str = 'NVDA'
     timeframe: str = '3M'  # 1M, 3M, 6M, 1Y
     horizon: int = 7  # 1, 7, 30

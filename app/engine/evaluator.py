@@ -8,7 +8,7 @@ import pandas as pd
 from app.core.types import Prediction, PredictionOutcome
 
 
-HORIZON_STEPS = {"5m": 5, "15m": 15, "1h": 60, "1d": 390}
+HORIZON_STEPS = {"5m": 5, "15m": 15, "1h": 60, "1d": 390, "7d": 390 * 7, "30d": 390 * 30}
 
 
 def evaluate_predictions(predictions: List[Prediction], bars: pd.DataFrame) -> List[PredictionOutcome]:

@@ -155,7 +155,7 @@ class ComparisonTableRenderer:
             ]}
         ])
         
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.dataframe(styled_df, width="stretch", hide_index=True)
     
     @staticmethod
     def render_outcome_table(card: ComparisonCard) -> None:
@@ -222,7 +222,7 @@ class ComparisonTableRenderer:
         
         styled_df = df.style.applymap(color_result, subset=['Result']).applymap(color_return, subset=['Return'])
         
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.dataframe(styled_df, width="stretch", hide_index=True)
     
     @staticmethod
     def render_summary_statistics(cards: List[ComparisonCard]) -> None:
@@ -269,7 +269,7 @@ class ComparisonTableRenderer:
                 yaxis_title="Count",
                 height=300
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 
 # ============================================================================

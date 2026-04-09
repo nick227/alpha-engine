@@ -437,7 +437,7 @@ class ComparisonChartRenderer:
         </div>
         """, unsafe_allow_html=True)
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     
     @staticmethod
     def _render_fallback_number_card(card: ComparisonCard) -> None:

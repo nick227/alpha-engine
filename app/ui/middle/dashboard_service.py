@@ -201,7 +201,7 @@ def arrow(direction: str) -> str:
     return "→"
 
 
-class DashboardService:
+class DashboardService: 
     """
     Stable read-model API for Streamlit.
 
@@ -281,9 +281,19 @@ class DashboardService:
             low_vol_strength=row.low_vol_strength,
         )
 
-    def get_latest_consensus(self, *, tenant_id: str = "default", ticker: str) -> ConsensusView | None:
-        row = self.store.get_latest_consensus(tenant_id=tenant_id, ticker=ticker)
-        return None if row is None else self._consensus_view(row)
+    def get_latest_consensus(self, *, tenant_id: str = "default", ticker: str) -> ConsensusView | None: 
+        row = self.store.get_latest_consensus(tenant_id=tenant_id, ticker=ticker) 
+        return None if row is None else self._consensus_view(row) 
+
+    def get_consensus_by_horizon(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str,
+        horizons: list[str],
+    ) -> dict[str, ConsensusView | None]:
+        rows = self.store.get_latest_consensus_by_horizon(tenant_id=tenant_id, ticker=ticker, horizons=horizons)
+        return {h: (None if r is None else self._consensus_view(r)) for h, r in rows.items()}
 
     @staticmethod
     def _signal_view(row: SignalRow) -> SignalView:
@@ -443,6 +453,7 @@ class DashboardService:
             regime=regime,
             min_samples=min_samples,
             min_total_forecast_days=min_total_forecast_days,
+            alpha_version="canonical_v1",
             limit=limit,
         )
         return [self._efficiency_view(r) for r in rows]
@@ -615,6 +626,7 @@ class DashboardService:
             tenant_id=tenant_id,
             ticker=ticker,
             timeframe=timeframe,
+            alpha_version="canonical_v1",
         )
 
         out: list[ChampionMatrixView] = []
@@ -783,6 +795,11 @@ class DashboardService:
         selected_strategy = state.selected_strategy or ""
         normalized_run = run_id or ""
         
+        # Map UI timeframe to database timeframe
+        # UI shows '1M', '3M', '6M', '1Y' but database only has '1d'
+        # For now, we always use '1d' since that's all the data we have
+        db_timeframe = '1d'
+        
         # Get data-driven cache invalidation timestamp
         last_write = self.store.get_last_prediction_write(
             tenant_id=tenant_id,
@@ -793,7 +810,7 @@ class DashboardService:
         version_key = (
             tenant_id,  # Include tenant_id to prevent cross-tenant cache collision
             state.ticker,
-            state.timeframe,
+            db_timeframe,  # Use database timeframe for cache key
             normalized_run,  # Use normalized value
             strategy_ids,  # Include strategy_ids for proper invalidation
             selected_strategy,  # Use normalized value
@@ -805,7 +822,7 @@ class DashboardService:
             version=version_key,
             tenant_id=tenant_id,
             ticker=state.ticker,
-            timeframe=state.timeframe,
+            timeframe=db_timeframe,  # Use database timeframe
             run_id=run_id,  # Pass original run_id (can be None)
             strategy_ids=strategy_ids,  # Use pre-computed
             selected_strategy=selected_strategy  # Use normalized value
@@ -815,8 +832,8 @@ class DashboardService:
             state=state,
             tickers=tickers,
             runs=runs,
-            matrix=cached_data.matrix,
-            rankings=cached_data.rankings,
+            matrix_rows=cached_data.matrix,
+            strategy_rankings=cached_data.rankings,
             overlay_series=cached_data.overlay_series,
             timeline=cached_data.timeline,
             consensus=cached_data.consensus,

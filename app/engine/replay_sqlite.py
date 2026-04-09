@@ -45,7 +45,11 @@ def _horizon_to_minutes(horizon: str) -> int:
         except ValueError:
             return 60
     if h.endswith("d"):
-        return 24 * 60
+        try:
+            days = int(h[:-1])
+        except ValueError:
+            days = 1
+        return max(1, days) * 24 * 60
     return 15
 
 
