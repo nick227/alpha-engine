@@ -552,7 +552,7 @@ class StandardChartRenderer:
     @staticmethod
     def _render_chart_container(fig: go.Figure) -> None:
         """Render chart with consistent container styling"""
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     
     @staticmethod
     def _downgrade_to_number_card(card: Card) -> None:

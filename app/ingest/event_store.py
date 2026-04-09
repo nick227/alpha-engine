@@ -70,6 +70,8 @@ class EventStore:
                     fetched_count INTEGER NOT NULL,
                     emitted_count INTEGER NOT NULL,
                     empty_count INTEGER NOT NULL,
+                    oldest_event_ts TEXT,
+                    newest_event_ts TEXT,
                     last_error TEXT,
                     started_at TEXT NOT NULL,
                     completed_at TEXT,
@@ -98,6 +100,10 @@ class EventStore:
                 conn.execute("ALTER TABLE ingest_runs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
             if "empty_count" not in cols:
                 conn.execute("ALTER TABLE ingest_runs ADD COLUMN empty_count INTEGER NOT NULL DEFAULT 0")
+            if "oldest_event_ts" not in cols:
+                conn.execute("ALTER TABLE ingest_runs ADD COLUMN oldest_event_ts TEXT")
+            if "newest_event_ts" not in cols:
+                conn.execute("ALTER TABLE ingest_runs ADD COLUMN newest_event_ts TEXT")
             if "started_at" not in cols:
                 now = datetime.datetime.now(datetime.timezone.utc).isoformat()
                 conn.execute("ALTER TABLE ingest_runs ADD COLUMN started_at TEXT NOT NULL DEFAULT ''")
@@ -128,6 +134,8 @@ class EventStore:
                     request_hash TEXT,
                     request_cache_hit INTEGER NOT NULL,
                     response_fingerprint TEXT,
+                    fetch_time_s REAL,
+                    total_time_s REAL,
                     raw_rows_count INTEGER NOT NULL,
                     normalized_count INTEGER NOT NULL,
                     valid_count INTEGER NOT NULL,
@@ -137,6 +145,7 @@ class EventStore:
                     dropped_invalid_shape INTEGER NOT NULL,
                     dropped_out_of_bounds INTEGER NOT NULL,
                     dropped_duplicate INTEGER NOT NULL,
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (source_id, start_ts, end_ts, spec_hash)
                 )
@@ -144,6 +153,30 @@ class EventStore:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_run_stats_source_range ON ingest_run_stats(source_id, start_ts, end_ts);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_run_stats_fingerprint ON ingest_run_stats(response_fingerprint);")
+
+            # Backwards-compatible columns for preexisting DBs.
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(ingest_run_stats)").fetchall()]
+            if "fetch_time_s" not in cols:
+                conn.execute("ALTER TABLE ingest_run_stats ADD COLUMN fetch_time_s REAL")
+            if "total_time_s" not in cols:
+                conn.execute("ALTER TABLE ingest_run_stats ADD COLUMN total_time_s REAL")
+            if "warnings_json" not in cols:
+                conn.execute("ALTER TABLE ingest_run_stats ADD COLUMN warnings_json TEXT NOT NULL DEFAULT '[]'")
+
+        # Backfill horizon markers (source has reached full range).
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS backfill_horizons (
+                    source_id TEXT NOT NULL,
+                    spec_hash TEXT NOT NULL,
+                    backfilled_until_ts TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (source_id, spec_hash)
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_backfill_horizons_until ON backfill_horizons(backfilled_until_ts);")
 
     @staticmethod
     def stable_spec_hash(spec_payload: dict) -> str:
@@ -371,8 +404,8 @@ class EventStore:
             conn.execute(
                 """
                 INSERT INTO ingest_runs
-                  (source_id, start_ts, end_ts, spec_hash, provider, status, ok, retry_count, fetched_count, emitted_count, empty_count, last_error, started_at, completed_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'running', 0, 0, 0, 0, 0, 'running', ?, NULL, ?, ?)
+                  (source_id, start_ts, end_ts, spec_hash, provider, status, ok, retry_count, fetched_count, emitted_count, empty_count, oldest_event_ts, newest_event_ts, last_error, started_at, completed_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'running', 0, 0, 0, 0, 0, NULL, NULL, 'running', ?, NULL, ?, ?)
                 """,
                 (str(source_id), str(start_ts), str(end_ts), str(spec_hash), str(provider), now_iso, now_iso, now_iso),
             )
@@ -418,10 +451,13 @@ class EventStore:
         ok: bool,
         fetched_count: int,
         emitted_count: int,
+        oldest_event_ts: str | None = None,
+        newest_event_ts: str | None = None,
+        status_override: str | None = None,
         last_error: str | None = None,
     ) -> None:
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        status = "complete" if ok else "failed"
+        status = str(status_override) if status_override else ("complete" if ok else "failed")
         err = (str(last_error) if last_error else None)
         empty_count = 0
         if ok and int(fetched_count) == 0 and int(emitted_count) == 0 and not err:
@@ -445,8 +481,8 @@ class EventStore:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO ingest_runs
-                  (source_id, start_ts, end_ts, spec_hash, provider, status, ok, retry_count, fetched_count, emitted_count, empty_count, last_error, started_at, completed_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  (source_id, start_ts, end_ts, spec_hash, provider, status, ok, retry_count, fetched_count, emitted_count, empty_count, oldest_event_ts, newest_event_ts, last_error, started_at, completed_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(source_id),
@@ -460,6 +496,8 @@ class EventStore:
                     int(fetched_count),
                     int(emitted_count),
                     int(empty_count),
+                    (str(oldest_event_ts) if oldest_event_ts else None),
+                    (str(newest_event_ts) if newest_event_ts else None),
                     err,
                     str(started_at),
                     now,
@@ -478,6 +516,8 @@ class EventStore:
         request_hash: str | None,
         request_cache_hit: bool,
         response_fingerprint: str | None,
+        fetch_time_s: float | None,
+        total_time_s: float | None,
         raw_rows_count: int,
         normalized_count: int,
         valid_count: int,
@@ -487,17 +527,21 @@ class EventStore:
         dropped_invalid_shape: int = 0,
         dropped_out_of_bounds: int = 0,
         dropped_duplicate: int = 0,
+        warnings: list[str] | None = None,
     ) -> None:
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        warnings_json = json.dumps(list(warnings or []), sort_keys=True, ensure_ascii=False)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO ingest_run_stats
                   (source_id, start_ts, end_ts, spec_hash, request_hash, request_cache_hit, response_fingerprint,
+                   fetch_time_s, total_time_s,
                    raw_rows_count, normalized_count, valid_count, bounded_count,
                    dropped_empty_text, dropped_bad_timestamp, dropped_invalid_shape, dropped_out_of_bounds, dropped_duplicate,
+                   warnings_json,
                    created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(source_id),
@@ -507,6 +551,8 @@ class EventStore:
                     (str(request_hash) if request_hash else None),
                     1 if bool(request_cache_hit) else 0,
                     (str(response_fingerprint) if response_fingerprint else None),
+                    (float(fetch_time_s) if fetch_time_s is not None else None),
+                    (float(total_time_s) if total_time_s is not None else None),
                     int(raw_rows_count),
                     int(normalized_count),
                     int(valid_count),
@@ -516,9 +562,31 @@ class EventStore:
                     int(dropped_invalid_shape),
                     int(dropped_out_of_bounds),
                     int(dropped_duplicate),
+                    warnings_json,
                     now,
                 ),
             )
+
+    def set_backfilled_until(self, *, source_id: str, spec_hash: str, backfilled_until_ts: str) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO backfill_horizons (source_id, spec_hash, backfilled_until_ts, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (str(source_id), str(spec_hash), str(backfilled_until_ts), now),
+            )
+
+    def get_backfilled_until(self, *, source_id: str, spec_hash: str) -> str | None:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT backfilled_until_ts FROM backfill_horizons WHERE source_id = ? AND spec_hash = ? LIMIT 1",
+                (str(source_id), str(spec_hash)),
+            ).fetchone()
+            if not row:
+                return None
+            return str(row[0] or "") or None
 
     def get_events_chronological(
         self,

@@ -2,6 +2,7 @@
   type: news
   adapter: alpaca_news
   enabled: true
+  priority: 80
   poll: "60s"
   weight: 1.0
   backfill_days: 90
@@ -15,6 +16,7 @@
   type: market
   adapter: yahoo_finance
   enabled: true
+  priority: 90
   poll: "120s"
   weight: 0.7
   backfill_days: 90
@@ -28,6 +30,7 @@
   type: macro
   adapter: fred_macro
   enabled: true
+  priority: 20
   poll: "1h"
   weight: 0.6
   backfill_days: 90
@@ -40,6 +43,7 @@
   type: social
   adapter: reddit_social
   enabled: true
+  priority: 70
   poll: "120s"
   weight: 0.3
   backfill_days: 90
@@ -54,6 +58,7 @@
   type: crowd
   adapter: google_trends
   enabled: true
+  priority: 60
   poll: "1h"
   weight: 0.5
   backfill_days: 90
@@ -67,6 +72,7 @@
   type: market_structure
   adapter: etf_flows
   enabled: true
+  priority: 40
   poll: "1d"
   weight: 0.8
   backfill_days: 90
@@ -80,6 +86,7 @@
   type: volatility_event
   adapter: earnings_calendar
   enabled: true
+  priority: 50
   poll: "1d"
   weight: 0.9
   backfill_days: 90
@@ -92,6 +99,7 @@
   type: positioning
   adapter: options_flow
   enabled: true
+  priority: 45
   poll: "15m"
   weight: 0.7
   backfill_days: 90
@@ -105,6 +113,7 @@
   type: regime
   adapter: fred_macro
   enabled: true
+  priority: 20
   poll: "1d"
   weight: 1.0
   backfill_days: 90
@@ -116,6 +125,7 @@
   type: sentiment_index
   adapter: fear_greed
   enabled: true
+  priority: 30
   poll: "1h"
   weight: 0.8
   backfill_days: 90
@@ -131,6 +141,7 @@
   type: intermarket_regime
   adapter: cross_asset
   enabled: true
+  priority: 35
   poll: "15m"
   weight: 1.0
   backfill_days: 90
@@ -150,6 +161,7 @@
   type: regime
   adapter: market_breadth
   enabled: true
+  priority: 30
   poll: "1h"
   weight: 0.9
   backfill_days: 90
@@ -165,6 +177,7 @@
   type: momentum
   adapter: market_baseline
   enabled: true
+  priority: 30
   poll: "15m"
   weight: 1.0
   backfill_days: 90
@@ -181,8 +194,12 @@
   type: bundle
   adapter: custom_bundle
   enabled: true
+  priority: 10
   poll:
   weight: 0.8
+  fetch:
+    kind: local_file
+    file: "bundles/ai_supply.json"
   options:
     file: "bundles/ai_supply.json"
   extract:

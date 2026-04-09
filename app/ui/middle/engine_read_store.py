@@ -63,6 +63,7 @@ class RankingSnapshotRow:
 class StrategyEfficiencyRow:
     strategy_id: str
     strategy_version: str | None
+    forecast_days: int | None
     samples: int
     total_forecast_days: int
     avg_efficiency_rating: float
@@ -204,6 +205,7 @@ class EngineReadStore:
         self.db_path = str(db_path)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._consensus_has_horizon = False
         self._ensure_read_model_contract()
 
     def _ensure_read_model_contract(self) -> None:
@@ -216,6 +218,7 @@ class EngineReadStore:
         try:
             cols = {str(r["name"]) for r in self.conn.execute("PRAGMA table_info(consensus_signals)").fetchall()}
             for col, ddl in (
+                ("horizon", "ALTER TABLE consensus_signals ADD COLUMN horizon TEXT;"),
                 ("direction", "ALTER TABLE consensus_signals ADD COLUMN direction TEXT;"),
                 ("confidence", "ALTER TABLE consensus_signals ADD COLUMN confidence REAL;"),
                 ("total_weight", "ALTER TABLE consensus_signals ADD COLUMN total_weight REAL;"),
@@ -223,6 +226,9 @@ class EngineReadStore:
             ):
                 if cols and col not in cols:
                     self.conn.execute(ddl)
+            # Refresh after any ALTERs.
+            cols2 = {str(r["name"]) for r in self.conn.execute("PRAGMA table_info(consensus_signals)").fetchall()}
+            self._consensus_has_horizon = "horizon" in cols2
         except Exception:
             pass
 
@@ -533,8 +539,12 @@ class EngineReadStore:
             out[str(r["regime"])] = float(r["accuracy"])
         return out
 
-    def _champion_regime_strength(self, *, tenant_id: str) -> tuple[float | None, float | None]:
-        champs = self.get_champions(tenant_id=tenant_id, min_predictions=0)
+    def _champion_regime_strength(self, *, tenant_id: str) -> tuple[float | None, float | None]: 
+        try:
+            champs = self.get_champions(tenant_id=tenant_id, min_predictions=0)
+        except Exception:
+            return None, None
+
         strengths: list[dict[str, float]] = []
         for r in champs.values():
             if r.regime_strength:
@@ -557,19 +567,32 @@ class EngineReadStore:
         low = pick(["LOW", "VolatilityRegime.LOW", "LOW_VOL"])
         return high, low
 
-    def get_latest_consensus(self, *, tenant_id: str = "default", ticker: str) -> ConsensusRow | None:
+    def get_latest_consensus(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str,
+        horizon: str | None = None,
+    ) -> ConsensusRow | None:
         # Prefer materialized consensus_signals (real output fields), fallback to predictions.
         row = None
         try:
+            where = "WHERE tenant_id = ? AND ticker = ?"
+            params: list[Any] = [tenant_id, str(ticker)]
+            if horizon and self._consensus_has_horizon:
+                where += " AND horizon = ?"
+                params.append(str(horizon))
             row = self.conn.execute(
                 """
                 SELECT ticker, created_at as timestamp, direction, confidence, total_weight, participating_strategies, regime
                 FROM consensus_signals
-                WHERE tenant_id = ? AND ticker = ?
+                """
+                + where
+                + """
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (tenant_id, str(ticker)),
+                tuple(params),
             ).fetchone()
         except Exception:
             row = None
@@ -626,6 +649,18 @@ class EngineReadStore:
             high_vol_strength=float(high_strength) if high_strength is not None else None,
             low_vol_strength=float(low_strength) if low_strength is not None else None,
         )
+
+    def get_latest_consensus_by_horizon(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str,
+        horizons: list[str],
+    ) -> dict[str, ConsensusRow | None]:
+        out: dict[str, ConsensusRow | None] = {}
+        for h in horizons:
+            out[str(h)] = self.get_latest_consensus(tenant_id=tenant_id, ticker=ticker, horizon=str(h))
+        return out
 
     def get_recent_signals(
         self,
@@ -919,7 +954,7 @@ class EngineReadStore:
                   COUNT(*) as samples,
                   SUM(forecast_days) as total_forecast_days,
                   AVG(efficiency_rating) as avg_efficiency_rating,
-                  AVG(alpha_prediction) as avg_alpha,
+                  AVG(efficiency_rating) as avg_alpha,
                   AVG(total_return_actual) as avg_total_return_actual,
                   MIN(total_return_actual) as min_total_return_actual,
                   AVG(CASE WHEN direction_hit_rate >= 0.5 THEN 1.0 ELSE 0.0 END) as win_rate
@@ -928,7 +963,7 @@ class EngineReadStore:
                 GROUP BY strategy_id, COALESCE(strategy_version, '')
                 HAVING (? IS NULL OR COUNT(*) >= ?)
                    AND (? IS NULL OR SUM(forecast_days) >= ?)
-                ORDER BY COALESCE(AVG(alpha_prediction), AVG(efficiency_rating)) DESC
+                ORDER BY AVG(efficiency_rating) DESC
                 LIMIT ?
                 """,
                 (*params, min_samples, min_samples, min_total_forecast_days, min_total_forecast_days, int(limit)),
@@ -948,11 +983,11 @@ class EngineReadStore:
             # Fetch last N predictions for this strategy to get variance
             # Only use versioned predictions for stability calc
             preds = self.conn.execute(
-                "SELECT alpha_prediction FROM prediction_scores WHERE tenant_id = ? AND strategy_id = ? AND alpha_version = 'canonical_v1' ORDER BY created_at DESC LIMIT 50",
+                "SELECT efficiency_rating FROM prediction_scores WHERE tenant_id = ? AND strategy_id = ? ORDER BY created_at DESC LIMIT 50",
                 (tenant_id, row["strategy_id"])
             ).fetchall()
             
-            alpha_vals = [float(p["alpha_prediction"]) for p in preds if p["alpha_prediction"] is not None]
+            alpha_vals = [float(p["efficiency_rating"]) for p in preds if p["efficiency_rating"] is not None]
             
             variance = 0.0
             if len(alpha_vals) > 1:
@@ -969,6 +1004,7 @@ class EngineReadStore:
                 StrategyEfficiencyRow(
                     strategy_id=str(row["strategy_id"]),
                     strategy_version=(sv if sv else None),
+                    forecast_days=(int(forecast_days) if forecast_days is not None else None),
                     samples=int(row["samples"]),
                     total_forecast_days=int(row["total_forecast_days"] or 0),
                     avg_efficiency_rating=float(row["avg_efficiency_rating"] or 0.0),
@@ -1311,3 +1347,51 @@ class EngineReadStore:
                 )
             )
         return out
+
+    def get_last_prediction_write(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str | None = None,
+    ) -> str:
+        """
+        Return a stable timestamp-like cache invalidation key for recent prediction writes.
+
+        Prefer the newest `prediction_scores.created_at` for the tenant/ticker slice and
+        fall back to the latest prediction run creation time when score rows are absent.
+        """
+        where = ["tenant_id = ?"]
+        params: list[Any] = [tenant_id]
+        if ticker:
+            where.append("ticker = ?")
+            params.append(str(ticker))
+
+        try:
+            row = self.conn.execute(
+                f"""
+                SELECT MAX(created_at) AS last_write
+                FROM prediction_scores
+                WHERE {' AND '.join(where)}
+                """,
+                tuple(params),
+            ).fetchone()
+            if row and row["last_write"] is not None:
+                return str(row["last_write"])
+        except Exception:
+            pass
+
+        try:
+            row = self.conn.execute(
+                """
+                SELECT MAX(created_at) AS last_write
+                FROM prediction_runs
+                WHERE tenant_id = ?
+                """,
+                (tenant_id,),
+            ).fetchone()
+            if row and row["last_write"] is not None:
+                return str(row["last_write"])
+        except Exception:
+            pass
+
+        return ""

@@ -252,6 +252,30 @@ def run_pipeline(
     configs = strategy_configs if strategy_configs is not None else load_strategy_configs()
     active_configs = [c for c in configs if c.active]
 
+    # Expand strategy configs across UI horizons so the engine emits 1d/7d/30d predictions.
+    # This enables per-horizon consensus rows in the UI.
+    desired_horizons = ["1d", "7d", "30d"]
+    expanded_configs: list[StrategyConfig] = []
+    for cfg in active_configs:
+        if str(cfg.strategy_type).strip().lower() == "consensus":
+            continue
+        for h in desired_horizons:
+            try:
+                expanded_configs.append(
+                    StrategyConfig(
+                        id=f"{cfg.id}-{h}",
+                        name=f"{cfg.name} ({h})",
+                        version=str(cfg.version),
+                        strategy_type=str(cfg.strategy_type),
+                        mode=str(cfg.mode),
+                        config={**dict(cfg.config or {}), "horizon": h},
+                        active=bool(cfg.active),
+                    )
+                )
+            except Exception:
+                continue
+    active_configs = expanded_configs
+
     strategies: list[tuple[StrategyConfig, Any]] = []
     for cfg in active_configs:
         instance = _build_strategy_instance(cfg)
@@ -439,123 +463,142 @@ def run_pipeline(
             sentiment = [t for t in event_predictions if t[0] == "sentiment"]
             quant = [t for t in event_predictions if t[0] == "quant"]
             if sentiment and quant:
-                best_sentiment = sorted(sentiment, key=lambda r: r[2].confidence, reverse=True)[0][2]
-                best_quant = sorted(quant, key=lambda r: r[2].confidence, reverse=True)[0][2]
+                sentiment_by_h: dict[str, list[Prediction]] = {}
+                quant_by_h: dict[str, list[Prediction]] = {}
+                for _, _, p in sentiment:
+                    h = str(p.horizon).strip().lower()
+                    sentiment_by_h.setdefault(h, []).append(p)
+                for _, _, p in quant:
+                    h = str(p.horizon).strip().lower()
+                    quant_by_h.setdefault(h, []).append(p)
 
-                sentiment_stability = repo.get_strategy_stability_score(best_sentiment.strategy_id) if repo is not None else None
-                quant_stability = repo.get_strategy_stability_score(best_quant.strategy_id) if repo is not None else None
+                for horizon in sorted(set(sentiment_by_h.keys()).intersection(set(quant_by_h.keys()))):
+                    best_sentiment = sorted(sentiment_by_h[horizon], key=lambda p: p.confidence, reverse=True)[0]
+                    best_quant = sorted(quant_by_h[horizon], key=lambda p: p.confidence, reverse=True)[0]
 
-                consensus_payload = runner.build_prediction(
-                    ticker=scored.primary_ticker,
-                    sentiment_direction=best_sentiment.prediction,
-                    sentiment_confidence=float(best_sentiment.confidence),
-                    quant_direction=best_quant.prediction,
-                    quant_confidence=float(best_quant.confidence),
-                    realized_volatility=float(realized_vol),
-                    historical_volatility_window=[float(x) for x in hist_window],
-                    adx_value=adx_value,
-                    sentiment_stability=sentiment_stability,
-                    quant_stability=quant_stability,
-                )
+                    sentiment_stability = (
+                        repo.get_strategy_stability_score(best_sentiment.strategy_id) if repo is not None else None
+                    )
+                    quant_stability = repo.get_strategy_stability_score(best_quant.strategy_id) if repo is not None else None
 
-                consensus_pred = Prediction(
-                    id=_stable_prediction_id(
-                        prefix="cons",
-                        tenant_id=raw.tenant_id,
+                    consensus_payload = runner.build_prediction(
+                        ticker=scored.primary_ticker,
+                        sentiment_direction=best_sentiment.prediction,
+                        sentiment_confidence=float(best_sentiment.confidence),
+                        quant_direction=best_quant.prediction,
+                        quant_confidence=float(best_quant.confidence),
+                        realized_volatility=float(realized_vol),
+                        historical_volatility_window=[float(x) for x in hist_window],
+                        adx_value=adx_value,
+                        sentiment_stability=sentiment_stability,
+                        quant_stability=quant_stability,
+                    )
+
+                    consensus_pred = Prediction(
+                        id=_stable_prediction_id(
+                            prefix="cons",
+                            tenant_id=raw.tenant_id,
+                            strategy_id=consensus_config.id,
+                            raw_event_id=raw.id,
+                            horizon=str(horizon),
+                            mode=str(mode_override or "backtest"),
+                        ),
                         strategy_id=consensus_config.id,
-                        raw_event_id=raw.id,
-                        horizon=str(best_sentiment.horizon or best_quant.horizon),
-                        mode=str(mode_override or "backtest"),
-                    ),
-                    strategy_id=consensus_config.id,
-                    scored_event_id=scored.id,
-                    ticker=scored.primary_ticker,
-                    timestamp=raw.timestamp,
-                    prediction=str(consensus_payload["prediction"]),  # type: ignore[arg-type]
-                    confidence=float(consensus_payload["confidence"]),
-                    horizon=str(best_sentiment.horizon or best_quant.horizon),
-                    entry_price=float(price_context.get("entry_price", 100.0)),
-                    mode=mode_override or "backtest",
-                    feature_snapshot={
-                        "regime": consensus_payload.get("regime"),
-                        "regime_snapshot": consensus_payload.get("regime_snapshot"),
-                        "trend_strength": regime_snapshot.trend_strength,
-                        "sentiment_confidence": consensus_payload.get("sentiment_confidence"),
-                        "quant_confidence": consensus_payload.get("quant_confidence"),
-                        "weighted_consensus": consensus_payload.get("weighted_consensus"),
-                        "consensus_metadata": consensus_payload.get("metadata", {}),
-                    },
-                )
-                predictions.append(consensus_pred)
+                        scored_event_id=scored.id,
+                        ticker=scored.primary_ticker,
+                        timestamp=raw.timestamp,
+                        prediction=str(consensus_payload["prediction"]),  # type: ignore[arg-type]
+                        confidence=float(consensus_payload["confidence"]),
+                        horizon=str(horizon),
+                        entry_price=float(price_context.get("entry_price", 100.0)),
+                        mode=mode_override or "backtest",
+                        feature_snapshot={
+                            "regime": consensus_payload.get("regime"),
+                            "regime_snapshot": consensus_payload.get("regime_snapshot"),
+                            "trend_strength": regime_snapshot.trend_strength,
+                            "sentiment_confidence": consensus_payload.get("sentiment_confidence"),
+                            "quant_confidence": consensus_payload.get("quant_confidence"),
+                            "weighted_consensus": consensus_payload.get("weighted_consensus"),
+                            "consensus_metadata": consensus_payload.get("metadata", {}),
+                        },
+                    )
+                    predictions.append(consensus_pred)
 
-                if repo is not None:
-                    repo.persist_prediction(consensus_pred, tenant_id=str(tenant_id))
-                    try:
-                        meta = dict(consensus_payload.get("metadata", {}) or {})
-                    except Exception:
-                        meta = {}
+                    if repo is not None:
+                        repo.persist_prediction(consensus_pred, tenant_id=str(tenant_id))
+                        try:
+                            meta = dict(consensus_payload.get("metadata", {}) or {})
+                        except Exception:
+                            meta = {}
 
-                    ss = None
-                    qs = None
-                    try:
-                        ss = float(sentiment_stability) if sentiment_stability is not None else None
-                    except Exception:
                         ss = None
-                    try:
-                        qs = float(quant_stability) if quant_stability is not None else None
-                    except Exception:
                         qs = None
+                        try:
+                            ss = float(sentiment_stability) if sentiment_stability is not None else None
+                        except Exception:
+                            ss = None
+                        try:
+                            qs = float(quant_stability) if quant_stability is not None else None
+                        except Exception:
+                            qs = None
 
-                    stability_score = None
-                    if ss is not None and qs is not None:
-                        stability_score = (ss + qs) / 2.0
-                    elif ss is not None:
-                        stability_score = ss
-                    elif qs is not None:
-                        stability_score = qs
+                        stability_score = None
+                        if ss is not None and qs is not None:
+                            stability_score = (ss + qs) / 2.0
+                        elif ss is not None:
+                            stability_score = ss
+                        elif qs is not None:
+                            stability_score = qs
 
-                    try:
-                        repo.persist_consensus_signal(
-                            prediction_id=str(consensus_pred.id),
-                            ticker=str(consensus_pred.ticker),
-                            timestamp=consensus_pred.timestamp,
-                            direction=str(consensus_pred.prediction),
-                            confidence=float(consensus_pred.confidence),
-                            regime=str(consensus_payload.get("regime")) if consensus_payload.get("regime") is not None else None,
-                            sentiment_strategy_id=str(best_sentiment.strategy_id),
-                            quant_strategy_id=str(best_quant.strategy_id),
-                            sentiment_score=float(consensus_payload.get("sentiment_confidence")) if consensus_payload.get("sentiment_confidence") is not None else None,
-                            quant_score=float(consensus_payload.get("quant_confidence")) if consensus_payload.get("quant_confidence") is not None else None,
-                            ws=float(meta.get("ws")) if meta.get("ws") is not None else None,
-                            wq=float(meta.get("wq")) if meta.get("wq") is not None else None,
-                            agreement_bonus=float(meta.get("agreement_bonus")) if meta.get("agreement_bonus") is not None else None,
-                            p_final=float(consensus_payload.get("weighted_consensus")) if consensus_payload.get("weighted_consensus") is not None else None,
-                            stability_score=stability_score,
-                            tenant_id=str(tenant_id),
-                        )
-                    except Exception:
-                        # Consensus signals are a UI read-model convenience; never break the pipeline.
-                        pass
+                        try:
+                            repo.persist_consensus_signal(
+                                prediction_id=str(consensus_pred.id),
+                                ticker=str(consensus_pred.ticker),
+                                timestamp=consensus_pred.timestamp,
+                                horizon=str(consensus_pred.horizon),
+                                direction=str(consensus_pred.prediction),
+                                confidence=float(consensus_pred.confidence),
+                                regime=str(consensus_payload.get("regime")) if consensus_payload.get("regime") is not None else None,
+                                sentiment_strategy_id=str(best_sentiment.strategy_id),
+                                quant_strategy_id=str(best_quant.strategy_id),
+                                sentiment_score=float(consensus_payload.get("sentiment_confidence"))
+                                if consensus_payload.get("sentiment_confidence") is not None
+                                else None,
+                                quant_score=float(consensus_payload.get("quant_confidence"))
+                                if consensus_payload.get("quant_confidence") is not None
+                                else None,
+                                ws=float(meta.get("ws")) if meta.get("ws") is not None else None,
+                                wq=float(meta.get("wq")) if meta.get("wq") is not None else None,
+                                agreement_bonus=float(meta.get("agreement_bonus")) if meta.get("agreement_bonus") is not None else None,
+                                p_final=float(consensus_payload.get("weighted_consensus"))
+                                if consensus_payload.get("weighted_consensus") is not None
+                                else None,
+                                stability_score=stability_score,
+                                tenant_id=str(tenant_id),
+                            )
+                        except Exception:
+                            # Consensus signals are a UI read-model convenience; never break the pipeline.
+                            pass
 
-                prediction_rows.append(
-                    {
-                        "id": consensus_pred.id,
-                        "strategy_id": consensus_pred.strategy_id,
-                        "strategy_name": _strategy_display_name(consensus_config),
-                        "strategy_type": consensus_config.strategy_type,
-                        "track": "consensus",
-                        "scored_event_id": consensus_pred.scored_event_id,
-                        "ticker": consensus_pred.ticker,
-                        "timestamp": consensus_pred.timestamp.isoformat(),
-                        "prediction": consensus_pred.prediction,
-                        "confidence": consensus_pred.confidence,
-                        "horizon": consensus_pred.horizon,
-                        "entry_price": consensus_pred.entry_price,
-                        "mode": consensus_pred.mode,
-                        "regime": vol_regime,
-                        "trend_strength": regime_snapshot.trend_strength,
-                    }
-                )
+                    prediction_rows.append(
+                        {
+                            "id": consensus_pred.id,
+                            "strategy_id": consensus_pred.strategy_id,
+                            "strategy_name": _strategy_display_name(consensus_config),
+                            "strategy_type": consensus_config.strategy_type,
+                            "track": "consensus",
+                            "scored_event_id": consensus_pred.scored_event_id,
+                            "ticker": consensus_pred.ticker,
+                            "timestamp": consensus_pred.timestamp.isoformat(),
+                            "prediction": consensus_pred.prediction,
+                            "confidence": consensus_pred.confidence,
+                            "horizon": consensus_pred.horizon,
+                            "entry_price": consensus_pred.entry_price,
+                            "mode": consensus_pred.mode,
+                            "regime": vol_regime,
+                            "trend_strength": regime_snapshot.trend_strength,
+                        }
+                    )
 
     if not evaluate_outcomes:
         if repo is not None:

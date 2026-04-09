@@ -175,7 +175,7 @@ class FinalChartRenderer:
                         width=2,
                     ),
                     connectgaps=False,
-                    hovertemplate=f"<b>{label}</b><br>Date: %{x}<br>Price: %{y:.2f}<extra></extra>"
+                    hovertemplate=f"<b>{label}</b><br>Date: %{{x}}<br>Price: %{{y:.2f}}<extra></extra>"
                 )
             )
             color_index += 1
@@ -600,7 +600,7 @@ class FinalChartRenderer:
     @staticmethod
     def _render_chart_container(fig: go.Figure) -> None:
         """Render chart container - renderer responsibility"""
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ============================================================================

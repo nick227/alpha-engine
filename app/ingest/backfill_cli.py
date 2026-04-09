@@ -51,9 +51,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replay after fetch (use --no-replay to skip)",
     )
     range_parser.add_argument(
+        "--force-replay",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Force replay for the full requested window (ignores replayed_min/max markers)",
+    )
+    range_parser.add_argument(
         "--check-only",
         action="store_true",
         help="No-network coverage check: print missing/complete/partial windows and exit",
+    )
+    range_parser.add_argument(
+        "--force-refetch-source",
+        default=None,
+        help="Ignore ingest_runs/slice markers for this source_id within the requested window",
     )
     range_parser.add_argument(
         "--skip-completed",
@@ -134,6 +145,17 @@ def build_parser() -> argparse.ArgumentParser:
     irc.add_argument("--db", default="data/alpha.db", help="SQLite DB path (default: data/alpha.db)")
     irc.add_argument("--dry-run", action="store_true", help="Print what would change without updating DB")
 
+    # Command: ingest-health
+    ih = subparsers.add_parser(
+        "ingest-health",
+        help="Ingestion health KPI summary",
+        description="Coverage %, freshness, drift warnings, and latency per source over a date range",
+    )
+    ih.add_argument("--db", default="data/alpha.db", help="SQLite DB path (default: data/alpha.db)")
+    ih.add_argument("--start", required=True, help="Start date/time (YYYY-MM-DD or ISO)")
+    ih.add_argument("--end", required=True, help="End date/time (YYYY-MM-DD or ISO)")
+    ih.add_argument("--batch-size-days", type=int, default=1, help="Slice size in days (default: 1)")
+
     return parser
 
 def _parse_dt_or_none(s: str | None) -> datetime | None:
@@ -191,7 +213,7 @@ def _print_ingest_runs_report(
               COUNT(*) as windows,
               SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) as complete_windows,
               SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running_windows,
-              SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_windows,
+              SUM(CASE WHEN status LIKE 'failed%' THEN 1 ELSE 0 END) as failed_windows,
               SUM(empty_count) as empty_windows,
               SUM(retry_count) as retries_total,
               SUM(fetched_count) as fetched_rows,
@@ -272,7 +294,7 @@ def _print_ingest_runs_report(
             SELECT source_id, COALESCE(last_error, 'unknown') as reason, COUNT(*) as c
             FROM ingest_runs
             {where_sql}
-              {"AND" if where_sql else "WHERE"} status = 'failed'
+              {"AND" if where_sql else "WHERE"} status LIKE 'failed%'
             GROUP BY source_id, reason
             ORDER BY c DESC, source_id ASC, reason ASC
             """,
@@ -296,6 +318,7 @@ def _print_ingest_runs_report(
               source_id,
               SUM(request_cache_hit) as cache_hits,
               COUNT(*) as stats_windows,
+              SUM(CASE WHEN warnings_json LIKE '%provider_schema_changed%' THEN 1 ELSE 0 END) as schema_drift_windows,
               SUM(dropped_empty_text) as dropped_empty_text,
               SUM(dropped_bad_timestamp) as dropped_bad_timestamp,
               SUM(dropped_invalid_shape) as dropped_invalid_shape,
@@ -315,8 +338,9 @@ def _print_ingest_runs_report(
                 hits = int(r["cache_hits"] or 0)
                 windows = int(r["stats_windows"] or 0)
                 pct = (100.0 * hits / windows) if windows > 0 else 0.0
+                drift = int(r["schema_drift_windows"] or 0)
                 print(
-                    f"{r['source_id']}: request_cache_hits={hits}/{windows} ({pct:.1f}%) "
+                    f"{r['source_id']}: request_cache_hits={hits}/{windows} ({pct:.1f}%) schema_drift_windows={drift} "
                     f"drops(empty_text={int(r['dropped_empty_text'] or 0)}, bad_timestamp={int(r['dropped_bad_timestamp'] or 0)}, "
                     f"invalid_shape={int(r['dropped_invalid_shape'] or 0)}, out_of_bounds={int(r['dropped_out_of_bounds'] or 0)}, "
                     f"duplicate={int(r['dropped_duplicate'] or 0)})"
@@ -354,8 +378,9 @@ def _print_ingest_runs_detail(
             f"""
             SELECT
               r.source_id, r.start_ts, r.end_ts, r.spec_hash, r.provider, r.status, r.ok, r.retry_count,
-              r.fetched_count, r.emitted_count, r.empty_count, r.last_error, r.started_at, r.completed_at, r.updated_at,
-              s.request_cache_hit, s.response_fingerprint,
+              r.fetched_count, r.emitted_count, r.empty_count, r.oldest_event_ts, r.newest_event_ts,
+              r.last_error, r.started_at, r.completed_at, r.updated_at,
+              s.request_cache_hit, s.response_fingerprint, s.fetch_time_s, s.total_time_s, s.warnings_json,
               s.raw_rows_count, s.normalized_count, s.valid_count, s.bounded_count,
               s.dropped_empty_text, s.dropped_bad_timestamp, s.dropped_invalid_shape, s.dropped_out_of_bounds, s.dropped_duplicate
             FROM ingest_runs r
@@ -389,10 +414,16 @@ def _print_ingest_runs_detail(
             print(
                 f"  started_at={r['started_at']} completed_at={r['completed_at'] or '(none)'} updated_at={r['updated_at']}"
             )
+            if r["oldest_event_ts"] or r["newest_event_ts"]:
+                print(f"  event_ts: oldest={r['oldest_event_ts'] or '(none)'} newest={r['newest_event_ts'] or '(none)'}")
             if r["response_fingerprint"] or r["request_cache_hit"] is not None:
                 print(
                     f"  request_cache_hit={int(r['request_cache_hit'] or 0)} response_fingerprint={r['response_fingerprint'] or '(none)'}"
                 )
+            if r["fetch_time_s"] is not None or r["total_time_s"] is not None:
+                print(f"  timing: fetch_s={r['fetch_time_s'] if r['fetch_time_s'] is not None else '(none)'} total_s={r['total_time_s'] if r['total_time_s'] is not None else '(none)'}")
+            if r["warnings_json"] and r["warnings_json"] != "[]":
+                print(f"  warnings: {r['warnings_json']}")
             if r["raw_rows_count"] is not None:
                 print(
                     f"  rows(raw={int(r['raw_rows_count'] or 0)}, normalized={int(r['normalized_count'] or 0)}, valid={int(r['valid_count'] or 0)}, bounded={int(r['bounded_count'] or 0)}) "
@@ -474,6 +505,153 @@ def _cleanup_stale_running(*, db_path: str, dry_run: bool) -> None:
                 ),
             )
         print(f"Updated {len(stale)} windows to failed.")
+
+
+def _percent(n: int, d: int) -> float:
+    return (100.0 * float(n) / float(d)) if d > 0 else 0.0
+
+
+def _p95(values: list[float]) -> float | None:
+    if not values:
+        return None
+    xs = sorted(values)
+    idx = int((len(xs) - 1) * 0.95)
+    return float(xs[idx])
+
+
+def _print_ingest_health(*, db_path: str, start: str, end: str, batch_size_days: int) -> None:
+    EventStore(db_path=db_path)  # ensure schema
+    import sqlite3
+    from datetime import datetime, timezone, timedelta
+
+    start_dt = _parse_dt_or_none(start)
+    end_dt = _parse_dt_or_none(end)
+    if start_dt is None or end_dt is None:
+        print("ingest-health requires --start and --end (YYYY-MM-DD or ISO)")
+        return
+
+    start_dt = to_utc_datetime(start_dt).replace(microsecond=0)
+    end_dt = to_utc_datetime(end_dt).replace(microsecond=0)
+    if start_dt >= end_dt:
+        print("Invalid range: start must be < end")
+        return
+
+    step = max(1, int(batch_size_days))
+    expected_windows = 0
+    cur = start_dt
+    while cur < end_dt:
+        cur = min(cur + timedelta(days=step), end_dt)
+        expected_windows += 1
+
+    store = EventStore(db_path=db_path)
+    specs = [s for s in validate_sources_yaml() if getattr(s, "enabled", True)]
+    if not specs:
+        print("No enabled sources in config/sources.yaml")
+        return
+
+    spec_hashes = {str(s.id): _spec_hash_for_cli(store, s) for s in specs}
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        print("Ingestion Health")
+        print("----------------")
+        print(f"db: {db_path}")
+        print(f"range: {normalize_timestamp(start_dt)} -> {normalize_timestamp(end_dt)} (step_days={step})")
+        print()
+
+        for s in sorted(specs, key=lambda x: str(x.id)):
+            sid = str(s.id)
+            spec_hash = spec_hashes[sid]
+            backfilled_until = store.get_backfilled_until(source_id=sid, spec_hash=spec_hash)
+
+            # Coverage: count windows fully contained in range with matching spec_hash.
+            complete = conn.execute(
+                """
+                SELECT COUNT(*) as c
+                FROM ingest_runs
+                WHERE source_id = ? AND spec_hash = ?
+                  AND start_ts >= ? AND end_ts <= ?
+                  AND status = 'complete'
+                """,
+                (sid, spec_hash, normalize_timestamp(start_dt), normalize_timestamp(end_dt)),
+            ).fetchone()["c"]
+
+            running = conn.execute(
+                """
+                SELECT COUNT(*) as c
+                FROM ingest_runs
+                WHERE source_id = ? AND spec_hash = ?
+                  AND start_ts >= ? AND end_ts <= ?
+                  AND status = 'running'
+                """,
+                (sid, spec_hash, normalize_timestamp(start_dt), normalize_timestamp(end_dt)),
+            ).fetchone()["c"]
+
+            failed = conn.execute(
+                """
+                SELECT COUNT(*) as c
+                FROM ingest_runs
+                WHERE source_id = ? AND spec_hash = ?
+                  AND start_ts >= ? AND end_ts <= ?
+                  AND status LIKE 'failed%'
+                """,
+                (sid, spec_hash, normalize_timestamp(start_dt), normalize_timestamp(end_dt)),
+            ).fetchone()["c"]
+
+            cov = _percent(int(complete), int(expected_windows))
+
+            last_ok = conn.execute(
+                """
+                SELECT MAX(completed_at) as t
+                FROM ingest_runs
+                WHERE source_id = ? AND spec_hash = ? AND status = 'complete' AND ok = 1
+                """,
+                (sid, spec_hash),
+            ).fetchone()["t"]
+            freshness = ""
+            if last_ok:
+                try:
+                    dt = to_utc_datetime(str(last_ok))
+                    age_s = (datetime.now(timezone.utc) - dt).total_seconds()
+                    if age_s < 120:
+                        freshness = f"last ok {int(age_s)}s ago"
+                    elif age_s < 7200:
+                        freshness = f"last ok {int(age_s/60)}m ago"
+                    else:
+                        freshness = f"last ok {int(age_s/3600)}h ago"
+                except Exception:
+                    freshness = "last ok (unknown)"
+            else:
+                freshness = "last ok (none)"
+
+            # Schema drift warnings + latency p95 for this range.
+            stats = conn.execute(
+                """
+                SELECT
+                  SUM(CASE WHEN warnings_json LIKE '%provider_schema_changed%' THEN 1 ELSE 0 END) as drift,
+                  AVG(fetch_time_s) as avg_fetch_s,
+                  AVG(total_time_s) as avg_total_s
+                FROM ingest_run_stats
+                WHERE source_id = ? AND spec_hash = ? AND start_ts >= ? AND end_ts <= ?
+                """,
+                (sid, spec_hash, normalize_timestamp(start_dt), normalize_timestamp(end_dt)),
+            ).fetchone()
+            drift = int(stats["drift"] or 0)
+
+            fetch_times = conn.execute(
+                """
+                SELECT fetch_time_s
+                FROM ingest_run_stats
+                WHERE source_id = ? AND spec_hash = ? AND start_ts >= ? AND end_ts <= ? AND fetch_time_s IS NOT NULL
+                """,
+                (sid, spec_hash, normalize_timestamp(start_dt), normalize_timestamp(end_dt)),
+            ).fetchall()
+            p95_fetch = _p95([float(r["fetch_time_s"]) for r in fetch_times if r["fetch_time_s"] is not None])
+
+            warn_txt = " schema_drift" if drift > 0 else ""
+            p95_txt = f" p95_fetch={p95_fetch:.2f}s" if p95_fetch is not None else ""
+            horizon_txt = f" backfilled_until={backfilled_until}" if backfilled_until else ""
+            print(f"{sid:20s} {cov:5.1f}% coverage  running={int(running)} failed={int(failed)}  {freshness}{warn_txt}{p95_txt}{horizon_txt}")
 
 def _spec_hash_for_cli(store: EventStore, spec) -> str:
     try:
@@ -578,9 +756,11 @@ async def main(argv: list[str] | None = None) -> int:
             end_time=end_dt,
             batch_size_days=int(args.batch_size_days),
             replay=args.replay,
+            force_replay=bool(args.force_replay),
             skip_completed=args.skip_completed,
             fail_fast=args.fail_fast,
             max_zero_insert_slices=args.max_zero_insert_slices,
+            force_refetch_source=(str(args.force_refetch_source) if args.force_refetch_source else None),
         )
         return 0
     elif args.command == "list-target-stocks":
@@ -645,6 +825,14 @@ async def main(argv: list[str] | None = None) -> int:
         return 0
     elif args.command == "ingest-runs-cleanup":
         _cleanup_stale_running(db_path=str(args.db), dry_run=bool(args.dry_run))
+        return 0
+    elif args.command == "ingest-health":
+        _print_ingest_health(
+            db_path=str(args.db),
+            start=str(args.start),
+            end=str(args.end),
+            batch_size_days=int(args.batch_size_days),
+        )
         return 0
     return 1
 

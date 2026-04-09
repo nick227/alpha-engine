@@ -13,12 +13,13 @@ from typing import Any
 from app.ingest.key_manager import KeyManager
 from app.ingest.fetch_context import FetchContext
 from app.ingest.extractor import Extractor
-from app.ingest.validator import validate_sources_yaml, validate_events
+from app.ingest.validator import validate_sources_yaml, validate_events_with_reasons
 from app.ingest.registry import resolve_adapter
 from app.ingest.event_model import Event
 from app.ingest.dedupe import Deduper
 from app.ingest.event_store import EventStore
 from app.ingest.router import EventRouter
+from app.ingest.fetchers import fetch_rows
 from app.core.types import RawEvent
 from app.core.repository import Repository
 from app.core.time_utils import to_utc_datetime, normalize_timestamp
@@ -101,6 +102,23 @@ def _running_ttl_s_for_provider(provider: str) -> int:
         return base
 
 
+def _derive_ingest_status(
+    *,
+    raw_rows_count: int,
+    emitted_count: int,
+    ok: bool,
+    error: str | None,
+) -> tuple[bool, str | None, str | None]:
+    """
+    Derive (ok_override, status_override, last_error_override) for a window.
+
+    - If we got a non-empty provider response but emitted 0 events, treat as schema/mapping drift.
+    """
+    if bool(ok) and int(raw_rows_count) > 0 and int(emitted_count) == 0:
+        return False, "failed_schema", "zero_emission_nonempty_response"
+    return bool(ok), None, (str(error) if error else None)
+
+
 @dataclass(frozen=True)
 class SliceFetchResult:
     source_id: str
@@ -114,6 +132,8 @@ class SliceFetchResult:
     raw_rows_count: int = 0
     normalized_count: int = 0
     valid_count: int = 0
+    fetch_time_s: float | None = None
+    total_time_s: float | None = None
     dropped_empty_text: int = 0
     dropped_bad_timestamp: int = 0
     dropped_invalid_shape: int = 0
@@ -140,9 +160,11 @@ async def _fetch_slice(
     except Exception:
         pass
 
-    adapter = resolve_adapter(spec.adapter)
-    if not adapter:
-        return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error="adapter_not_found", provider=_provider_group(spec))
+    adapter = None
+    if getattr(spec, "fetch", None) is None:
+        adapter = resolve_adapter(spec.adapter)
+        if not adapter:
+            return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error="adapter_not_found", provider=_provider_group(spec))
 
     from app.ingest.async_runner import get_limiter
     provider = _provider_group(spec)
@@ -171,10 +193,17 @@ async def _fetch_slice(
                 cache_handle["ingest_request_cache"] = rc
             request_cache = rc  # type: ignore[assignment]
 
+        fetch_payload = None
+        try:
+            fetch_payload = spec.fetch.model_dump() if getattr(spec, "fetch", None) is not None else None
+        except Exception:
+            fetch_payload = None
+
         req_key_payload = {
             "source_id": str(spec.id),
             "adapter": str(getattr(spec, "adapter", "")),
             "endpoint": str(getattr(spec, "endpoint", "") or ""),
+            "fetch": fetch_payload,
             "symbols": getattr(spec, "symbols", None),
             "options": getattr(spec, "options", None),
             "start": start_date.isoformat(),
@@ -189,7 +218,10 @@ async def _fetch_slice(
             raw_rows = request_cache[request_hash]
             cache_hit = True
         else:
-            raw_rows = await adapter.fetch_raw(spec, ctx)
+            if getattr(spec, "fetch", None) is not None:
+                raw_rows = await fetch_rows(spec, ctx)
+            else:
+                raw_rows = await adapter.fetch_raw(spec, ctx)  # type: ignore[union-attr]
             if request_cache is not None and isinstance(raw_rows, list):
                 request_cache[request_hash] = raw_rows
         dt_fetch = time.perf_counter() - t0
@@ -204,23 +236,11 @@ async def _fetch_slice(
 
         events = extractor.normalize_many(raw_rows_list, spec)
         normalized_count = len(events)
-        # Basic validation (existing), plus reasons by approximation.
-        valid_events = validate_events(events)
+        valid_events, dropped_counts = validate_events_with_reasons(events)
         valid_count = len(valid_events)
-
-        dropped_empty_text = 0
-        dropped_bad_timestamp = 0
-        dropped_invalid_shape = 0
-        for e in events:
-            # Mirror validate_events() behavior with coarse reasons.
-            if not getattr(e, "timestamp", None):
-                dropped_bad_timestamp += 1
-                continue
-            if e.source_type == "news" and (not getattr(e, "text", None) or not str(e.text or "").strip()):
-                dropped_empty_text += 1
-                continue
-            # Anything else that got dropped is treated as invalid_shape for now.
-        dropped_invalid_shape = max(0, len(events) - len(valid_events) - dropped_empty_text - dropped_bad_timestamp)
+        dropped_empty_text = int(dropped_counts.get("empty_text", 0))
+        dropped_bad_timestamp = int(dropped_counts.get("bad_timestamp", 0))
+        dropped_invalid_shape = int(dropped_counts.get("invalid_shape", 0))
         
         # Enforce slice bounds even if the adapter ignores date filtering.
         start_utc = to_utc_datetime(start_date)
@@ -249,6 +269,8 @@ async def _fetch_slice(
             raw_rows_count=len(raw_rows_list),
             normalized_count=int(normalized_count),
             valid_count=int(valid_count),
+            fetch_time_s=float(dt_fetch),
+            total_time_s=float(dt_total),
             dropped_empty_text=int(dropped_empty_text),
             dropped_bad_timestamp=int(dropped_bad_timestamp),
             dropped_invalid_shape=int(dropped_invalid_shape),
@@ -335,9 +357,11 @@ class BackfillRunner:
         end_time: datetime,
         batch_size_days: int = 1,
         replay: bool = True,
+        force_replay: bool = False,
         skip_completed: bool = True,
         fail_fast: bool = True,
         max_zero_insert_slices: int = 2,
+        force_refetch_source: str | None = None,
     ) -> None:
         """
         Fetches historical events for [start_time, end_time) and optionally replays only the unseen subset.
@@ -369,9 +393,6 @@ class BackfillRunner:
                     continue
                 if str(getattr(spec, "adapter", "")).strip().lower() == "custom_bundle":
                     try:
-                        adapter = resolve_adapter(spec.adapter)
-                        if adapter is None:
-                            continue
                         ctx = FetchContext(
                             provider=_provider_group(spec),
                             key_manager=self.key_manager,
@@ -381,7 +402,13 @@ class BackfillRunner:
                             cache_handle=self._fetch_cache,
                             run_metadata={"mode": "backfill", "source_id": spec.id, "prefilter": True},
                         )
-                        raw_rows = await adapter.fetch_raw(spec, ctx)
+                        if getattr(spec, "fetch", None) is not None:
+                            raw_rows = await fetch_rows(spec, ctx)
+                        else:
+                            adapter = resolve_adapter(spec.adapter)
+                            if adapter is None:
+                                continue
+                            raw_rows = await adapter.fetch_raw(spec, ctx)
                         if not raw_rows:
                             continue
                     except Exception:
@@ -389,6 +416,10 @@ class BackfillRunner:
                         pass
                 effective_specs.append(spec)
             specs = effective_specs
+            try:
+                specs = sorted(specs, key=lambda s: (int(getattr(s, "priority", 9999)), str(getattr(s, "id", ""))))
+            except Exception:
+                pass
 
             # Fetch slices.
             current_start = start_time
@@ -403,8 +434,9 @@ class BackfillRunner:
                 for spec in specs:
                     if not spec.enabled:
                         continue
-                    if skip_completed:
-                        sid = str(spec.id)
+                    sid = str(spec.id)
+                    force = bool(force_refetch_source and str(force_refetch_source) == sid)
+                    if skip_completed and not force:
                         spec_hash = _spec_hash_for(self.store, spec)
                         if self.store.is_ingest_window_completed(
                             source_id=sid,
@@ -479,6 +511,22 @@ class BackfillRunner:
                         except Exception:
                             # If locking fails, proceed (safer than skipping ingestion entirely).
                             pass
+                    else:
+                        # Force-refetch path: ignore ingest_runs/slice markers/existing-events checks, but still lock.
+                        spec_hash = _spec_hash_for(self.store, spec)
+                        try:
+                            provider = _provider_group(spec)
+                            if not self.store.begin_ingest_window(
+                                source_id=sid,
+                                start_ts=slice_start_ts,
+                                end_ts=slice_end_ts,
+                                spec_hash=spec_hash,
+                                provider=provider,
+                                running_ttl_s=_running_ttl_s_for_provider(provider),
+                            ):
+                                continue
+                        except Exception:
+                            pass
                     tasks.append(
                         _fetch_slice(
                             spec,
@@ -532,6 +580,46 @@ class BackfillRunner:
                         spec_obj = next((s for s in specs if str(getattr(s, "id", "")) == str(r.source_id)), None)
                         spec_hash = _spec_hash_for(self.store, spec_obj) if spec_obj is not None else self.store.stable_spec_hash({"id": str(r.source_id)})
                         dropped_duplicate = max(0, int(pre_counts.get(str(r.source_id), 0)) - int(post_counts.get(str(r.source_id), 0)))
+                        warnings: list[str] = []
+                        # Provider drift detection: fingerprint changed AND drop rate spikes.
+                        try:
+                            if r.response_fingerprint:
+                                # Compare with most recent completed window for same source/spec_hash.
+                                import sqlite3
+
+                                with sqlite3.connect(self.store.db_path) as conn:
+                                    conn.row_factory = sqlite3.Row
+                                    prev = conn.execute(
+                                        """
+                                        SELECT s.response_fingerprint, s.normalized_count, s.dropped_empty_text, s.dropped_bad_timestamp,
+                                               s.dropped_invalid_shape, s.dropped_out_of_bounds, s.dropped_duplicate
+                                        FROM ingest_run_stats s
+                                        JOIN ingest_runs r
+                                          ON r.source_id = s.source_id AND r.start_ts = s.start_ts AND r.end_ts = s.end_ts AND r.spec_hash = s.spec_hash
+                                        WHERE s.source_id = ? AND s.spec_hash = ? AND r.status = 'complete'
+                                        ORDER BY s.end_ts DESC
+                                        LIMIT 1
+                                        """,
+                                        (str(r.source_id), str(spec_hash)),
+                                    ).fetchone()
+                                if prev is not None:
+                                    prev_fp = str(prev["response_fingerprint"] or "")
+                                    prev_norm = int(prev["normalized_count"] or 0)
+                                    prev_drops = (
+                                        int(prev["dropped_empty_text"] or 0)
+                                        + int(prev["dropped_bad_timestamp"] or 0)
+                                        + int(prev["dropped_invalid_shape"] or 0)
+                                        + int(prev["dropped_out_of_bounds"] or 0)
+                                        + int(prev["dropped_duplicate"] or 0)
+                                    )
+                                    cur_norm = int(r.normalized_count or 0)
+                                    cur_drops = int(r.dropped_empty_text or 0) + int(r.dropped_bad_timestamp or 0) + int(r.dropped_invalid_shape or 0) + int(r.dropped_out_of_bounds or 0) + int(dropped_duplicate)
+                                    prev_rate = (prev_drops / prev_norm) if prev_norm > 0 else 0.0
+                                    cur_rate = (cur_drops / cur_norm) if cur_norm > 0 else 0.0
+                                    if prev_fp and prev_fp != str(r.response_fingerprint) and cur_rate >= 0.75 and (cur_rate - prev_rate) >= 0.25:
+                                        warnings.append("provider_schema_changed")
+                        except Exception:
+                            pass
                         try:
                             self.store.record_ingest_run_stats(
                                 source_id=str(r.source_id),
@@ -541,6 +629,8 @@ class BackfillRunner:
                                 request_hash=r.request_hash,
                                 request_cache_hit=bool(r.request_cache_hit),
                                 response_fingerprint=r.response_fingerprint,
+                                fetch_time_s=r.fetch_time_s,
+                                total_time_s=r.total_time_s,
                                 raw_rows_count=int(r.raw_rows_count or 0),
                                 normalized_count=int(r.normalized_count or 0),
                                 valid_count=int(r.valid_count or 0),
@@ -550,20 +640,44 @@ class BackfillRunner:
                                 dropped_invalid_shape=int(r.dropped_invalid_shape or 0),
                                 dropped_out_of_bounds=int(r.dropped_out_of_bounds or 0),
                                 dropped_duplicate=int(dropped_duplicate),
+                                warnings=warnings,
                             )
                         except Exception:
                             pass
                         try:
+                            emitted = int(post_counts.get(str(r.source_id), 0))
+                            status_override = None
+                            ok_override, status_override, err_override = _derive_ingest_status(
+                                raw_rows_count=int(r.raw_rows_count or 0),
+                                emitted_count=int(emitted),
+                                ok=bool(r.ok),
+                                error=r.error,
+                            )
+                            # Data freshness markers from bounded event timestamps.
+                            oldest_ts = None
+                            newest_ts = None
+                            if r.events:
+                                try:
+                                    times = [str(e.timestamp) for e in r.events if getattr(e, "timestamp", None)]
+                                    if times:
+                                        oldest_ts = min(times)
+                                        newest_ts = max(times)
+                                except Exception:
+                                    oldest_ts = None
+                                    newest_ts = None
                             self.store.record_ingest_run(
                                 source_id=str(r.source_id),
                                 start_ts=slice_start_ts,
                                 end_ts=slice_end_ts,
                                 spec_hash=spec_hash,
                                 provider=str(r.provider or _provider_group(spec_obj) if spec_obj is not None else ""),
-                                ok=bool(r.ok),
+                                ok=bool(ok_override),
                                 fetched_count=int(r.raw_rows_count or 0),
-                                emitted_count=int(post_counts.get(str(r.source_id), 0)),
-                                last_error=r.error,
+                                emitted_count=int(emitted),
+                                oldest_event_ts=oldest_ts,
+                                newest_event_ts=newest_ts,
+                                status_override=status_override,
+                                last_error=(err_override if status_override is None else "zero_emission_nonempty_response"),
                             )
                         except Exception:
                             pass
@@ -616,9 +730,26 @@ class BackfillRunner:
             repo.set_kv("backfill_history_start", normalize_timestamp(hist_start), tenant_id=BACKFILL_TENANT_ID)
             repo.set_kv("backfill_history_end", normalize_timestamp(hist_end), tenant_id=BACKFILL_TENANT_ID)
 
+            # Horizon marker: this source set has been backfilled through end_time for the current spec_hashes.
+            try:
+                end_ts = normalize_timestamp(end_time)
+                for spec in specs:
+                    if not getattr(spec, "enabled", True):
+                        continue
+                    sid = str(getattr(spec, "id", "") or "")
+                    if not sid:
+                        continue
+                    spec_hash = _spec_hash_for(self.store, spec)
+                    self.store.set_backfilled_until(source_id=sid, spec_hash=spec_hash, backfilled_until_ts=end_ts)
+            except Exception:
+                pass
+
             if replay:
                 t_replay_start = time.perf_counter()
-                replay_summary = await self.replay_unseen(start_time=start_time, end_time=end_time, repo=repo)
+                if force_replay:
+                    replay_summary = await self.replay_range(start_time=start_time, end_time=end_time, repo=repo)
+                else:
+                    replay_summary = await self.replay_unseen(start_time=start_time, end_time=end_time, repo=repo)
                 dt_replay = time.perf_counter() - t_replay_start
                 print(
                     f"[{datetime.now(timezone.utc).isoformat()}] Replay phase complete in {dt_replay:.2f}s "

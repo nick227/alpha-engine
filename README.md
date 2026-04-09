@@ -99,18 +99,18 @@ This generates comprehensive analysis in `outputs/`:
 - `outputs/prediction_outcomes.csv` - Performance results
 - `outputs/strategy_performance.csv` - Ranking metrics
 
-### **4. Launch Dashboard**
+### **4. Launch Dashboard** 
+ 
+```bash 
+# Start the full UI (Dashboard + Intelligence Hub + Audit + Chatbot)
+streamlit run app/ui/app.py
 
-```bash
-# Start the main dashboard
+# Direct entrypoints (optional)
 streamlit run app/ui/dashboard.py
-
-# Or launch the optimized version
-streamlit run app/ui/dashboard_optimized.py
-
-# For intelligence hub features
 streamlit run app/ui/intelligence_hub.py
-```
+streamlit run app/ui/audit.py
+streamlit run app/ui/chatbot.py
+``` 
 
 ## 🏗️ Architecture
 

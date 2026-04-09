@@ -7,15 +7,17 @@ No simulation, no numpy, no scoring logic in UI.
 
 import streamlit as st
 import plotly.graph_objects as go
-from app.ui.theme import apply_theme, COLORS, TYPOGRAPHY, SPACING
-from app.ui.components.enhanced import (
-    elevated_card, metric_card, status_badge, divider
-)
+from app.ui.theme import apply_theme
 from app.ui.intelligence.intelligence_hub_state import IntelligenceHubState
 from app.ui.middle.dashboard_service import DashboardService
 
 
-def intelligence_hub_main(service: DashboardService):
+def intelligence_hub_main(
+    service: DashboardService,
+    *,
+    show_page_header: bool = True,
+    show_local_controls: bool = True,
+):
     """
     Main intelligence hub entry point - clean architecture.
     
@@ -27,20 +29,43 @@ def intelligence_hub_main(service: DashboardService):
     
     All simulation logic is in the service layer.
     """
-    # Apply theme
-    apply_theme()
+    if show_page_header or show_local_controls:
+        apply_theme()
     
     # Get state from session or initialize
-    if 'ih_state' not in st.session_state:
+    if "ih_state" not in st.session_state:
         st.session_state.ih_state = IntelligenceHubState()
-    
-    state = st.session_state.ih_state
-    
-    # Handle state changes from session
-    if hasattr(st.session_state, 'asset_change') and st.session_state.asset_change != state.ticker:
-        state = state.copy(ticker=st.session_state.asset_change)
+     
+    state = st.session_state.ih_state 
+
+    # Sync global filters (from app/ui/app.py) into IH state when present.
+    ui_filters = st.session_state.get("ui_filters", {}) or {}
+    desired_tenant = ui_filters.get("tenant_id")
+    desired_ticker = ui_filters.get("ticker")
+    desired_timeframe = ui_filters.get("timeframe")
+    desired_horizon = ui_filters.get("horizon_days")
+    desired_run = ui_filters.get("run_id")
+
+    updates = {}
+    if desired_tenant and getattr(state, "tenant_id", None) != desired_tenant:
+        updates["tenant_id"] = desired_tenant
+    if desired_ticker and state.ticker != desired_ticker:
+        updates["ticker"] = desired_ticker
+    if desired_timeframe and state.timeframe != desired_timeframe:
+        updates["timeframe"] = desired_timeframe
+    if desired_horizon and state.horizon != int(desired_horizon):
+        updates["horizon"] = int(desired_horizon)
+    if desired_run is not None and state.run_id != desired_run:
+        updates["run_id"] = desired_run
+    if updates:
+        state = state.copy(**updates)
         st.session_state.ih_state = state
-        del st.session_state.asset_change
+     
+    # Handle state changes from session 
+    if hasattr(st.session_state, 'asset_change') and st.session_state.asset_change != state.ticker: 
+        state = state.copy(ticker=st.session_state.asset_change) 
+        st.session_state.ih_state = state 
+        del st.session_state.asset_change 
     
     if hasattr(st.session_state, 'timeframe_change') and st.session_state.timeframe_change != state.timeframe:
         state = state.copy(timeframe=st.session_state.timeframe_change)
@@ -55,30 +80,30 @@ def intelligence_hub_main(service: DashboardService):
     # Get real data from service
     dto = service.get_intelligence_state(state)
     
-    # Render header
-    st.markdown("""
-    <div style="
-        background: linear-gradient(135deg, #1565C0 0%, #0D47A1 100%);
-        color: white;
-        padding: 40px;
-        border-radius: 16px;
-        margin-bottom: 32px;
-        text-align: center;
-    ">
-        <h1 style="margin: 0; font-size: 36px; font-weight: 700; margin-bottom: 8px;">
-            Intelligence Hub
-        </h1>
-        <p style="margin: 0; font-size: 18px; opacity: 0.9;">
-            Strategy performance explorer across time periods
-        </p>
-        <p style="margin: 8px 0 0; font-size: 14px; opacity: 0.7;">
-            Analyze prediction accuracy, identify regime changes, and understand market context
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Render controls
-    render_controls(state, dto.tickers, dto.runs)
+    if show_page_header:
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #1565C0 0%, #0D47A1 100%);
+            color: white;
+            padding: 40px;
+            border-radius: 16px;
+            margin-bottom: 32px;
+            text-align: center;
+        ">
+            <h1 style="margin: 0; font-size: 36px; font-weight: 700; margin-bottom: 8px;">
+                Intelligence Hub
+            </h1>
+            <p style="margin: 0; font-size: 18px; opacity: 0.9;">
+                Strategy performance explorer across time periods
+            </p>
+            <p style="margin: 8px 0 0; font-size: 14px; opacity: 0.7;">
+                Analyze prediction accuracy, identify regime changes, and understand market context
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if show_local_controls:
+        render_controls(state, dto.tickers, dto.runs)
     
     # Asset info bar
     st.markdown(f"""
@@ -127,21 +152,21 @@ def intelligence_hub_main(service: DashboardService):
 </div>""", unsafe_allow_html=True)
     
     # Render real strategy matrix data
-    if dto.matrix:
+    if dto.matrix_rows:
         st.markdown("### Strategy Performance Matrix")
-        render_champion_matrix(dto.matrix, dto.champions)
+        render_champion_matrix(dto.matrix_rows, dto.champions)
     else:
         st.info("No strategy data available. Run prediction analysis to populate the database.")
     
     # Render strategy rankings if available
-    if dto.rankings:
+    if dto.strategy_rankings:
         st.markdown("### Strategy Efficiency Rankings")
-        render_strategy_rankings(dto.rankings)
+        render_strategy_rankings(dto.strategy_rankings)
     
     # Render overlays if available
-    if dto.overlay:
+    if dto.overlay_series:
         st.markdown("### Strategy Overlays")
-        render_strategy_overlays(dto.overlay, dto.rankings)
+        render_strategy_overlays(dto.overlay_series, dto.strategy_rankings)
     
     # Render timeline if available
     if dto.timeline:
@@ -153,18 +178,18 @@ def intelligence_hub_main(service: DashboardService):
         st.markdown("### Market Consensus")
         render_consensus(dto.consensus)
     
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #757575; font-size: 12px; margin-top: 32px;">
-        <div>Intelligence Hub</div>
-        <div style="margin-top: 4px;">Strategy performance exploration powered by Alpha Engine</div>
-        <div style="margin-top: 8px; font-size: 11px;">
-            <strong>Key insights:</strong> Look for declining alpha -> regime change | High MAE -> magnitude errors | 
-            Filter incorrect predictions -> failure patterns | News polarity -> causal factors
+    if show_page_header:
+        st.markdown("---")
+        st.markdown("""
+        <div style="text-align: center; color: #757575; font-size: 12px; margin-top: 32px;">
+            <div>Intelligence Hub</div>
+            <div style="margin-top: 4px;">Strategy performance exploration powered by Alpha Engine</div>
+            <div style="margin-top: 8px; font-size: 11px;">
+                <strong>Key insights:</strong> Look for declining alpha -> regime change | High MAE -> magnitude errors | 
+                Filter incorrect predictions -> failure patterns | News polarity -> causal factors
+            </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
 
 def render_strategy_card(strategy: dict):
@@ -439,7 +464,15 @@ def render_consensus(consensus):
     
     if consensus.participating_strategies:
         st.markdown("**Participating Strategies:**")
-        st.write(", ".join(consensus.participating_strategies))
+        # Handle both integer and string cases
+        try:
+            if isinstance(consensus.participating_strategies, (list, tuple)):
+                st.write(", ".join(str(s) for s in consensus.participating_strategies))
+            else:
+                st.write(f"{consensus.participating_strategies} strategies")
+        except Exception as e:
+            st.write(f"Error displaying strategies: {e}")
+            st.write(f"Raw value: {consensus.participating_strategies}")
 
 
 def render_controls(state: IntelligenceHubState, tickers: list[str], runs: list):
