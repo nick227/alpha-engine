@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import hashlib
+import json
 import os
 import random
 import time
@@ -24,6 +25,10 @@ from app.core.time_utils import to_utc_datetime, normalize_timestamp
 from app.core.bars import BarsCache, bar_window_for_events, build_bars_provider
 from app.core.price_context import build_price_contexts_from_bars_multi
 from app.core.target_stocks import get_target_stocks, get_target_stocks_registry
+from app.db.repository import AlphaRepository
+from app.core.macro.config import load_macro_series_specs
+from app.core.macro.yfinance_series import fetch_and_build_macro_features
+from app.core.company_profiles.yfinance_profiles import ensure_yfinance_company_profiles
 from app.engine.runner import run_pipeline
 from app.engine.continuous_learning import ContinuousLearner
 from app.engine.strategy_registry import StrategyRegistry
@@ -32,6 +37,23 @@ from app.engine.genetic_optimizer import GeneticOptimizer
 
 BACKFILL_TENANT_ID = "backfill"
 DEFAULT_HORIZONS_MINUTES = (1, 5, 15, 60, 240, 1440)
+
+
+def _spec_hash_for(store: EventStore, spec: Any) -> str:
+    """
+    Stable hash of the source spec that affects ingestion output.
+
+    Excludes fields that should not change idempotency behavior (enabled/poll/backfill_days).
+    """
+    sid = str(getattr(spec, "id", "unknown") or "unknown")
+    try:
+        payload = spec.model_dump()
+    except Exception:
+        payload = dict(getattr(spec, "__dict__", {}) or {})
+        payload.setdefault("id", sid)
+    for k in ("enabled", "poll", "backfill_days", "priority"):
+        payload.pop(k, None)
+    return store.stable_spec_hash(payload)
 
 
 @dataclass
@@ -59,12 +81,43 @@ def _provider_group(spec) -> str:
     return str(getattr(spec, "id", "unknown") or "unknown")
 
 
+def _running_ttl_s_for_provider(provider: str) -> int:
+    """
+    Provider-specific TTL for "running" ingest windows.
+
+    Env overrides (examples):
+      - INGEST_RUNNING_TTL_S=1800
+      - INGEST_RUNNING_TTL_S_ALPACA=3600
+      - INGEST_RUNNING_TTL_S_REDDIT=900
+    """
+    base = int(float(os.getenv("INGEST_RUNNING_TTL_S", "1800") or "1800"))
+    key = f"INGEST_RUNNING_TTL_S_{str(provider).strip().upper()}"
+    try:
+        override = os.getenv(key)
+        if override is None or str(override).strip() == "":
+            return base
+        return int(float(str(override).strip()))
+    except Exception:
+        return base
+
+
 @dataclass(frozen=True)
 class SliceFetchResult:
     source_id: str
     events: list[Event]
     ok: bool
     error: str | None = None
+    provider: str | None = None
+    request_hash: str | None = None
+    request_cache_hit: bool = False
+    response_fingerprint: str | None = None
+    raw_rows_count: int = 0
+    normalized_count: int = 0
+    valid_count: int = 0
+    dropped_empty_text: int = 0
+    dropped_bad_timestamp: int = 0
+    dropped_invalid_shape: int = 0
+    dropped_out_of_bounds: int = 0
 
 
 async def _fetch_slice(
@@ -89,7 +142,7 @@ async def _fetch_slice(
 
     adapter = resolve_adapter(spec.adapter)
     if not adapter:
-        return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error="adapter_not_found")
+        return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error="adapter_not_found", provider=_provider_group(spec))
 
     from app.ingest.async_runner import get_limiter
     provider = _provider_group(spec)
@@ -107,11 +160,67 @@ async def _fetch_slice(
 
     try:
         t0 = time.perf_counter()
-        raw_rows = await adapter.fetch_raw(spec, ctx)
+
+        # Request-level cache (in-run): prevents repeated API calls for identical requests.
+        # This enables overlapping windows/slices to reuse the same raw payload without network calls.
+        request_cache: dict[str, list[dict[str, Any]]] | None = None
+        if isinstance(cache_handle, dict):
+            rc = cache_handle.get("ingest_request_cache")
+            if not isinstance(rc, dict):
+                rc = {}
+                cache_handle["ingest_request_cache"] = rc
+            request_cache = rc  # type: ignore[assignment]
+
+        req_key_payload = {
+            "source_id": str(spec.id),
+            "adapter": str(getattr(spec, "adapter", "")),
+            "endpoint": str(getattr(spec, "endpoint", "") or ""),
+            "symbols": getattr(spec, "symbols", None),
+            "options": getattr(spec, "options", None),
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+        }
+        request_hash = hashlib.sha256(
+            json.dumps(req_key_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()[:16]
+
+        cache_hit = False
+        if request_cache is not None and request_hash in request_cache:
+            raw_rows = request_cache[request_hash]
+            cache_hit = True
+        else:
+            raw_rows = await adapter.fetch_raw(spec, ctx)
+            if request_cache is not None and isinstance(raw_rows, list):
+                request_cache[request_hash] = raw_rows
         dt_fetch = time.perf_counter() - t0
-        
-        events = extractor.normalize_many(raw_rows, spec)
+
+        raw_rows_list = raw_rows if isinstance(raw_rows, list) else []
+        try:
+            response_fingerprint = hashlib.sha256(
+                json.dumps(raw_rows_list, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()[:16]
+        except Exception:
+            response_fingerprint = None
+
+        events = extractor.normalize_many(raw_rows_list, spec)
+        normalized_count = len(events)
+        # Basic validation (existing), plus reasons by approximation.
         valid_events = validate_events(events)
+        valid_count = len(valid_events)
+
+        dropped_empty_text = 0
+        dropped_bad_timestamp = 0
+        dropped_invalid_shape = 0
+        for e in events:
+            # Mirror validate_events() behavior with coarse reasons.
+            if not getattr(e, "timestamp", None):
+                dropped_bad_timestamp += 1
+                continue
+            if e.source_type == "news" and (not getattr(e, "text", None) or not str(e.text or "").strip()):
+                dropped_empty_text += 1
+                continue
+            # Anything else that got dropped is treated as invalid_shape for now.
+        dropped_invalid_shape = max(0, len(events) - len(valid_events) - dropped_empty_text - dropped_bad_timestamp)
         
         # Enforce slice bounds even if the adapter ignores date filtering.
         start_utc = to_utc_datetime(start_date)
@@ -125,13 +234,29 @@ async def _fetch_slice(
             if start_utc <= ts < end_utc:
                 e.timestamp = normalize_timestamp(ts)
                 bounded.append(e)
+        dropped_out_of_bounds = max(0, len(valid_events) - len(bounded))
         
         dt_total = time.perf_counter() - t0
         print(f"[{datetime.now(timezone.utc).isoformat()}] {spec.id}: {dt_total:.2f}s (fetch: {dt_fetch:.2f}s), {len(bounded)} events")
-        return SliceFetchResult(source_id=str(spec.id), events=bounded, ok=True)
+        return SliceFetchResult(
+            source_id=str(spec.id),
+            events=bounded,
+            ok=True,
+            provider=str(provider),
+            request_hash=str(request_hash),
+            request_cache_hit=bool(cache_hit),
+            response_fingerprint=response_fingerprint,
+            raw_rows_count=len(raw_rows_list),
+            normalized_count=int(normalized_count),
+            valid_count=int(valid_count),
+            dropped_empty_text=int(dropped_empty_text),
+            dropped_bad_timestamp=int(dropped_bad_timestamp),
+            dropped_invalid_shape=int(dropped_invalid_shape),
+            dropped_out_of_bounds=int(dropped_out_of_bounds),
+        )
     except Exception as e:
         print(f"Backfill Error [{spec.id}]: {e}")
-        return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error=str(e))
+        return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error=str(e), provider=_provider_group(spec))
 
 class BackfillRunner:
     def __init__(self, db_path: str = "data/alpha.db", *, bars_provider: str | None = None):
@@ -145,14 +270,37 @@ class BackfillRunner:
         # Self-learning components
         self.learner = ContinuousLearner()
         self.registry = StrategyRegistry()
-        self.promotion_engine = PromotionEngine(self.registry)
+        self._promotion_engine: PromotionEngine | None = None
         self._rng = random.Random()
         self.genetic_optimizer = GeneticOptimizer(self.registry, rng=self._rng)
+
+    def _get_promotion_engine(self) -> PromotionEngine:
+        if self._promotion_engine is None:
+            # Important: core.Repository may have already ensured schema for this DB.
+            # Create AlphaRepository lazily to avoid schema conflicts on fresh DBs.
+            self._promotion_engine = PromotionEngine(repository=AlphaRepository(db_path=str(self.store.db_path)))
+        return self._promotion_engine
 
     def _init_determinism(self, *, seed_material: str) -> None:
         digest = hashlib.sha1(seed_material.encode("utf-8")).hexdigest()
         seed = int(digest[:16], 16)
         self._rng.seed(seed)
+
+    def _macro_snapshot_for_slice(self, *, asof: datetime) -> dict[str, float]:
+        """
+        Build global macro snapshot features for the slice (best-effort).
+        """
+        if str(os.getenv("ENABLE_MACRO_SNAPSHOT", "true")).lower() == "false":
+            return {}
+        specs = load_macro_series_specs()
+        yf_specs = [(s.name, s.symbol) for s in specs if str(s.provider).lower() == "yfinance"]
+        if not yf_specs:
+            return {}
+        try:
+            snap = fetch_and_build_macro_features(specs=yf_specs, asof=asof, lookback_days=120)
+            return dict(snap.features or {})
+        except Exception:
+            return {}
 
     def _bars_cache(self) -> BarsCache | None:
         if not self.bars_provider_name:
@@ -198,6 +346,14 @@ class BackfillRunner:
         end_time = to_utc_datetime(end_time).replace(microsecond=0)
         if start_time >= end_time:
             raise ValueError("backfill_range requires start_time < end_time")
+
+        # One-time per-run company profile hydration (best-effort).
+        # Uses the canonical target stocks universe and writes to data/company_profiles/*.json.
+        try:
+            tickers = get_target_stocks(asof=start_time)
+            await ensure_yfinance_company_profiles(tickers, cache_handle=self._fetch_cache)
+        except Exception:
+            pass
 
         repo = Repository(self.store.db_path)
         total_inserted = 0
@@ -249,7 +405,29 @@ class BackfillRunner:
                         continue
                     if skip_completed:
                         sid = str(spec.id)
+                        spec_hash = _spec_hash_for(self.store, spec)
+                        if self.store.is_ingest_window_completed(
+                            source_id=sid,
+                            start_ts=slice_start_ts,
+                            end_ts=slice_end_ts,
+                            spec_hash=spec_hash,
+                        ):
+                            continue
                         if self.store.is_slice_completed(source_id=sid, start_ts=slice_start_ts, end_ts=slice_end_ts):
+                            try:
+                                self.store.record_ingest_run(
+                                    source_id=sid,
+                                    start_ts=slice_start_ts,
+                                    end_ts=slice_end_ts,
+                                    spec_hash=spec_hash,
+                                    provider=_provider_group(spec),
+                                    ok=True,
+                                    fetched_count=0,
+                                    emitted_count=0,
+                                    last_error="skipped_slice_marker",
+                                )
+                            except Exception:
+                                pass
                             continue
                         # If events for this source already exist in the slice, treat as satisfied and skip refetch.
                         try:
@@ -270,7 +448,37 @@ class BackfillRunner:
                                 fetched_count=0,
                                 last_error="skipped_existing_events",
                             )
+                            try:
+                                self.store.record_ingest_run(
+                                    source_id=sid,
+                                    start_ts=slice_start_ts,
+                                    end_ts=slice_end_ts,
+                                    spec_hash=spec_hash,
+                                    provider=_provider_group(spec),
+                                    ok=True,
+                                    fetched_count=0,
+                                    emitted_count=0,
+                                    last_error="skipped_existing_events",
+                                )
+                            except Exception:
+                                pass
                             continue
+
+                        # In-progress lock: if another worker is already fetching this window, skip.
+                        try:
+                            provider = _provider_group(spec)
+                            if not self.store.begin_ingest_window(
+                                source_id=sid,
+                                start_ts=slice_start_ts,
+                                end_ts=slice_end_ts,
+                                spec_hash=spec_hash,
+                                provider=provider,
+                                running_ttl_s=_running_ttl_s_for_provider(provider),
+                            ):
+                                continue
+                        except Exception:
+                            # If locking fails, proceed (safer than skipping ingestion entirely).
+                            pass
                     tasks.append(
                         _fetch_slice(
                             spec,
@@ -302,16 +510,63 @@ class BackfillRunner:
                         all_events.extend(r.events)
 
                 deduper = Deduper()
-                unique_events, _ = deduper.process(all_events)
+                unique_events, in_run_dups = deduper.process(all_events)
 
                 existing_in_slice = self.store.count_events_in_range(start_ts=slice_start_ts, end_ts=slice_end_ts)
                 inserted = self.store.save_batch(unique_events)
                 db_skipped = max(0, len(unique_events) - inserted)
                 dt_store = time.perf_counter() - t_store_start
 
+                # Per-source duplicate counts (after dedupe).
+                pre_counts: dict[str, int] = {}
+                for r in results:
+                    if isinstance(r, SliceFetchResult):
+                        pre_counts[str(r.source_id)] = pre_counts.get(str(r.source_id), 0) + len(r.events or [])
+                post_counts: dict[str, int] = {}
+                for e in unique_events:
+                    post_counts[str(e.source_id)] = post_counts.get(str(e.source_id), 0) + 1
+
                 # Record per-source slice markers (avoid refetching on reruns).
                 for r in results:
                     if isinstance(r, SliceFetchResult):
+                        spec_obj = next((s for s in specs if str(getattr(s, "id", "")) == str(r.source_id)), None)
+                        spec_hash = _spec_hash_for(self.store, spec_obj) if spec_obj is not None else self.store.stable_spec_hash({"id": str(r.source_id)})
+                        dropped_duplicate = max(0, int(pre_counts.get(str(r.source_id), 0)) - int(post_counts.get(str(r.source_id), 0)))
+                        try:
+                            self.store.record_ingest_run_stats(
+                                source_id=str(r.source_id),
+                                start_ts=slice_start_ts,
+                                end_ts=slice_end_ts,
+                                spec_hash=spec_hash,
+                                request_hash=r.request_hash,
+                                request_cache_hit=bool(r.request_cache_hit),
+                                response_fingerprint=r.response_fingerprint,
+                                raw_rows_count=int(r.raw_rows_count or 0),
+                                normalized_count=int(r.normalized_count or 0),
+                                valid_count=int(r.valid_count or 0),
+                                bounded_count=len(r.events or []),
+                                dropped_empty_text=int(r.dropped_empty_text or 0),
+                                dropped_bad_timestamp=int(r.dropped_bad_timestamp or 0),
+                                dropped_invalid_shape=int(r.dropped_invalid_shape or 0),
+                                dropped_out_of_bounds=int(r.dropped_out_of_bounds or 0),
+                                dropped_duplicate=int(dropped_duplicate),
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            self.store.record_ingest_run(
+                                source_id=str(r.source_id),
+                                start_ts=slice_start_ts,
+                                end_ts=slice_end_ts,
+                                spec_hash=spec_hash,
+                                provider=str(r.provider or _provider_group(spec_obj) if spec_obj is not None else ""),
+                                ok=bool(r.ok),
+                                fetched_count=int(r.raw_rows_count or 0),
+                                emitted_count=int(post_counts.get(str(r.source_id), 0)),
+                                last_error=r.error,
+                            )
+                        except Exception:
+                            pass
                         self.store.record_slice_marker(
                             source_id=r.source_id,
                             start_ts=slice_start_ts,
@@ -409,6 +664,11 @@ class BackfillRunner:
         rmax_ts = repo.get_kv("backfill_replayed_max_ts", tenant_id=BACKFILL_TENANT_ID)
         rmax_id = repo.get_kv("backfill_replayed_max_id", tenant_id=BACKFILL_TENANT_ID)
 
+        # Cursor-based resumability: if a previous run set a replay cursor within the requested range,
+        # resume from that point even if replayed_min/max markers are stale or from a different window.
+        cursor_ts = repo.get_kv("backfill_replay_cursor_ts", tenant_id=BACKFILL_TENANT_ID)
+        cursor_id = repo.get_kv("backfill_replay_cursor_id", tenant_id=BACKFILL_TENANT_ID)
+
         # First replay: do the whole requested range.
         if not rmin_ts or not rmax_ts:
             return await self.replay_range(start_time=start_time, end_time=end_time, repo=repo)
@@ -416,6 +676,22 @@ class BackfillRunner:
         # Overlap-safe: replay only the unseen tails on either side.
         rmin = to_utc_datetime(rmin_ts)
         rmax = to_utc_datetime(rmax_ts)
+
+        # If the stored replayed bounds claim we're already beyond this window, but the cursor suggests
+        # we haven't advanced through the requested range yet, prefer the cursor.
+        try:
+            if cursor_ts:
+                cdt = to_utc_datetime(cursor_ts)
+                if start_time <= cdt < end_time and rmax >= end_time:
+                    return await self.replay_range(
+                        start_time=max(start_time, cdt),
+                        end_time=end_time,
+                        repo=repo,
+                        start_exclusive=True,
+                        cursor_id=cursor_id,
+                    )
+        except Exception:
+            pass
 
         summary = ReplaySummary()
 
@@ -536,6 +812,7 @@ class BackfillRunner:
 
             # Target Stocks filtering: events may enrich, but do not define tickers.
             raw_events: list[RawEvent] = []
+            macro_snapshot: dict[str, float] = self._macro_snapshot_for_slice(asof=slice_end)
             for e in bounded:
                 evt_ts = to_utc_datetime(e.timestamp)
                 ticker = str(e.ticker).strip().upper() if e.ticker else None
@@ -558,6 +835,7 @@ class BackfillRunner:
                         text=e.text or "",
                         tickers=tickers,
                         tenant_id=BACKFILL_TENANT_ID,
+                        metadata=dict(e.numeric_features or {}),
                     )
                 )
 
@@ -568,20 +846,54 @@ class BackfillRunner:
             bars_cache = self._bars_cache()
             price_contexts: dict[str, dict] = {}
             if bars_cache is None:
-                raise RuntimeError(
-                    "No historical bars provider available. Set HISTORICAL_BARS_PROVIDER=alpaca|polygon|yfinance and required API keys."
+                provider_reason = "no_bars_provider"
+                rows = []
+                for evt in raw_events:
+                    ticker = evt.tickers[0] if evt.tickers else None
+                    rows.append(
+                        (
+                            BACKFILL_TENANT_ID,
+                            str(evt.id),
+                            str(ticker) if ticker else None,
+                            normalize_timestamp(evt.timestamp),
+                            provider_reason,
+                            observed_at,
+                        )
+                    )
+                with repo.transaction():
+                    repo.persist_missing_price_context_events(rows)
+
+                total_deferred += len(raw_events)
+                deferred_reasons[provider_reason] += len(raw_events)
+                print(
+                    f"[{datetime.now(timezone.utc).isoformat()}] No historical bars provider available; recorded {len(rows)} missing contexts. "
+                    "Set HISTORICAL_BARS_PROVIDER=alpaca|polygon|yfinance and required API keys "
+                    "(or set ALLOW_MOCK_BARS=true and HISTORICAL_BARS_PROVIDER=mock for local runs)."
                 )
+                slice_start = slice_end
+                continue
 
             try:
                 t_bars_start = time.perf_counter()
                 window = bar_window_for_events(event_times=[re.timestamp for re in raw_events])
 
-                # Ensure coverage for the whole Target Stocks universe (deterministic).
-                targets = get_target_stocks(asof=slice_end) if reg is not None else sorted({t for re in raw_events for t in (re.tickers or []) if t})
-                bars_cache.ensure_policy(tickers=targets, start=window.start, end=window.end, now=now_ref)
+                # Ensure coverage.
+                #
+                # Default behavior: only fetch bars for tickers actually referenced by events in this slice.
+                # The legacy behavior ("whole Target Stocks universe") is very expensive and can easily
+                # trip provider rate limits during backfills; keep it behind an env flag.
+                tickers = sorted({t for re in raw_events for t in (re.tickers or []) if t})
+                ensure_universe = str(os.getenv("BACKFILL_ENSURE_TARGET_UNIVERSE_BARS", "false")).lower() == "true"
+                if ensure_universe and reg is not None:
+                    targets = get_target_stocks(asof=slice_end)
+                else:
+                    targets = tickers
+
+                # Important: for historical replays, policy windows should be relative to the slice time,
+                # not wall-clock "now", otherwise old data only fetches 1d bars and contexts will be missing.
+                bars_cache.ensure_policy(tickers=targets, start=window.start, end=window.end, now=slice_end)
 
                 # Fetch only the tickers we need to build contexts for.
-                tickers = sorted({t for re in raw_events for t in (re.tickers or []) if t})
                 bars_by_tf = {
                     "1m": bars_cache.fetch_bars_df(timeframe="1m", tickers=tickers, start=window.start, end=window.end),
                     "1h": bars_cache.fetch_bars_df(timeframe="1h", tickers=tickers, start=window.start, end=window.end),
@@ -639,7 +951,13 @@ class BackfillRunner:
                 continue
 
             # Only process events with price contexts; missing bars should not poison learning.
-            processable = [evt for evt in raw_events if evt.id in price_contexts and price_contexts.get(evt.id)]
+            processable: list[RawEvent] = []
+            for evt in raw_events:
+                if not evt.tickers:
+                    # Context-only events are useful for enriching other contexts; don't run them through the engine.
+                    continue
+                if evt.id in price_contexts and price_contexts.get(evt.id):
+                    processable.append(evt)
             
             if not processable:
                 rows = []
@@ -662,7 +980,18 @@ class BackfillRunner:
                 
                 total_deferred += len(raw_events)
                 print(f"[{datetime.now(timezone.utc).isoformat()}] Deferred chunk of {len(raw_events)} events (missing bars).")
+                slice_start = slice_end
                 continue
+
+            # Enrich all tickers' price contexts with global macro snapshot for this slice.
+            if macro_snapshot:
+                for evt in processable:
+                    try:
+                        ctx = price_contexts.get(evt.id)
+                        if isinstance(ctx, dict):
+                            ctx.setdefault("macro", {}).update(macro_snapshot)
+                    except Exception:
+                        continue
 
             if len(processable) != len(raw_events):
                 missing = [evt for evt in raw_events if evt.id not in price_contexts or not price_contexts.get(evt.id)]
@@ -701,7 +1030,7 @@ class BackfillRunner:
                 mode_override="backfill",
                 learner=self.learner,
                 registry=self.registry,
-                promotion_engine=self.promotion_engine,
+                promotion_engine=self._get_promotion_engine(),
                 genetic_optimizer=self.genetic_optimizer,
                 generation_counter=generation_counter
             )

@@ -37,21 +37,40 @@ class PredictionScoringRunner:
             return 0
         start = str(run["prediction_start"])
         end = str(run["prediction_end"])
+        start_day = start[:10]
+        end_day = end[:10]
 
         # Prefer exact timeframe bars; fallback to deriving daily closes from intraday if needed.
-        rows = self.repo.conn.execute(
-            """
-            SELECT timestamp, close as value
-            FROM price_bars
-            WHERE tenant_id = ?
-              AND ticker = ?
-              AND timeframe = ?
-              AND timestamp >= ?
-              AND timestamp <= ?
-            ORDER BY timestamp ASC
-            """,
-            (tenant_id, str(ticker), str(timeframe), start, end),
-        ).fetchall()
+        if str(timeframe).strip().lower() == "1d":
+            # Treat prediction windows as date-based (inclusive) to avoid off-by-one issues when
+            # prediction_end is stored at 00:00:00 for the last day in the window.
+            rows = self.repo.conn.execute(
+                """
+                SELECT timestamp, close as value
+                FROM price_bars
+                WHERE tenant_id = ?
+                  AND ticker = ?
+                  AND timeframe = ?
+                  AND substr(timestamp, 1, 10) >= ?
+                  AND substr(timestamp, 1, 10) <= ?
+                ORDER BY timestamp ASC
+                """,
+                (tenant_id, str(ticker), str(timeframe), start_day, end_day),
+            ).fetchall()
+        else:
+            rows = self.repo.conn.execute(
+                """
+                SELECT timestamp, close as value
+                FROM price_bars
+                WHERE tenant_id = ?
+                  AND ticker = ?
+                  AND timeframe = ?
+                  AND timestamp >= ?
+                  AND timestamp <= ?
+                ORDER BY timestamp ASC
+                """,
+                (tenant_id, str(ticker), str(timeframe), start, end),
+            ).fetchall()
 
         if not rows and str(timeframe).strip().lower() == "1d":
             rows = self.repo.conn.execute(
@@ -62,8 +81,8 @@ class PredictionScoringRunner:
                   WHERE tenant_id = ?
                     AND ticker = ?
                     AND timeframe IN ('1m','1h')
-                    AND timestamp >= ?
-                    AND timestamp <= ?
+                    AND substr(timestamp, 1, 10) >= ?
+                    AND substr(timestamp, 1, 10) <= ?
                   GROUP BY substr(timestamp, 1, 10)
                   ORDER BY day ASC
                 )
@@ -75,7 +94,7 @@ class PredictionScoringRunner:
                  AND pb.timestamp = d.ts
                 ORDER BY pb.timestamp ASC
                 """,
-                (tenant_id, str(ticker), start, end, tenant_id, str(ticker)),
+                (tenant_id, str(ticker), start_day, end_day, tenant_id, str(ticker)),
             ).fetchall()
         points = [(str(r["timestamp"]), float(r["value"])) for r in rows]
         return self.repo.upsert_actual_series_points(

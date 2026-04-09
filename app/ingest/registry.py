@@ -13,6 +13,7 @@ from app.ingest.adapters.fear_greed import FearGreedAdapter
 from app.ingest.adapters.cross_asset import CrossAssetAdapter
 from app.ingest.adapters.market_breadth import MarketBreadthAdapter
 from app.ingest.adapters.market_baseline import MarketBaselineAdapter
+from app.ingest.adapters.yfinance_macro import YFinanceMacroAdapter
 
 ADAPTERS = {
     "alpaca_news": AlpacaNewsAdapter(),
@@ -28,6 +29,7 @@ ADAPTERS = {
     "cross_asset": CrossAssetAdapter(),
     "market_breadth": MarketBreadthAdapter(),
     "market_baseline": MarketBaselineAdapter(),
+    "yfinance_macro": YFinanceMacroAdapter(),
 }
 
 def resolve_adapter(name: str) -> SourceAdapter | None:

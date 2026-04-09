@@ -3,15 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from functools import lru_cache
 
 from app.ui.middle.engine_read_store import (
     ChampionRow,
+    ChampionMatrixRow,
     ConsensusRow,
     EngineReadStore,
     LoopHealthRow,
     SignalRow,
     RankingSnapshotRow,
     StrategyEfficiencyRow,
+    StrategyTimelineRow,
     PredictionRunRow,
     SeriesPointRow,
     PredictionScoreRow,
@@ -82,6 +85,7 @@ class RankingView:
 class StrategyEfficiencyView:
     strategy_id: str
     strategy_version: str | None
+    forecast_days: int
     samples: int
     total_forecast_days: int
     avg_efficiency_rating: float
@@ -90,6 +94,27 @@ class StrategyEfficiencyView:
     avg_return: float
     drawdown: float
     stability: float
+
+
+@dataclass(frozen=True)
+class ChampionSummary:
+    """Typed champion summary for horizon-based champions"""
+    horizon: int
+    strategy_id: str
+    efficiency: float
+    alpha: float
+    samples: int
+
+
+@dataclass(frozen=True)
+class IntelligenceStateData:
+    """Typed return value for cached intelligence state data"""
+    matrix: list[ChampionMatrixView]
+    rankings: list[StrategyEfficiencyView]
+    overlay_series: dict | None
+    timeline: list[StrategyTimelineView] | None
+    consensus: ConsensusView | None
+    champions: list[ChampionSummary]
 
 
 @dataclass(frozen=True)
@@ -116,6 +141,38 @@ class ScoreView:
     return_error: float
     alpha_prediction: float
     attribution: dict[str, float]
+
+
+@dataclass(frozen=True)
+class ChampionMatrixView:
+    """One cell in the ticker × strategy comparison matrix, ready for the UI."""
+    ticker: str
+    timeframe: str
+    forecast_days: int
+    strategy_id: str
+    regime: str
+    alpha_strategy: float
+    avg_pred_return_pct: float   # e.g. 0.038 = +3.8%
+    avg_actual_return_pct: float
+    direction_accuracy: float    # 0.0–1.0
+    entry_price: float | None
+    target_price: float | None   # entry * (1 + avg_pred_return)
+    samples: int
+
+
+@dataclass(frozen=True)
+class StrategyTimelineView:
+    """One historical snapshot for the strategy autopsy chart."""
+    run_date: str
+    ticker: str
+    strategy_id: str
+    forecast_days: int
+    alpha_prediction: float
+    pred_return_pct: float
+    actual_return_pct: float
+    direction_correct: bool
+    entry_price: float | None
+    target_price: float | None
 
 
 @dataclass(frozen=True)
@@ -164,9 +221,12 @@ class DashboardService:
         return self.store.list_tenants()
 
     def list_tickers(self, *, tenant_id: str = "default") -> list[str]:
+        """Get available tickers for the specified tenant"""
         try:
-            return get_target_stocks()
+            # Try tenant-aware target stocks first
+            return get_target_stocks(tenant_id=tenant_id)
         except Exception:
+            # Fallback to store-based ticker listing
             return self.store.list_tickers(tenant_id=tenant_id)
 
     def get_target_stocks_panel(self, *, asof: str | None = None) -> dict:
@@ -280,10 +340,79 @@ class DashboardService:
         rows = self.store.get_latest_rankings(tenant_id=tenant_id, limit=limit)
         return [self._ranking_view(r) for r in rows]
 
+    def get_top_ten_signals(self, *, tenant_id: str = "default", limit: int = 10) -> list[dict]:
+        """
+        Get top ten signals with ranking, direction, expected move, alpha, and strategy.
+        Returns a list of dictionaries formatted for the top ten signals display.
+        """
+        # Get latest rankings for top signals
+        rankings = self.store.get_latest_rankings(tenant_id=tenant_id, limit=limit)
+        
+        # Get recent signals for strategy information
+        recent_signals = self.store.get_recent_signals(tenant_id=tenant_id, limit=50)
+        
+        # Get consensus data for confidence information
+        consensus_data = {}
+        for signal in recent_signals:
+            if signal.ticker not in consensus_data:
+                consensus = self.store.get_latest_consensus(tenant_id=tenant_id, ticker=signal.ticker)
+                if consensus:
+                    consensus_data[signal.ticker] = {
+                        'confidence': consensus.confidence,
+                        'direction': consensus.direction,
+                        'participating_strategies': consensus.participating_strategies
+                    }
+        
+        # Combine rankings with consensus data to create top ten signals
+        top_signals = []
+        for i, ranking in enumerate(rankings):
+            # Get consensus info for this ticker
+            consensus_info = consensus_data.get(ranking.ticker, {})
+            
+            # Determine direction from consensus or ranking score
+            direction = "BUY" if ranking.score > 0 else "SELL"
+            if consensus_info.get('direction'):
+                direction = consensus_info['direction'].upper()
+            
+            # Calculate expected move based on score and conviction
+            expected_move = abs(ranking.score * ranking.conviction * 100)
+            
+            # Get alpha from ranking score
+            alpha = abs(ranking.score)
+            
+            # Find a recent strategy for this ticker
+            strategy = "unknown"
+            for signal in recent_signals:
+                if signal.ticker == ranking.ticker:
+                    strategy = signal.strategy
+                    break
+            
+            # Format the signal
+            signal_data = {
+                'rank': i + 1,
+                'direction': direction,
+                'ticker': ranking.ticker,
+                'expected_move': f"{expected_move:+.1f}%",
+                'alpha': alpha,
+                'strategy': strategy,
+                'confidence': consensus_info.get('confidence', ranking.conviction),
+                'score': ranking.score,
+                'conviction': ranking.conviction,
+                'regime': ranking.regime,
+                'timestamp': ranking.timestamp
+            }
+            
+            top_signals.append(signal_data)
+        
+        # Sort by alpha (score) and return top 10
+        top_signals.sort(key=lambda x: x['alpha'], reverse=True)
+        return top_signals[:10]
+
     def _efficiency_view(self, r: StrategyEfficiencyRow) -> StrategyEfficiencyView:
         return StrategyEfficiencyView(
             strategy_id=r.strategy_id,
             strategy_version=r.strategy_version,
+            forecast_days=r.forecast_days,
             samples=r.samples,
             total_forecast_days=r.total_forecast_days,
             avg_efficiency_rating=r.avg_efficiency_rating,
@@ -441,27 +570,290 @@ class DashboardService:
     ) -> dict[str, Any]:
         """
         Orchestrate multiple strategy overlays for a single ticker.
+        Returns raw series data only. UI merges with metadata.
         """
-        actual_series = []
+        # Optimized multi-series comparison (single query)
+        series_data = self.store.get_multi_series_comparison(
+            run_id=run_id,
+            ticker=ticker,
+            strategy_ids=strategy_ids,
+            tenant_id=tenant_id
+        )
+        
+        actual_series = [{"x": a.timestamp, "y": a.value} for a in series_data["actual"]]
         strategies_data = []
         
-        for sid in strategy_ids:
-            series = self.store.get_series_comparison(
-                run_id=run_id,
-                strategy_id=sid,
-                ticker=ticker,
-                tenant_id=tenant_id
-            )
-            if not actual_series:
-                actual_series = [{"x": a.timestamp, "y": a.value} for a in series["actual"]]
-            
-            strategies_data.append({
-                "strategy_id": sid,
-                "predicted": [{"x": p.timestamp, "y": p.value} for p in series["predicted"]]
-            })
-            
+        for i, sid in enumerate(strategy_ids):
+            if i < len(series_data["strategies"]):
+                predicted = series_data["strategies"][i]["predicted"]
+                strategies_data.append({
+                    "strategy_id": sid,
+                    "predicted": [{"x": p.timestamp, "y": p.value} for p in predicted]
+                })
+        
         return {
-            "title": f"Multi-Strategy Forecast Overlay: {ticker}",
+            "ticker": ticker,
             "actual": actual_series,
             "strategies": strategies_data
         }
+
+    def get_champion_matrix(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str | None = None,
+        timeframe: str | None = None,
+    ) -> list[ChampionMatrixView]:
+        """
+        Returns all (ticker × strategy) prediction comparisons for the Intelligence Hub matrix view.
+
+        The row's headline is always price-first:
+          entry_price, target_price, and return % are primary.
+          alpha_strategy is a secondary comparator.
+        """
+        rows: list[ChampionMatrixRow] = self.store.get_champion_comparison_matrix(
+            tenant_id=tenant_id,
+            ticker=ticker,
+            timeframe=timeframe,
+        )
+
+        out: list[ChampionMatrixView] = []
+        for r in rows:
+            target = (
+                r.entry_price * (1.0 + r.avg_pred_return)
+                if r.entry_price is not None
+                else None
+            )
+            out.append(
+                ChampionMatrixView(
+                    ticker=r.ticker,
+                    timeframe=r.timeframe,
+                    forecast_days=r.forecast_days,
+                    strategy_id=r.strategy_id,
+                    regime=r.regime,
+                    alpha_strategy=r.alpha_strategy,
+                    avg_pred_return_pct=r.avg_pred_return,
+                    avg_actual_return_pct=r.avg_actual_return,
+                    direction_accuracy=r.direction_accuracy,
+                    entry_price=r.entry_price,
+                    target_price=target,
+                    samples=r.samples,
+                )
+            )
+        return out
+
+    def get_strategy_timeline(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str,
+        strategy_id: str,
+        limit: int = 90,
+        run_id: str | None = None,
+    ) -> list[StrategyTimelineView]:
+        """
+        Per-run autopsy timeline for one strategy/ticker pair.
+
+        Every row expresses its prediction in price terms:
+          - entry_price: the base price when forecast was made
+          - target_price: where the strategy predicted price would go
+          - target_price_label: formatted for display (e.g. "$547.20 (+3.2%)")
+        """
+        rows: list[StrategyTimelineRow] = self.store.get_strategy_timeline(
+            tenant_id=tenant_id,
+            ticker=ticker,
+            strategy_id=strategy_id,
+            limit=limit,
+            run_id=run_id,
+        )
+
+        out: list[StrategyTimelineView] = []
+        for r in rows:
+            out.append(
+                StrategyTimelineView(
+                    run_date=r.run_date,
+                    ticker=r.ticker,
+                    strategy_id=r.strategy_id,
+                    forecast_days=r.forecast_days,
+                    alpha_prediction=r.alpha_prediction,
+                    pred_return_pct=r.total_return_pred,
+                    actual_return_pct=r.total_return_actual,
+                    direction_correct=(r.direction_hit_rate >= 0.5),
+                    entry_price=r.entry_price,
+                    target_price=r.target_price,
+                )
+            )
+        return out
+
+    @lru_cache(maxsize=128)
+    def _cached_intelligence_state(
+        self,
+        *,
+        version: tuple,
+        tenant_id: str,
+        ticker: str,
+        timeframe: str,
+        run_id: str | None = None,
+        strategy_ids: tuple,
+        selected_strategy: str
+    ):
+        """
+        Cached intelligence state with immutable parameters.
+        Version key ensures cache invalidation when new data arrives.
+        """
+        # Load champion matrix (real data only)
+        matrix = self.get_champion_matrix(
+            tenant_id=tenant_id,
+            ticker=ticker,
+            timeframe=timeframe
+        )
+        
+        # Load efficiency rankings (real data only)
+        # Note: Get all horizons for champion computation, UI can filter by horizon if needed
+        rankings = self.get_efficiency_rankings(
+            tenant_id=tenant_id,
+            ticker=ticker,
+            timeframe=timeframe,
+            forecast_days=None,  # Get all horizons for comprehensive champion computation
+            limit=200,  # Limit to prevent unbounded cache growth
+            min_samples=10  # Only include strategies with sufficient samples
+        )
+        
+        # Load strategy overlays (real data only)
+        overlays = (
+            self.get_multi_strategy_overlay(
+                run_id=run_id,
+                ticker=ticker,
+                strategy_ids=list(strategy_ids),
+                tenant_id=tenant_id
+            ) if strategy_ids and run_id else None
+        )
+        
+        # Load strategy timeline (optional selected)
+        timeline = self.get_strategy_timeline(
+            tenant_id=tenant_id,
+            ticker=ticker,
+            strategy_id=selected_strategy,
+            limit=90,
+            run_id=run_id
+        ) if selected_strategy else None
+        
+        # Load consensus data (optional)
+        consensus = self.get_latest_consensus(tenant_id=tenant_id, ticker=ticker)
+        
+        # Prepare champions summary from efficiency rankings
+        champions_summary = self._compute_champions(rankings)
+        
+        return IntelligenceStateData(
+            matrix=matrix,
+            rankings=rankings,
+            overlay_series=overlays,
+            timeline=timeline,
+            consensus=consensus,
+            champions=champions_summary
+        )
+    
+    def get_intelligence_state(self, state):
+        """
+        Get complete intelligence hub state with real data only.
+        """
+        from app.ui.intelligence.intelligence_hub_state import IntelligenceHubState
+        from app.ui.intelligence.intelligence_hub_dto import IntelligenceHubDTO
+        
+        # Compute tenant_id once for consistency
+        tenant_id = getattr(state, 'tenant_id', 'default')
+        
+        # Resolve available tickers with tenant support
+        tickers = self.list_tickers(tenant_id=tenant_id)
+        
+        # Resolve prediction runs for ticker with tenant support
+        runs = self.list_prediction_runs(tenant_id=tenant_id)
+        
+        # Sort runs first to get newest first
+        runs = sorted(runs, key=lambda r: r.created_at, reverse=True)
+        
+        # Resolve active run_id (now from sorted runs)
+        latest_run = runs[0].id if runs else None
+        run_id = state.run_id or latest_run
+        
+        # Compute strategy_ids once for consistency
+        strategy_ids = tuple(sorted(state.strategy_ids))
+        
+        # Normalize values to avoid double cache entries
+        selected_strategy = state.selected_strategy or ""
+        normalized_run = run_id or ""
+        
+        # Get data-driven cache invalidation timestamp
+        last_write = self.store.get_last_prediction_write(
+            tenant_id=tenant_id,
+            ticker=state.ticker
+        )
+        
+        # Get composite version for cache invalidation
+        version_key = (
+            tenant_id,  # Include tenant_id to prevent cross-tenant cache collision
+            state.ticker,
+            state.timeframe,
+            normalized_run,  # Use normalized value
+            strategy_ids,  # Include strategy_ids for proper invalidation
+            selected_strategy,  # Use normalized value
+            last_write  # Data-driven invalidation - put last to avoid cache churn
+        )
+        
+        # Get cached data with immutable parameters
+        cached_data = self._cached_intelligence_state(
+            version=version_key,
+            tenant_id=tenant_id,
+            ticker=state.ticker,
+            timeframe=state.timeframe,
+            run_id=run_id,  # Pass original run_id (can be None)
+            strategy_ids=strategy_ids,  # Use pre-computed
+            selected_strategy=selected_strategy  # Use normalized value
+        )
+        
+        return IntelligenceHubDTO(
+            state=state,
+            tickers=tickers,
+            runs=runs,
+            matrix=cached_data.matrix,
+            rankings=cached_data.rankings,
+            overlay_series=cached_data.overlay_series,
+            timeline=cached_data.timeline,
+            consensus=cached_data.consensus,
+            champions=cached_data.champions
+        )
+    
+    def _compute_champions(self, rankings: list[StrategyEfficiencyView]) -> list[ChampionSummary]:
+        """
+        Compute champions by horizon from efficiency rankings.
+        Returns sorted list of champions (1d, 7d, 30d).
+        """
+        from collections import defaultdict
+        
+        champions_summary = []
+        if rankings:
+            # Group by forecast_days and find best efficiency per horizon
+            horizon_groups = defaultdict(list)
+            for ranking in rankings:
+                horizon_groups[ranking.forecast_days].append(ranking)
+            
+            for horizon in sorted(horizon_groups.keys()):  # Consistent ordering: 1d, 7d, 30d
+                rows = horizon_groups[horizon]
+                # Use composite metric for more stable champion selection
+                best = max(rows, key=lambda r: (
+                    r.avg_efficiency_rating,
+                    r.alpha_strategy,
+                    r.stability,
+                    r.samples
+                ))
+                champions_summary.append(ChampionSummary(
+                    horizon=horizon,
+                    strategy_id=best.strategy_id,
+                    efficiency=best.avg_efficiency_rating,
+                    alpha=best.alpha_strategy,
+                    samples=best.samples
+                ))
+        
+        return champions_summary
+
+    

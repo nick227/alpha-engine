@@ -13,15 +13,54 @@ from datetime import datetime, timedelta
 import time
 import hashlib
 
-from app.ui.theme_enhanced import apply_theme, COLORS, TYPOGRAPHY, SPACING
+from app.ui.theme import apply_theme, COLORS, TYPOGRAPHY, SPACING
 from app.ui.middle.dashboard_service import DashboardService
-from app.ui.card_dashboard_locked import DashboardInputs, render_system_status
-from app.ui.chart_schema_final import (
+class DashboardInputs:
+    """Consolidated dashboard input state - only input contract"""
+    
+    def __init__(self, tenant: str = None, ticker: str = None, 
+                 view: str = None, strategy: str = None, 
+                 horizon: str = None):
+        self.tenant = tenant
+        self.ticker = ticker
+        self.view = view
+        self.strategy = strategy
+        self.horizon = horizon
+    
+    @property
+    def fingerprint(self) -> Tuple[Any, ...]:
+        """Unique fingerprint for caching - only true query inputs"""
+        return (self.tenant, self.ticker, self.view, self.strategy, self.horizon)
+    
+    @property
+    def widget_keys(self) -> Dict[str, str]:
+        """Deterministic widget keys"""
+        return {
+            "tenant": f"tenant-{self.tenant}" if self.tenant else "tenant-default",
+            "ticker": f"ticker-{self.tenant}" if self.tenant else "ticker-default",
+            "view": f"view-{self.view}" if self.view else "view-default",
+            "strategy": f"strategy-{self.strategy}" if self.strategy else "strategy-default",
+            "horizon": f"horizon-{self.horizon}" if self.horizon else "horizon-default"
+        }
+
+def render_system_status(inputs: DashboardInputs) -> None:
+    """Render consolidated system status row - always shows even with empty responses"""
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Tenant", inputs.tenant or "None")
+    
+    with col2:
+        st.metric("Strategy", inputs.strategy or "None")
+    
+    with col3:
+        st.metric("Horizon", inputs.horizon or "None")
+from app.ui.charts.chart_schema_final import (
     Card, ChartMode, ChartData, NumberData, TableData,
     DataLayerNormalizer, FallbackHandler, create_mixed_response,
     SemanticSorter, CacheKeyGenerator
 )
-from app.ui.final_chart_renderer import FinalCardRenderer
+from app.ui.charts.final_chart_renderer import FinalCardRenderer
 
 
 # ============================================================================
@@ -105,6 +144,8 @@ class OptimizedDashboardService:
             cards = self._get_backtest_optimized(inputs, cache_key)
         elif inputs.view == "mixed_test":
             cards = self._get_mixed_test_optimized(inputs, cache_key)
+        elif inputs.view == "top_ten_signals":
+            cards = self._get_top_ten_optimized(inputs, cache_key)
         else:
             cards = []
         
@@ -367,6 +408,38 @@ class OptimizedDashboardService:
         
         profiler.end("generate_mixed")
         return all_cards
+    
+    def _get_top_ten_optimized(self, inputs: DashboardInputs, cache_key: str) -> List[Card]:
+        """Optimized top ten signals generation"""
+        profiler.start("generate_top_ten")
+        
+        # Get top ten signals from the service
+        top_signals = self.service.get_top_ten_signals(tenant_id=inputs.tenant, limit=10)
+        
+        # Create a table card for the top ten signals
+        table_data = TableData(
+            table_type="top_ten_signals",
+            headers=["Rank", "Direction", "Ticker", "Expected Move", "Alpha", "Strategy"],
+            rows=[
+                [
+                    signal["rank"],
+                    signal["direction"],
+                    signal["ticker"],
+                    signal["expected_move"],
+                    f"{signal['alpha']:.2f}",
+                    signal["strategy"]
+                ]
+                for signal in top_signals
+            ],
+            context_card_id="top_ten_signals"
+        )
+        
+        cards = [
+            Card("table", "TOP TEN SIGNALS", table_data.to_dict(), "top_ten_signals")
+        ]
+        
+        profiler.end("generate_top_ten")
+        return cards
 
 
 # ============================================================================
@@ -761,7 +834,7 @@ def render_optimized_controls(service: DashboardService) -> Tuple[DashboardInput
                 )
         
         # View selection with stable key
-        view_options = ["best_picks", "dips", "bundles", "compare", "backtest_analysis", "mixed_test"]
+        view_options = ["best_picks", "dips", "bundles", "compare", "backtest_analysis", "mixed_test", "top_ten_signals"]
         view = st.selectbox(
             "View",
             options=view_options,
@@ -794,6 +867,99 @@ def render_optimized_controls(service: DashboardService) -> Tuple[DashboardInput
 # OPTIMIZED CARD RIVER
 # ============================================================================
 
+def render_top_ten_signals(cards: List[Card]) -> None:
+    """Specialized renderer for top ten signals with enhanced formatting"""
+    profiler.start("render_top_ten_signals")
+    
+    if not cards:
+        st.info("No top ten signals found for selected criteria.")
+        profiler.end("render_top_ten_signals")
+        return
+    
+    # Find the top ten signals card
+    top_ten_card = None
+    for card in cards:
+        if card.card_id == "top_ten_signals":
+            top_ten_card = card
+            break
+    
+    if not top_ten_card:
+        st.warning("Top ten signals card not found.")
+        profiler.end("render_top_ten_signals")
+        return
+    
+    # Render the header
+    st.markdown("## TOP TEN SIGNALS")
+    st.markdown("*Highest ranked trading signals across all strategies*")
+    
+    # Get the table data
+    table_data = TableData(**top_ten_card.data)
+    
+    if not table_data.rows:
+        st.info("No signals available.")
+        profiler.end("render_top_ten_signals")
+        return
+    
+    # Custom rendering for top ten signals
+    for i, row in enumerate(table_data.rows):
+        rank, direction, ticker, expected_move, alpha, strategy = row
+        
+        # Determine color based on direction
+        direction_color = COLORS['sentiment_positive'] if direction.upper() == "BUY" else COLORS['sentiment_negative']
+        direction_bg_color = COLORS['success_50'] if direction.upper() == "BUY" else COLORS['error_50']
+        
+        # Create styled signal row
+        col1, col2, col3, col4, col5, col6 = st.columns([1, 2, 2, 3, 2, 4])
+        
+        with col1:
+            st.markdown(f"""
+            <div style="text-align: center; padding: 8px; background: {COLORS['neutral_100']}; border-radius: 8px; margin: 4px 0;">
+                <strong style="color: {COLORS['neutral_700']}; font-size: 16px;">{rank}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+            <div style="text-align: center; padding: 8px; background: {direction_bg_color}; border-radius: 8px; margin: 4px 0; border: 1px solid {direction_color};">
+                <strong style="color: {direction_color}; font-size: 14px; font-weight: 600;">{direction}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown(f"""
+            <div style="text-align: center; padding: 8px; background: {COLORS['neutral_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['border_light']};">
+                <strong style="color: {COLORS['neutral_900']}; font-size: 14px; font-weight: 600;">{ticker}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown(f"""
+            <div style="text-align: center; padding: 8px; background: {COLORS['neutral_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['border_light']};">
+                <strong style="color: {COLORS['neutral_900']}; font-size: 14px;">{expected_move}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col5:
+            st.markdown(f"""
+            <div style="text-align: center; padding: 8px; background: {COLORS['primary_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['primary_300']};">
+                <strong style="color: {COLORS['primary_800']}; font-size: 14px; font-weight: 600;">{alpha}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col6:
+            st.markdown(f"""
+            <div style="text-align: left; padding: 8px; background: {COLORS['neutral_50']}; border-radius: 8px; margin: 4px 0; border: 1px solid {COLORS['border_light']};">
+                <span style="color: {COLORS['neutral_700']}; font-size: 12px; font-style: italic;">{strategy}</span>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Add separator except for last item
+        if i < len(table_data.rows) - 1:
+            st.markdown("---")
+    
+    profiler.end("render_top_ten_signals")
+
+
 def render_optimized_card_river(cards: List[Card], visible_count: int = 10) -> None:
     """Optimized card river with batch rendering and lazy loading"""
     profiler.start("render_card_river")
@@ -803,19 +969,25 @@ def render_optimized_card_river(cards: List[Card], visible_count: int = 10) -> N
         profiler.end("render_card_river")
         return
     
-    # Batch render cards in single loop
-    for i, card in enumerate(cards[:visible_count]):
-        # Simple separator
-        if i > 0:
-            st.markdown("---")
-        
-        # Render card with optimized renderer
-        OptimizedCardRenderer.render_card_optimized(card)
+    # Check if this is a top ten signals view
+    is_top_ten = any(card.card_id == "top_ten_signals" for card in cards)
     
-    # Lazy loading for remaining cards
-    if len(cards) > visible_count:
-        if st.button(f"Show {len(cards) - visible_count} more cards"):
-            render_optimized_card_river(cards, visible_count * 2)
+    if is_top_ten:
+        render_top_ten_signals(cards)
+    else:
+        # Batch render cards in single loop
+        for i, card in enumerate(cards[:visible_count]):
+            # Simple separator
+            if i > 0:
+                st.markdown("---")
+            
+            # Render card with optimized renderer
+            OptimizedCardRenderer.render_card_optimized(card)
+        
+        # Lazy loading for remaining cards
+        if len(cards) > visible_count:
+            if st.button(f"Show {len(cards) - visible_count} more cards"):
+                render_optimized_card_river(cards, visible_count * 2)
     
     profiler.end("render_card_river")
 
@@ -854,9 +1026,21 @@ def main():
     if cards:
         st.session_state.cached_cards = cards
     
-    # Render header
-    st.markdown("# Optimized Dashboard")
-    st.markdown("*Performance optimized while maintaining architecture*")
+    # Render header with help section
+    col1, col2 = st.columns([20, 1])
+    
+    with col1:
+        st.markdown("# Optimized Dashboard")
+        st.markdown("*Performance optimized while maintaining architecture*")
+    
+    with col2:
+        # Help icon with expander
+        with st.popover(""):
+            st.markdown("""
+            ## **Alpha Engine Dashboard**
+                        
+            Alpha Engine is an AI trading system that generates ranked future buy/sell predictions by running multiple sentiment and quantitative strategies, scoring them on historical accuracy, promoting top performers, and combining their outputs into weighted consensus signals like “NVDA BUY +3.2% 7d conf 0.74.” The dashboard lets you view strongest opportunities, dips, bundles, comparisons, and backtests, while key metrics (confidence, alpha, win rate, stability) indicate prediction quality. Data flows from market prices, technicals, news/sentiment, macro, and cross-asset inputs → strategies produce directional forecasts → signals are ranked and merged → top picks displayed → outcomes feed back to continuously improve future predictions.
+            """)
     
     # Performance debug info
     if st.sidebar.checkbox("Show Performance"):
