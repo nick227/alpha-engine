@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,39 @@ class PredictionScoreRow:
     efficiency_rating: float
     alpha_prediction: float = 0.0
     attribution_json: str = "{}"
+
+
+@dataclass(frozen=True)
+class ChampionMatrixRow:
+    """One cell in the strategy × ticker comparison matrix."""
+    ticker: str
+    timeframe: str
+    forecast_days: int
+    strategy_id: str
+    regime: str
+    alpha_strategy: float
+    avg_pred_return: float
+    avg_actual_return: float
+    direction_accuracy: float
+    entry_price: float | None
+    samples: int
+
+
+@dataclass(frozen=True)
+class StrategyTimelineRow:
+    """One historical run snapshot for a strategy/ticker — used for the autopsy timeline."""
+    run_date: str
+    ticker: str
+    strategy_id: str
+    prediction_start: str
+    prediction_end: str
+    forecast_days: int
+    alpha_prediction: float
+    total_return_pred: float
+    total_return_actual: float
+    direction_hit_rate: float
+    entry_price: float | None
+    target_price: float | None
 
 
 @dataclass(frozen=True)
@@ -853,6 +889,7 @@ class EngineReadStore:
         regime: str | None = None,
         min_samples: int | None = None,
         min_total_forecast_days: int | None = None,
+        alpha_version: str | None = None,
         limit: int = 20,
     ) -> list[StrategyEfficiencyRow]:
         where = ["tenant_id = ?"]
@@ -869,6 +906,9 @@ class EngineReadStore:
         if regime:
             where.append("regime = ?")
             params.append(str(regime))
+        if alpha_version:
+            where.append("alpha_version = ?")
+            params.append(str(alpha_version))
 
         try:
             rows = self.conn.execute(
@@ -879,6 +919,7 @@ class EngineReadStore:
                   COUNT(*) as samples,
                   SUM(forecast_days) as total_forecast_days,
                   AVG(efficiency_rating) as avg_efficiency_rating,
+                  AVG(alpha_prediction) as avg_alpha,
                   AVG(total_return_actual) as avg_total_return_actual,
                   MIN(total_return_actual) as min_total_return_actual,
                   AVG(CASE WHEN direction_hit_rate >= 0.5 THEN 1.0 ELSE 0.0 END) as win_rate
@@ -887,30 +928,59 @@ class EngineReadStore:
                 GROUP BY strategy_id, COALESCE(strategy_version, '')
                 HAVING (? IS NULL OR COUNT(*) >= ?)
                    AND (? IS NULL OR SUM(forecast_days) >= ?)
-                ORDER BY avg_efficiency_rating DESC
+                ORDER BY COALESCE(AVG(alpha_prediction), AVG(efficiency_rating)) DESC
                 LIMIT ?
                 """,
                 (*params, min_samples, min_samples, min_total_forecast_days, min_total_forecast_days, int(limit)),
             ).fetchall()
-        except Exception:
+        except Exception as e:
+            log.error(f"Ranking error: {e}")
             return []
 
         out: list[StrategyEfficiencyRow] = []
-        for r in rows:
-            sv = str(r["strategy_version"])
+        for row in rows:
+            # Calculate Risk-Adjusted Alpha (Strategy Alpha Score)
+            # alpha_strategy = avg(alpha_prediction) - drawdown_penalty - variance_penalty
+            
+            avg_alpha = float(row["avg_alpha"] or 0.0)
+            drawdown = abs(min(0.0, float(row["min_total_return_actual"] or 0.0)))
+            
+            # Fetch last N predictions for this strategy to get variance
+            # Only use versioned predictions for stability calc
+            preds = self.conn.execute(
+                "SELECT alpha_prediction FROM prediction_scores WHERE tenant_id = ? AND strategy_id = ? AND alpha_version = 'canonical_v1' ORDER BY created_at DESC LIMIT 50",
+                (tenant_id, row["strategy_id"])
+            ).fetchall()
+            
+            alpha_vals = [float(p["alpha_prediction"]) for p in preds if p["alpha_prediction"] is not None]
+            
+            variance = 0.0
+            if len(alpha_vals) > 1:
+                mean = sum(alpha_vals) / len(alpha_vals)
+                variance = sum((x - mean) ** 2 for x in alpha_vals) / len(alpha_vals)
+            
+            drawdown_penalty = drawdown * 0.5
+            variance_penalty = variance * 2.0
+            
+            alpha_strategy = avg_alpha - drawdown_penalty - variance_penalty
+            
+            sv = str(row["strategy_version"])
             out.append(
                 StrategyEfficiencyRow(
-                    strategy_id=str(r["strategy_id"]),
+                    strategy_id=str(row["strategy_id"]),
                     strategy_version=(sv if sv else None),
-                    samples=int(r["samples"]),
-                    total_forecast_days=int(r["total_forecast_days"] or 0),
-                    avg_efficiency_rating=float(r["avg_efficiency_rating"] or 0.0),
-                    win_rate=float(r["win_rate"] or 0.0),
-                    avg_return=float(r["avg_total_return_actual"] or 0.0),
-                    drawdown=abs(min(0.0, float(r["min_total_return_actual"] or 0.0))),
+                    samples=int(row["samples"]),
+                    total_forecast_days=int(row["total_forecast_days"] or 0),
+                    avg_efficiency_rating=float(row["avg_efficiency_rating"] or 0.0),
+                    alpha_strategy=alpha_strategy,
+                    win_rate=float(row["win_rate"] or 0.0),
+                    avg_return=float(row["avg_total_return_actual"] or 0.0),
+                    drawdown=drawdown,
+                    stability=(1.0 - min(1.0, variance * 10.0))
                 )
             )
-        return sorted(out, key=lambda x: x.avg_efficiency_rating, reverse=True)
+            
+        return sorted(out, key=lambda x: x.alpha_strategy, reverse=True)
 
     def get_efficiency_champion(
         self,
@@ -1070,3 +1140,174 @@ class EngineReadStore:
             ]
         except Exception:
             return []
+
+    def get_champion_comparison_matrix(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str | None = None,
+        timeframe: str | None = None,
+        alpha_version: str = "canonical_v1",
+    ) -> list[ChampionMatrixRow]:
+        """
+        Return all (ticker × strategy) combinations ranked by alpha_strategy.
+
+        Joins efficiency_champions with prediction_scores to produce:
+          - alpha_strategy  (risk-adjusted canonical alpha)
+          - avg_pred_return / avg_actual_return
+          - direction_accuracy
+          - entry_price from price_bars at prediction_start
+
+        This is the data source for the cross-strategy heatmap in the Intelligence Hub.
+        """
+        where = ["ps.tenant_id = ?", f"ps.alpha_version = '{alpha_version}'"]
+        params: list[Any] = [tenant_id]
+        if ticker:
+            where.append("ps.ticker = ?")
+            params.append(str(ticker))
+        if timeframe:
+            where.append("ps.timeframe = ?")
+            params.append(str(timeframe))
+
+        try:
+            rows = self.conn.execute(
+                f"""
+                SELECT
+                    ps.ticker,
+                    ps.timeframe,
+                    ps.forecast_days,
+                    ps.strategy_id,
+                    COALESCE(ps.regime, '') AS regime,
+                    AVG(ps.alpha_prediction)            AS alpha_strategy,
+                    AVG(ps.total_return_pred)           AS avg_pred_return,
+                    AVG(ps.total_return_actual)         AS avg_actual_return,
+                    AVG(ps.direction_hit_rate)          AS direction_accuracy,
+                    COUNT(*)                            AS samples,
+                    -- entry price: latest price bar close at or before the most recent prediction_start
+                    -- Note: no timeframe filter — price_bars may be stored at any granularity (e.g. 1min)
+                    (
+                        SELECT pb.close
+                        FROM price_bars pb
+                        WHERE pb.ticker = ps.ticker
+                          AND pb.timestamp <= (
+                              SELECT MAX(pr2.prediction_start)
+                              FROM prediction_runs pr2
+                              JOIN prediction_scores ps2
+                                ON ps2.run_id = pr2.id
+                              WHERE ps2.tenant_id = ps.tenant_id
+                                AND ps2.strategy_id = ps.strategy_id
+                                AND ps2.ticker = ps.ticker
+                          )
+                        ORDER BY pb.timestamp DESC
+                        LIMIT 1
+                    ) AS entry_price
+                FROM prediction_scores ps
+                WHERE {' AND '.join(where)}
+                GROUP BY ps.ticker, ps.strategy_id, ps.timeframe, ps.forecast_days, COALESCE(ps.regime, '')
+                ORDER BY ps.ticker ASC, alpha_strategy DESC
+                """,
+                params,
+            ).fetchall()
+        except Exception as e:
+            log.error(f"get_champion_comparison_matrix error: {e}")
+            return []
+
+        out: list[ChampionMatrixRow] = []
+        for r in rows:
+            avg_alpha = float(r["alpha_strategy"] or 0.0)
+            entry = float(r["entry_price"]) if r["entry_price"] is not None else None
+            out.append(
+                ChampionMatrixRow(
+                    ticker=str(r["ticker"]),
+                    timeframe=str(r["timeframe"]),
+                    forecast_days=int(r["forecast_days"]),
+                    strategy_id=str(r["strategy_id"]),
+                    regime=str(r["regime"]),
+                    alpha_strategy=avg_alpha,
+                    avg_pred_return=float(r["avg_pred_return"] or 0.0),
+                    avg_actual_return=float(r["avg_actual_return"] or 0.0),
+                    direction_accuracy=float(r["direction_accuracy"] or 0.0),
+                    entry_price=entry,
+                    samples=int(r["samples"]),
+                )
+            )
+        return out
+
+    def get_strategy_timeline(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str,
+        strategy_id: str,
+        alpha_version: str = "canonical_v1",
+        limit: int = 90,
+    ) -> list[StrategyTimelineRow]:
+        """
+        Per-run prediction history for a strategy+ticker, ordered chronologically.
+
+        Enables the 'strategy autopsy' chart:
+          - Rolling alpha over time
+          - Predicted vs Actual return comparison
+          - Entry price and derived target price per run
+
+        Entry price joins price_bars at the run's prediction_start.
+        Target price = entry_price * (1 + total_return_pred).
+        """
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT
+                    pr.prediction_start,
+                    pr.prediction_end,
+                    ps.ticker,
+                    ps.strategy_id,
+                    ps.forecast_days,
+                    ps.alpha_prediction,
+                    ps.total_return_pred,
+                    ps.total_return_actual,
+                    ps.direction_hit_rate,
+                    (
+                        SELECT pb.close
+                        FROM price_bars pb
+                        WHERE pb.ticker = ps.ticker
+                          AND pb.timestamp <= pr.prediction_start
+                        ORDER BY pb.timestamp DESC
+                        LIMIT 1
+                    ) AS entry_price
+                FROM prediction_scores ps
+                JOIN prediction_runs pr ON pr.id = ps.run_id AND pr.tenant_id = ps.tenant_id
+                WHERE ps.tenant_id = ?
+                  AND ps.ticker = ?
+                  AND ps.strategy_id = ?
+                  AND ps.alpha_version = ?
+                ORDER BY pr.prediction_start ASC
+                LIMIT ?
+                """,
+                (tenant_id, str(ticker), str(strategy_id), str(alpha_version), int(limit)),
+            ).fetchall()
+        except Exception as e:
+            log.error(f"get_strategy_timeline error: {e}")
+            return []
+
+        out: list[StrategyTimelineRow] = []
+        for r in rows:
+            entry = float(r["entry_price"]) if r["entry_price"] is not None else None
+            # Derive target price from predicted return
+            target = (entry * (1.0 + float(r["total_return_pred"]))) if entry is not None else None
+            out.append(
+                StrategyTimelineRow(
+                    run_date=str(r["prediction_start"])[:10],  # YYYY-MM-DD
+                    ticker=str(r["ticker"]),
+                    strategy_id=str(r["strategy_id"]),
+                    prediction_start=str(r["prediction_start"]),
+                    prediction_end=str(r["prediction_end"]),
+                    forecast_days=int(r["forecast_days"]),
+                    alpha_prediction=float(r["alpha_prediction"] or 0.0),
+                    total_return_pred=float(r["total_return_pred"] or 0.0),
+                    total_return_actual=float(r["total_return_actual"] or 0.0),
+                    direction_hit_rate=float(r["direction_hit_rate"] or 0.0),
+                    entry_price=entry,
+                    target_price=target,
+                )
+            )
+        return out

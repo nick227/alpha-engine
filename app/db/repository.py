@@ -97,6 +97,17 @@ class AlphaRepository:
             deactivated_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS promotion_events (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            strategy_id TEXT NOT NULL,
+            prev_status TEXT,
+            new_status TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS predictions (
             id TEXT PRIMARY KEY,
             tenant_id TEXT NOT NULL DEFAULT 'default',
@@ -287,6 +298,26 @@ class AlphaRepository:
 
         CREATE INDEX IF NOT EXISTS idx_prediction_scores_rank
           ON prediction_scores(tenant_id, ticker, timeframe, efficiency_rating);
+
+        CREATE TABLE IF NOT EXISTS efficiency_champions (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            ticker TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            forecast_days INTEGER NOT NULL DEFAULT -1,
+            regime TEXT NOT NULL DEFAULT '',
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT,
+            avg_efficiency_rating REAL NOT NULL,
+            alpha_strategy REAL DEFAULT 0.0,
+            samples INTEGER NOT NULL,
+            total_forecast_days INTEGER NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, ticker, timeframe, forecast_days, regime)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_efficiency_champions_lookup
+          ON efficiency_champions(tenant_id, ticker, timeframe, forecast_days, regime);
         """
         self.conn.executescript(schema)
         self._ensure_additive_schema()
@@ -340,6 +371,33 @@ class AlphaRepository:
                     self.conn.execute(f"ALTER TABLE prediction_scores ADD COLUMN {col} {col_type};")
                 except Exception:
                     pass
+
+        # strategies additions
+        s_cols = cols("strategies")
+        for col, col_type in [
+            ("status", "TEXT NOT NULL DEFAULT 'CANDIDATE'"),
+            ("track", "TEXT NOT NULL DEFAULT 'ALPHA'"),
+            ("is_champion", "INTEGER NOT NULL DEFAULT 0"),
+            ("alpha_strategy", "REAL DEFAULT 0.0"),
+            ("regime_focus", "TEXT"),
+            ("gate_logs", "TEXT"),
+            ("sample_size", "INTEGER DEFAULT 0"),
+            ("activated_at", "TEXT"),
+            ("deactivated_at", "TEXT")
+        ]:
+            if s_cols and col not in s_cols:
+                try:
+                    self.conn.execute(f"ALTER TABLE strategies ADD COLUMN {col} {col_type};")
+                except Exception:
+                    pass
+
+        # efficiency_champions additions
+        ec_cols = cols("efficiency_champions")
+        if ec_cols and "alpha_strategy" not in ec_cols:
+            try:
+                self.conn.execute("ALTER TABLE efficiency_champions ADD COLUMN alpha_strategy REAL DEFAULT 0.0;")
+            except Exception:
+                pass
 
         try:
             self.conn.execute(
@@ -856,6 +914,124 @@ class AlphaRepository:
             limit=1,
         )
         return ranked[0] if ranked else None
+
+    def get_efficiency_champion_record(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str,
+        timeframe: str = "1d",
+        forecast_days: int | None = None,
+        regime: str | None = None,
+    ) -> dict[str, Any] | None:
+        fd = int(forecast_days) if forecast_days is not None else -1
+        rg = str(regime) if regime else ""
+        row = self.conn.execute(
+            """
+            SELECT *
+            FROM efficiency_champions
+            WHERE tenant_id = ?
+              AND ticker = ?
+              AND timeframe = ?
+              AND forecast_days = ?
+              AND regime = ?
+            """,
+            (tenant_id, str(ticker), str(timeframe), fd, rg),
+        ).fetchone()
+        return None if row is None else dict(row)
+
+    def upsert_efficiency_champion_record(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str,
+        timeframe: str = "1d",
+        forecast_days: int | None = None,
+        regime: str | None = None,
+        strategy_id: str,
+        strategy_version: str | None = None,
+        avg_efficiency_rating: float,
+        alpha_strategy: float = 0.0,
+        samples: int,
+        total_forecast_days: int,
+    ) -> str:
+        """
+        Persist the currently-active efficiency champion for a context.
+
+        This is intentionally separate from `strategies.is_champion` because
+        efficiency champions are context-specific (ticker/timeframe/horizon/regime).
+        """
+        fd = int(forecast_days) if forecast_days is not None else -1
+        rg = str(regime) if regime else ""
+        row = self.conn.execute(
+            """
+            SELECT id
+            FROM efficiency_champions
+            WHERE tenant_id = ?
+              AND ticker = ?
+              AND timeframe = ?
+              AND forecast_days = ?
+              AND regime = ?
+            """,
+            (tenant_id, str(ticker), str(timeframe), fd, rg),
+        ).fetchone()
+        rid = str(row["id"]) if row is not None else str(uuid4())
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO efficiency_champions
+              (id, tenant_id, ticker, timeframe, forecast_days, regime, strategy_id, strategy_version,
+               avg_efficiency_rating, alpha_strategy, samples, total_forecast_days, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                rid,
+                tenant_id,
+                str(ticker),
+                str(timeframe),
+                fd,
+                rg,
+                str(strategy_id),
+                (str(strategy_version) if strategy_version else None),
+                float(avg_efficiency_rating),
+                float(alpha_strategy),
+                int(samples),
+                int(total_forecast_days),
+            ),
+        )
+        self.conn.commit()
+        return rid
+
+    def list_scored_tickers(
+        self,
+        *,
+        tenant_id: str = "default",
+        timeframe: str | None = None,
+        forecast_days: int | None = None,
+        regime: str | None = None,
+        limit: int = 5000,
+    ) -> list[str]:
+        where = ["tenant_id = ?"]
+        params: list[Any] = [tenant_id]
+        if timeframe:
+            where.append("timeframe = ?")
+            params.append(str(timeframe))
+        if forecast_days is not None:
+            where.append("forecast_days = ?")
+            params.append(int(forecast_days))
+        if regime:
+            where.append("regime = ?")
+            params.append(str(regime))
+        rows = self.conn.execute(
+            f"""
+            SELECT DISTINCT ticker
+            FROM prediction_scores
+            WHERE {' AND '.join(where)}
+            ORDER BY ticker ASC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        ).fetchall()
+        return [str(r["ticker"]) for r in rows]
 
     def get_rolling_predictions(
         self,

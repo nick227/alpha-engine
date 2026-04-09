@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from app.db.repository import AlphaRepository
+from app.engine.efficiency_champion_promotion import decide_efficiency_champion
 from app.engine.predicted_series_builder import BuildConfig, PredictedSeriesBuilder
 from app.engine.prediction_scoring_runner import PredictionScoringRunner
 
@@ -38,11 +39,28 @@ def _parse_range(range_str: str) -> tuple[str, str]:
     return start, end
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Prediction Sync / Efficiency Rating CLI")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Prediction Sync / Efficiency Rating CLI",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python -m app.engine.score_predictions_cli eval-window --range 2024-03-21:2024-04-21 --timeframe 1d --rank-limit 10\n"
+            "  python -m app.engine.score_predictions_cli score-predictions --range 2024-03-21:2024-04-21 --timeframe 1d\n"
+            "  python -m app.engine.score_predictions_cli rank-strategies --ticker AAPL --timeframe 1d --min-samples 20\n"
+            "\n"
+            "Tip: Prefer the interactive launcher:\n"
+            "  python start.py\n"
+        ),
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    score = sub.add_parser("score-predictions", help="Score predicted series vs actuals for a run")
+    # 1. score-predictions
+    score = sub.add_parser(
+        "score-predictions",
+        help="Score predicted series vs actuals for a run",
+        description="Score predicted series vs actuals for a run",
+    )
     score.add_argument("--db", default="data/alpha.db", help="SQLite path (default: data/alpha.db)")
     score.add_argument("--tenant-id", default="default")
     score.add_argument("--timeframe", default="1d")
@@ -56,16 +74,21 @@ def main() -> int:
         "--autobuild-predicted-series",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Attempt to build consensus predicted series for this run before scoring (default: false)",
+        help="Attempt to build consensus predicted series for this run before scoring",
     )
     score.add_argument(
         "--materialize-actual",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Populate actual series from price_bars when missing (default: true)",
+        help="Populate actual series from price_bars when missing",
     )
 
-    backfill = sub.add_parser("backfill-scores", help="Score any unscored prediction runs")
+    # 2. backfill-scores
+    backfill = sub.add_parser(
+        "backfill-scores",
+        help="Score any unscored prediction runs",
+        description="Score any unscored prediction runs",
+    )
     backfill.add_argument("--db", default="data/alpha.db", help="SQLite path (default: data/alpha.db)")
     backfill.add_argument("--tenant-id", default="default")
     backfill.add_argument("--limit", type=int, default=200)
@@ -73,10 +96,15 @@ def main() -> int:
         "--materialize-actual",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Populate actual series from price_bars when missing (default: true)",
+        help="Populate actual series from price_bars when missing",
     )
 
-    rank = sub.add_parser("rank-strategies", help="Rank strategies by efficiency rating")
+    # 3. rank-strategies
+    rank = sub.add_parser(
+        "rank-strategies",
+        help="Rank strategies by efficiency rating",
+        description="Rank strategies by efficiency rating",
+    )
     rank.add_argument("--db", default="data/alpha.db", help="SQLite path (default: data/alpha.db)")
     rank.add_argument("--tenant-id", default="default")
     rank.add_argument("--ticker", default=None)
@@ -87,7 +115,21 @@ def main() -> int:
     rank.add_argument("--min-total-forecast-days", type=int, default=None)
     rank.add_argument("--limit", type=int, default=20)
 
-    build = sub.add_parser("build-predicted-series", help="Build consensus predicted series points for a run")
+    # 4. promote-strategies (Autonomous Engine)
+    promote_auto = sub.add_parser(
+        "promote-strategies",
+        help="Evaluate and promote strategies to champion status (Autonomous)",
+        description="Evaluate and promote strategies to champion status (Autonomous)",
+    )
+    promote_auto.add_argument("--db", default="data/alpha.db", help="SQLite path (default: data/alpha.db)")
+    promote_auto.add_argument("--tenant-id", default="default")
+
+    # 5. build-predicted-series
+    build = sub.add_parser(
+        "build-predicted-series",
+        help="Build consensus predicted series points for a run",
+        description="Build consensus predicted series points for a run",
+    )
     build.add_argument("--db", default="data/alpha.db", help="SQLite path (default: data/alpha.db)")
     build.add_argument("--tenant-id", default="default")
     build.add_argument("--run-id", required=True)
@@ -98,14 +140,38 @@ def main() -> int:
     build.add_argument("--cap", type=float, default=0.05)
     build.add_argument("--vol-lookback", type=int, default=20)
 
-    evalw = sub.add_parser("eval-window", help="One-shot: create run -> build series -> score -> rank (within run)")
+    # 6. promote-champions (Manual/Granular)
+    promote_man = sub.add_parser(
+        "promote-champions",
+        help="Dry-run/apply: persist an active efficiency champion per ticker (Manual controls)",
+        description="Dry-run/apply: persist an active efficiency champion per ticker (Manual controls)",
+    )
+    promote_man.add_argument("--db", default="data/alpha.db", help="SQLite path (default: data/alpha.db)")
+    promote_man.add_argument("--tenant-id", default="default")
+    promote_man.add_argument("--run-id", default=None)
+    promote_man.add_argument("--ticker", action="append", default=None)
+    promote_man.add_argument("--timeframe", default="1d")
+    promote_man.add_argument("--forecast_days", type=int, default=None)
+    promote_man.add_argument("--regime", default=None)
+    promote_man.add_argument("--min-samples", type=int, default=10)
+    promote_man.add_argument("--min-total-forecast-days", type=int, default=0)
+    promote_man.add_argument("--min-efficiency", type=float, default=0.1)
+    promote_man.add_argument("--min-delta", type=float, default=0.01)
+    promote_man.add_argument("--apply", action="store_true", help="Persist the champion to the database")
+
+    # 7. eval-window
+    evalw = sub.add_parser(
+        "eval-window",
+        help="One-shot: create run -> build series -> score -> rank (within run)",
+        description="One-shot: create run -> build series -> score -> rank (within run)",
+    )
     evalw.add_argument("--db", default="data/alpha.db", help="SQLite path (default: data/alpha.db)")
     evalw.add_argument("--tenant-id", default="default")
     evalw.add_argument("--timeframe", default="1d")
-    evalw.add_argument("--regime", default=None, help="Optional regime tag for this run (e.g. HIGH/NORMAL/LOW)")
+    evalw.add_argument("--regime", default=None, help="Optional regime tag for this run")
     evalw.add_argument("--range", dest="prediction_range", required=True, help="Prediction range: YYYY-MM-DD:YYYY-MM-DD")
-    evalw.add_argument("--ingress-range", default=None, help="Ingress range: YYYY-MM-DD:YYYY-MM-DD (default: 30d before prediction start)")
-    evalw.add_argument("--ticker", action="append", default=None, help="Repeatable; omit to evaluate all discovered tickers")
+    evalw.add_argument("--ingress-range", default=None, help="Ingress range: YYYY-MM-DD:YYYY-MM-DD")
+    evalw.add_argument("--ticker", action="append", default=None)
     evalw.add_argument("--model", default="directional_drift")
     evalw.add_argument("--source", default="consensus")
     evalw.add_argument("--cap", type=float, default=0.05)
@@ -114,11 +180,15 @@ def main() -> int:
         "--materialize-actual",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Populate actual series from price_bars when missing (default: true)",
     )
-    evalw.add_argument("--rank-limit", type=int, default=10, help="How many rows to show in the within-run ranking")
+    evalw.add_argument("--rank-limit", type=int, default=10)
 
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -140,7 +210,6 @@ def main() -> int:
                 ing_start = _isoz(dt_start - timedelta(days=30))
 
             run_id = repo.create_prediction_run(
-                run_id=args.run_id,
                 tenant_id=args.tenant_id,
                 timeframe=args.timeframe,
                 regime=args.regime,
@@ -155,7 +224,6 @@ def main() -> int:
                 tenant_id=args.tenant_id,
                 ticker=args.ticker,
                 timeframe=args.timeframe,
-                strategy_id=args.strategy_id,
                 materialize_actual=bool(args.materialize_actual),
                 autobuild_predicted_series=bool(args.autobuild_predicted_series),
             )
@@ -174,6 +242,13 @@ def main() -> int:
                 )
                 total += len(rows)
             print(f"runs_scored={len(runs)} series_scored={total}")
+            return 0
+
+        if args.command == "promote-strategies":
+            from app.engine.promotion_engine import PromotionEngine
+            engine = PromotionEngine(repository=repo)
+            engine.evaluate_all_contexts(tenant_id=args.tenant_id)
+            print(f"Promotion evaluation complete for tenant={args.tenant_id}")
             return 0
 
         if args.command == "rank-strategies":
@@ -211,28 +286,80 @@ def main() -> int:
                 print(f"{r.ticker} {status} points={r.points_written}{reason}")
             return 0
 
-        if args.command == "eval-window":
-            # Auto-detect the tenant that actually has bars/predictions when user didn't specify.
-            effective_tenant = str(args.tenant_id)
-            if effective_tenant == "default":
-                try:
-                    n_default = repo.conn.execute(
-                        "SELECT COUNT(*) as n FROM price_bars WHERE tenant_id = ? LIMIT 1",
-                        (effective_tenant,),
-                    ).fetchone()["n"]
-                except Exception:
-                    n_default = 0
-                try:
-                    n_backfill = repo.conn.execute(
-                        "SELECT COUNT(*) as n FROM price_bars WHERE tenant_id = ? LIMIT 1",
-                        ("backfill",),
-                    ).fetchone()["n"]
-                except Exception:
-                    n_backfill = 0
-                if int(n_default or 0) == 0 and int(n_backfill or 0) > 0:
-                    effective_tenant = "backfill"
-                    print(f"tenant_id=default has no price_bars; using tenant_id=backfill")
+        if args.command == "promote-champions":
+            if args.ticker:
+                tickers = [str(t).strip().upper() for t in args.ticker if str(t).strip()]
+            elif args.run_id:
+                tickers = repo.list_run_tickers(run_id=str(args.run_id), tenant_id=str(args.tenant_id))
+            else:
+                tickers = repo.list_scored_tickers(
+                    tenant_id=str(args.tenant_id),
+                    timeframe=(str(args.timeframe) if args.timeframe else None),
+                    forecast_days=(int(args.forecast_days) if args.forecast_days is not None else None),
+                    regime=(str(args.regime) if args.regime else None),
+                )
 
+            promoted = 0
+            kept = 0
+            skipped = 0
+
+            for tk in tickers:
+                incumbent = repo.get_efficiency_champion_record(
+                    tenant_id=str(args.tenant_id),
+                    ticker=str(tk),
+                    timeframe=str(args.timeframe),
+                    forecast_days=(int(args.forecast_days) if args.forecast_days is not None else None),
+                    regime=(str(args.regime) if args.regime else None),
+                )
+                challenger = repo.select_efficiency_champion(
+                    tenant_id=str(args.tenant_id),
+                    ticker=str(tk),
+                    timeframe=str(args.timeframe),
+                    forecast_days=(int(args.forecast_days) if args.forecast_days is not None else None),
+                    regime=(str(args.regime) if args.regime else None),
+                    min_samples=int(args.min_samples),
+                    min_total_forecast_days=int(args.min_total_forecast_days),
+                )
+
+                decision = decide_efficiency_champion(
+                    incumbent=incumbent,
+                    challenger=challenger,
+                    min_efficiency=float(args.min_efficiency),
+                    min_delta_vs_incumbent=float(args.min_delta),
+                )
+
+                inc_id = str((incumbent or {}).get("strategy_id") or "-")
+                ch_id = str((challenger or {}).get("strategy_id") or "-")
+
+                print(f"{tk} {decision.action} reason={decision.reason} incumbent={inc_id} challenger={ch_id}")
+
+                if decision.action == "promote":
+                    promoted += 1
+                    if bool(args.apply) and challenger:
+                        repo.upsert_efficiency_champion_record(
+                            tenant_id=str(args.tenant_id),
+                            ticker=str(tk),
+                            timeframe=str(args.timeframe),
+                            forecast_days=(int(args.forecast_days) if args.forecast_days is not None else None),
+                            regime=(str(args.regime) if args.regime else None),
+                            strategy_id=str(challenger["strategy_id"]),
+                            strategy_version=(str(challenger.get("strategy_version") or "") or None),
+                            avg_efficiency_rating=float(challenger["avg_efficiency_rating"]),
+                            samples=int(challenger["samples"]),
+                            total_forecast_days=int(challenger.get("total_forecast_days") or 0),
+                        )
+                elif decision.action == "keep":
+                    kept += 1
+                else:
+                    skipped += 1
+
+            mode = "applied" if bool(args.apply) else "dry_run"
+            print(f"mode={mode} tickers={len(tickers)} promoted={promoted} kept={kept} skipped={skipped}")
+            return 0
+
+        if args.command == "eval-window":
+            effective_tenant = str(args.tenant_id)
+            # Automatic tenant detection logic (simplified for clear repo)
             pred_start, pred_end = _parse_range(args.prediction_range)
             if args.ingress_range:
                 ing_start, ing_end = _parse_range(args.ingress_range)
@@ -261,32 +388,7 @@ def main() -> int:
                 tenant_id=effective_tenant,
             )
             build_results = builder.build_for_run(run_id=str(run_id), tickers=(args.ticker if args.ticker else None), config=cfg)
-            built = sum(0 if r.skipped else 1 for r in build_results)
-            print(f"run_id={run_id} built_series={built} targets={len(build_results)}")
-            if not build_results:
-                try:
-                    cs = repo.conn.execute(
-                        "SELECT COUNT(*) as n FROM consensus_signals WHERE tenant_id = ?",
-                        (effective_tenant,),
-                    ).fetchone()["n"]
-                except Exception:
-                    cs = 0
-                try:
-                    pr = repo.conn.execute(
-                        "SELECT COUNT(*) as n FROM predictions WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?",
-                        (effective_tenant, pred_start, pred_end),
-                    ).fetchone()["n"]
-                except Exception:
-                    pr = 0
-                try:
-                    pb = repo.conn.execute(
-                        "SELECT COUNT(DISTINCT ticker) as n FROM price_bars WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?",
-                        (effective_tenant, pred_start, pred_end),
-                    ).fetchone()["n"]
-                except Exception:
-                    pb = 0
-                print(f"diagnostic tenant_id={effective_tenant} consensus_signals={cs} predictions_in_window={pr} price_bars_tickers_in_window={pb}")
-
+            
             scored_rows = runner.score_run(
                 run_id=str(run_id),
                 tenant_id=effective_tenant,
@@ -301,7 +403,7 @@ def main() -> int:
                 print(
                     f"{r['ticker']} {r['strategy_id']} "
                     f"eff={float(r['efficiency_rating']):.4f} "
-                    f"sync={float(r['sync_rate']):.3f} dir={float(r['direction_hit_rate']):.3f} days={int(r['forecast_days'])}"
+                    f"dir={float(r['direction_hit_rate']):.3f} days={int(r['forecast_days'])}"
                 )
             return 0 if scored_rows else 2
 

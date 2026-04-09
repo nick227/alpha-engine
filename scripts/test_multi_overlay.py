@@ -29,8 +29,18 @@ def test_multi_overlay():
     run_id = runs[0].id
     
     ticker = tickers[0]
-    # Fetch available strategies for this ticker
-    strategies = ["Sentiment_v1", "Technical_v2"]
+    # Fetch available strategies for this run/ticker
+    strat_rows = service.store.conn.execute(
+        "SELECT DISTINCT strategy_id FROM predicted_series_points WHERE run_id = ? AND ticker = ?",
+        (run_id, ticker)
+    ).fetchall()
+    strategies = [str(r["strategy_id"]) for r in strat_rows]
+    
+    if not strategies:
+        print(f"No strategies found for run_id={run_id} ticker={ticker}")
+        return
+    
+    print(f"DEBUG: Found strategies: {strategies}")
     
     print(f"--- Overlay Test: {ticker} (run: {run_id[:8]}) ---")
     overlay = service.get_multi_strategy_overlay(

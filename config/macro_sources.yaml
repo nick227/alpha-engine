@@ -1,0 +1,11 @@
+macro_sources:
+  yfinance:
+    - symbol: CL=F
+      name: oil
+    - symbol: GC=F
+      name: gold
+    - symbol: DX-Y.NYB
+      name: dxy
+    - symbol: BTC-USD
+      name: btc
+

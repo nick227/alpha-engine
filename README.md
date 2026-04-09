@@ -86,6 +86,9 @@ npx prisma generate
 ### **3. Run Demo Pipeline**
 
 ```bash
+# Interactive CLI launcher (recommended for operators)
+python start.py
+
 # Execute the demo pipeline
 python scripts/demo_run.py
 ```
@@ -164,7 +167,8 @@ alpha-engine-poc/
 The engine uses a **canonical universe** of target stocks for consistent coverage:
 
 - **Configuration**: `config/target_stocks.yaml`
-- **CLI Management**: `python -m app.ingest.backfill_cli list-target-stocks`
+- **Recommended CLI (interactive)**: `python start.py`
+- **Direct CLI Management**: `python -m app.ingest.backfill_cli list-target-stocks`
 - **Universal Coverage**: Bar data, news, and analysis
 
 ## 🔧 Development Workflow
