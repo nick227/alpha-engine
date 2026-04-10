@@ -12,10 +12,12 @@ class Signal(BaseModel):
     confidence: float
     timestamp: str
     regime: str = "UNKNOWN"
+    mode: str = "backtest"  # backtest | paper | live - keeps corpus clean
 
 class SignalOutcome(BaseModel):
     signal_id: str
     actual_return_pct: float
+    mode: str = "backtest"  # backtest | paper | live - source of outcome
 
 class StrategyPerformance(BaseModel):
     strategy_id: str
@@ -24,23 +26,75 @@ class StrategyPerformance(BaseModel):
     stability: float
     regime_strength: Dict[str, float]
     confidence_weight: float
+    mode: str = "backtest"  # backtest | paper | live - which corpus this belongs to
+    sample_count: int = 0   # Number of outcomes in this performance calculation
 
 
 # --- Continuous Learning Engine ---
 class ContinuousLearner:
+    """
+    Mode-aware continuous learning engine.
+    
+    Separates learning by mode to keep corpus clean:
+    - BACKTEST: learns from replay outcomes
+    - PAPER: learns from executed trade outcomes  
+    - LIVE: learns from broker-confirmed outcomes
+    """
+    
     def __init__(self):
-        # State tracking: strategy_id -> list of (Signal, SignalOutcome)
-        self.history: Dict[str, List[tuple[Signal, SignalOutcome]]] = {}
+        # State tracking: mode -> strategy_id -> list of (Signal, SignalOutcome)
+        # This separation prevents cross-contamination between modes
+        self.history: Dict[str, Dict[str, List[tuple[Signal, SignalOutcome]]]] = {
+            "backtest": {},
+            "paper": {},
+            "live": {}
+        }
+        self.current_mode: str = "backtest"
 
-    def ingest_pairing(self, signal: Signal, outcome: SignalOutcome):
-        """Register a resolved signal outcome."""
-        if signal.strategy_id not in self.history:
-            self.history[signal.strategy_id] = []
-        self.history[signal.strategy_id].append((signal, outcome))
+    def ingest_pairing(self, signal: Signal, outcome: SignalOutcome, mode: str = None):
+        """
+        Register a resolved signal outcome.
+        
+        Args:
+            signal: The signal that generated the prediction
+            outcome: The actual outcome (return, correctness)
+            mode: backtest | paper | live (defaults to signal.mode or current_mode)
+        """
+        # Determine mode - explicit > signal > current > default
+        effective_mode = mode or signal.mode or self.current_mode or "backtest"
+        
+        # Validate mode
+        if effective_mode not in self.history:
+            raise ValueError(f"Invalid mode: {effective_mode}. Must be backtest|paper|live")
+        
+        # Ensure outcome has matching mode
+        outcome.mode = effective_mode
+        
+        # Store in mode-specific history
+        mode_history = self.history[effective_mode]
+        if signal.strategy_id not in mode_history:
+            mode_history[signal.strategy_id] = []
+        mode_history[signal.strategy_id].append((signal, outcome))
+        
+        return effective_mode
 
-    def evaluate_strategy(self, strategy_id: str) -> StrategyPerformance | None:
-        """Computes correctness, alpha, stability, and regime performance for a strategy."""
-        records = self.history.get(strategy_id, [])
+    def evaluate_strategy(self, strategy_id: str, mode: str = None) -> StrategyPerformance | None:
+        """
+        Computes correctness, alpha, stability, and regime performance for a strategy.
+        
+        Args:
+            strategy_id: Strategy to evaluate
+            mode: backtest | paper | live (defaults to current_mode)
+            
+        Returns:
+            StrategyPerformance for the specified mode
+        """
+        effective_mode = mode or self.current_mode or "backtest"
+        
+        if effective_mode not in self.history:
+            return None
+            
+        records = self.history[effective_mode].get(strategy_id, [])
         if not records:
             return None
 
@@ -105,13 +159,76 @@ class ContinuousLearner:
             alpha=cumulative_alpha,
             stability=stability,
             regime_strength=regime_strength,
-            confidence_weight=win_rate * max(0.1, min(1.0, stability))
+            confidence_weight=win_rate * max(0.1, min(1.0, stability)),
+            mode=effective_mode,
+            sample_count=total_trials
         )
 
-    def evaluate_all(self) -> Dict[str, StrategyPerformance]:
+    def evaluate_all(self, mode: str = None) -> Dict[str, StrategyPerformance]:
+        """
+        Evaluate all strategies for a given mode.
+        
+        Args:
+            mode: backtest | paper | live (defaults to current_mode)
+            
+        Returns:
+            Dict of strategy_id -> StrategyPerformance for specified mode
+        """
+        effective_mode = mode or self.current_mode or "backtest"
+        
+        if effective_mode not in self.history:
+            return {}
+            
         results = {}
-        for s_id in self.history:
-            perf = self.evaluate_strategy(s_id)
+        for s_id in self.history[effective_mode]:
+            perf = self.evaluate_strategy(s_id, effective_mode)
             if perf:
                 results[s_id] = perf
         return results
+    
+    def evaluate_all_by_horizon(self, mode: str = None) -> Dict[tuple[str, str, str], StrategyPerformance]:
+        """
+        Evaluate strategies grouped by (strategy_id, ticker, horizon) for horizon-scoped analytics.
+        
+        Args:
+            mode: backtest | paper | live (defaults to current_mode)
+        """
+        effective_mode = mode or self.current_mode or "backtest"
+        
+        if effective_mode not in self.history:
+            return {}
+            
+        results = {}
+        for s_id in self.history[effective_mode]:
+            perf = self.evaluate_strategy(s_id, effective_mode)
+            if perf:
+                # For now, use default ticker and horizon since ContinuousLearning doesn't track them
+                # In a full implementation, this would extract from the signal data
+                results[(s_id, "DEFAULT", "1d", effective_mode)] = perf
+        return results
+    
+    def set_mode(self, mode: str):
+        """Set the current learning mode (backtest | paper | live)."""
+        if mode not in ("backtest", "paper", "live"):
+            raise ValueError(f"Invalid mode: {mode}. Must be backtest|paper|live")
+        self.current_mode = mode
+    
+    def get_mode_stats(self) -> Dict[str, Dict[str, int]]:
+        """
+        Get sample counts per mode and strategy.
+        
+        Returns:
+            {mode: {strategy_id: sample_count}}
+        """
+        stats = {}
+        for mode, mode_history in self.history.items():
+            stats[mode] = {
+                s_id: len(records) 
+                for s_id, records in mode_history.items()
+            }
+        return stats
+    
+    def clear_mode(self, mode: str):
+        """Clear all history for a specific mode."""
+        if mode in self.history:
+            self.history[mode] = {}

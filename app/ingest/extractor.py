@@ -24,10 +24,58 @@ class Extractor:
             return None
         return " - ".join(resolved)  # Joining multiple string fields with a separator
 
+    def normalize_yfinance_columns(self, raw: dict[str, Any]) -> dict[str, Any]:
+        """
+        Convert yfinance MultiIndex columns like 'Close_SPY' to normalized structure:
+        {
+            'symbol': 'SPY',
+            'close': 523.11,
+            'open': 522.50,
+            'high': 524.00,
+            'low': 521.75,
+            'volume': 1234567
+        }
+        """
+        # Preserve all original fields; this function should be non-destructive.
+        normalized = dict(raw or {})
+        
+        # Copy basic fields
+        for key in ['Datetime', 'Date', 'timestamp', 'symbol']:
+            if key in raw:
+                # Normalize timestamp field name
+                if key in ['Datetime', 'Date']:
+                    normalized['timestamp'] = raw[key]
+                else:
+                    normalized[key] = raw[key]
+        
+        # Normalize OHLCV fields
+        field_mappings = {
+            'Open': 'open',
+            'High': 'high', 
+            'Low': 'low',
+            'Close': 'close',
+            'Adj Close': 'adj_close',
+            'Volume': 'volume'
+        }
+        
+        for yf_field, normal_field in field_mappings.items():
+            # Look for fields like 'Close_SPY', 'Open_QQQ', etc.
+            matching_keys = [k for k in raw.keys() if k.startswith(f"{yf_field}_")]
+            if matching_keys:
+                # Use the first match (should be only one per symbol)
+                key = matching_keys[0]
+                normalized[normal_field] = raw[key]
+            elif yf_field in raw:  # Fallback for non-MultiIndex data
+                normalized[normal_field] = raw[yf_field]
+        
+        return normalized
+    
     def normalize_many(self, raw_rows: list[dict[str, Any]], spec: SourceSpec) -> list[Event]:
         events = []
         for raw in raw_rows:
-            events.append(self.normalize(raw, spec))
+            # Normalize yfinance columns first
+            normalized_raw = self.normalize_yfinance_columns(raw)
+            events.append(self.normalize(normalized_raw, spec))
         return events
 
     def normalize(self, raw: dict[str, Any], spec: SourceSpec) -> Event:

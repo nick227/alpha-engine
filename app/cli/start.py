@@ -812,26 +812,32 @@ def _run_full_pipeline_run() -> int:
             tenant_id=tenant_id,
             ticker=ticker,
             timeframe=timeframe,
-            min_samples=1,
+            min_samples=20,
             min_total_forecast_days=0,
             limit=5,
         )
         if not ranked:
-            print("No ranked strategies found (did scoring produce rows?).")
+            print("No ranked strategies found (did scoring produce enough rows to pass min_samples=20?).")
             return 2
 
         champ = repo.select_efficiency_champion(
             tenant_id=tenant_id,
             ticker=ticker,
             timeframe=timeframe,
-            min_samples=10,
+            min_samples=20,
             min_total_forecast_days=0,
-        ) or ranked[0]
+        )
+        if not champ:
+            print("Champion gate failed: no strategy meets min_samples=20; refusing to select a champion.")
+            return 3
 
         champ_id = str(champ["strategy_id"])
         alpha = float(champ["avg_efficiency_rating"])
         samples = int(champ["samples"])
         total_days = int(champ.get("total_forecast_days") or 0)
+        if samples < 20:
+            print(f"Champion gate failed: champion_samples={samples} (< 20); refusing to persist champion.")
+            return 3
 
         repo.upsert_efficiency_champion_record(
             tenant_id=tenant_id,

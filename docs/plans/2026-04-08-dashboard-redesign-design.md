@@ -1,4 +1,4 @@
-## Alpha Engine Dashboard Redesign (Arctic Premium)
+﻿## Alpha Engine Dashboard Redesign (Arctic Premium)
 
 ### North-star goals
 - **Premium, brand-competitive UI**: strong hierarchy, extreme scale contrast, disciplined spacing, minimal color, consistent grid alignment, low-noise surfaces.

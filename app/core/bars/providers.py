@@ -40,6 +40,34 @@ class HistoricalBarsProvider(Protocol):
         """
 
 
+class FallbackBarsProvider:
+    """
+    Provider wrapper that tries multiple providers in order.
+
+    This is intended for backfills where "some bars" are better than stalling the replay.
+    """
+
+    def __init__(self, providers: list[HistoricalBarsProvider]) -> None:
+        self.providers = [p for p in (providers or []) if p is not None]
+        names = [getattr(p, "name", "unknown") for p in self.providers]
+        self.name = "->".join([str(n) for n in names if n]) or "fallback"
+
+    def fetch_bars(self, *, timeframe: str, ticker: str, start: datetime, end: datetime) -> list[OHLCVBar]:
+        last_exc: Exception | None = None
+        for p in self.providers:
+            try:
+                bars = p.fetch_bars(timeframe=timeframe, ticker=ticker, start=start, end=end)
+                if bars:
+                    return bars
+            except Exception as e:
+                last_exc = e
+                continue
+        if last_exc is not None:
+            # Swallow provider errors; the cache layer will fall back to whatever is already persisted.
+            return []
+        return []
+
+
 def _http_json(url: str, *, headers: dict[str, str] | None = None, timeout_s: int = 30) -> Any:
     req = Request(url, headers=headers or {}, method="GET")
     with urlopen(req, timeout=timeout_s) as resp:
@@ -198,6 +226,8 @@ class YFinanceBarsProvider:
 
     def fetch_bars(self, *, timeframe: str, ticker: str, start: datetime, end: datetime) -> list[OHLCVBar]:
         # yfinance intraday availability is limited; this is best-effort fallback.
+        import pandas as pd  # type: ignore
+
         start_utc = to_utc_datetime(start)
         end_utc = to_utc_datetime(end)
         tf = str(timeframe).strip().lower()
@@ -222,18 +252,65 @@ class YFinanceBarsProvider:
         except Exception:
             return []
 
+        # yfinance can return MultiIndex columns (e.g. ("Open","SPY") / ("Price","Open") variants).
+        try:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = ["_".join([str(x) for x in col if x]) for col in df.columns]
+        except Exception:
+            pass
+
+        def _pick(row: Any, base: str) -> Any:
+            if base in row:
+                return row[base]
+            # Common flattened patterns: "Open_SPY", "Price_Open", etc.
+            for k in getattr(row, "index", []):
+                try:
+                    ks = str(k)
+                except Exception:
+                    continue
+                if ks == base:
+                    return row[k]
+                if ks.startswith(base + "_") or ks.endswith("_" + base):
+                    return row[k]
+            return None
+
+        def _scalar(v: Any) -> Any:
+            try:
+                if isinstance(v, pd.Series):
+                    return v.iloc[0]
+            except Exception:
+                pass
+            return v
+
         out: list[OHLCVBar] = []
         for _, row in df.iterrows():
             try:
-                ts = normalize_timestamp(row["Datetime"] if "Datetime" in row else row["Date"])
+                dt_val = None
+                if "Datetime" in row:
+                    dt_val = row["Datetime"]
+                elif "Date" in row:
+                    dt_val = row["Date"]
+                elif "index" in row:
+                    dt_val = row["index"]
+                else:
+                    dt_val = _pick(row, "Datetime") or _pick(row, "Date")
+                if dt_val is None:
+                    continue
+                ts = normalize_timestamp(dt_val)
+
+                o = _scalar(_pick(row, "Open"))
+                h = _scalar(_pick(row, "High"))
+                l = _scalar(_pick(row, "Low"))
+                c = _scalar(_pick(row, "Close"))
+                vol = _scalar(_pick(row, "Volume")) or 0.0
                 out.append(
                     OHLCVBar(
                         timestamp=ts,
-                        open=float(row["Open"]),
-                        high=float(row["High"]),
-                        low=float(row["Low"]),
-                        close=float(row["Close"]),
-                        volume=float(row.get("Volume", 0.0)),
+                        open=float(o),
+                        high=float(h),
+                        low=float(l),
+                        close=float(c),
+                        volume=float(vol),
                     )
                 )
             except Exception:

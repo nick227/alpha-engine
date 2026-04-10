@@ -38,6 +38,8 @@
     series: "FEDFUNDS"
   extract:
     timestamp: "date"
+    numeric_features:
+      fed_funds_rate: "value"
 
 - id: reddit_wsb
   type: social
@@ -66,6 +68,8 @@
     keywords: ["bitcoin", "recession", "bull market"]
   extract:
     text: "keyword + ' interest: ' + str(value)"
+    numeric_features:
+      google_trends_value: "value"
     timestamp: "timestamp"
 
 - id: etf_flows_market
@@ -118,8 +122,10 @@
   weight: 1.0
   backfill_days: 90
   extract:
-    text: "'Yield curve ' + regime + ' (spread: ' + str(spread) + ')'"
-    timestamp: "timestamp"
+    text: "'Yield curve ' + regime"
+    timestamp: "date"
+    numeric_features:
+      yield_spread: "value"
 
 - id: fear_greed_index
   type: sentiment_index
@@ -146,16 +152,14 @@
   weight: 1.0
   backfill_days: 90
   extract:
-    text: "'Oil: ' + str(oil_return_1h) + ' | VIX: ' + str(vix_level) + ' (' + vol_regime + ')'"
+    text: "symbol + ': ' + str(close)"
     timestamp: "timestamp"
     numeric_features:
-      oil_return_1h: "oil_return_1h"
-      gold_return_1h: "gold_return_1h"
-      dxy_return_1h: "dxy_return_1h"
-      yield_delta_1h: "yield_delta_1h"
-      vix_level: "vix"
-      vix_delta_1h: "vix_delta_1h"
-      vix_zscore: "vix_zscore"
+      price: "close"
+      volume: "volume"
+      high: "high"
+      low: "low"
+      open: "open"
 
 - id: market_breadth
   type: regime
@@ -166,12 +170,13 @@
   weight: 0.9
   backfill_days: 90
   extract:
-    text: "risk_on_score"
+    text: "symbol + ': ' + str(close)"
     timestamp: "timestamp"
     numeric_features:
-      breadth_ratio: "breadth_ratio"
-      participation: "participation"
-      risk_on_score: "risk_on_score"
+      sample_close: "close"
+      sample_volume: "volume"
+      sample_high: "high"
+      sample_low: "low"
 
 - id: market_baseline
   type: momentum
@@ -182,13 +187,14 @@
   weight: 1.0
   backfill_days: 90
   extract:
-    text: "'SPY: ' + str(spy_return_1h)"
+    text: "symbol + ': ' + str(close)"
     timestamp: "timestamp"
     numeric_features:
-      spy_return_1h: "spy_return_1h"
-      qqq_return_1h: "qqq_return_1h"
-      iwm_return_1h: "iwm_return_1h"
-      spy_return_1d: "spy_return_1d"
+      spy_close: "close"
+      spy_volume: "volume"
+      spy_high: "high"
+      spy_low: "low"
+      spy_open: "open"
 
 - id: developer_bundle_ai_supply
   type: bundle

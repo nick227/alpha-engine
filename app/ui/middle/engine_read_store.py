@@ -37,6 +37,7 @@ class ConsensusRow:
     active_regime: str | None
     high_vol_strength: float | None
     low_vol_strength: float | None
+    trust: float | None = None  # exploratory (if present), else conservative
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class SignalRow:
     strategy: str
     regime: str | None
     confidence: float
+    trust: float | None = None  # exploratory (if present), else conservative
 
 
 @dataclass(frozen=True)
@@ -223,6 +225,13 @@ class EngineReadStore:
                 ("confidence", "ALTER TABLE consensus_signals ADD COLUMN confidence REAL;"),
                 ("total_weight", "ALTER TABLE consensus_signals ADD COLUMN total_weight REAL;"),
                 ("participating_strategies", "ALTER TABLE consensus_signals ADD COLUMN participating_strategies INTEGER;"),
+                ("weights_json", "ALTER TABLE consensus_signals ADD COLUMN weights_json TEXT;"),
+                ("strategies_json", "ALTER TABLE consensus_signals ADD COLUMN strategies_json TEXT;"),
+                ("trust_score", "ALTER TABLE consensus_signals ADD COLUMN trust_score REAL;"),
+                ("trust_conservative", "ALTER TABLE consensus_signals ADD COLUMN trust_conservative REAL;"),
+                ("trust_exploratory", "ALTER TABLE consensus_signals ADD COLUMN trust_exploratory REAL;"),
+                ("trust_json", "ALTER TABLE consensus_signals ADD COLUMN trust_json TEXT;"),
+                ("trust_updated_at", "ALTER TABLE consensus_signals ADD COLUMN trust_updated_at TEXT;"),
             ):
                 if cols and col not in cols:
                     self.conn.execute(ddl)
@@ -363,9 +372,14 @@ class EngineReadStore:
                     prediction_id TEXT NOT NULL,
                     strategy_id TEXT NOT NULL,
                     ticker TEXT NOT NULL,
+                    horizon TEXT,
                     timestamp TEXT NOT NULL,
                     direction TEXT NOT NULL,
                     confidence REAL NOT NULL,
+                    predicted_return REAL NOT NULL DEFAULT 0.0,
+                    trust_score REAL,
+                    trust_json TEXT,
+                    trust_updated_at TEXT,
                     track TEXT NOT NULL,
                     regime TEXT,
                     created_at TEXT NOT NULL
@@ -381,6 +395,13 @@ class EngineReadStore:
             for col, ddl in (
                 ("track", "ALTER TABLE signals ADD COLUMN track TEXT NOT NULL DEFAULT 'unknown';"),
                 ("regime", "ALTER TABLE signals ADD COLUMN regime TEXT;"),
+                ("horizon", "ALTER TABLE signals ADD COLUMN horizon TEXT;"),
+                ("predicted_return", "ALTER TABLE signals ADD COLUMN predicted_return REAL NOT NULL DEFAULT 0.0;"),
+                ("trust_score", "ALTER TABLE signals ADD COLUMN trust_score REAL;"),
+                ("trust_conservative", "ALTER TABLE signals ADD COLUMN trust_conservative REAL;"),
+                ("trust_exploratory", "ALTER TABLE signals ADD COLUMN trust_exploratory REAL;"),
+                ("trust_json", "ALTER TABLE signals ADD COLUMN trust_json TEXT;"),
+                ("trust_updated_at", "ALTER TABLE signals ADD COLUMN trust_updated_at TEXT;"),
             ):
                 if cols and col not in cols:
                     self.conn.execute(ddl)
@@ -577,18 +598,22 @@ class EngineReadStore:
         # Prefer materialized consensus_signals (real output fields), fallback to predictions.
         row = None
         try:
+            if self._has_column("consensus_signals", "trust_exploratory"):
+                trust_sql = "trust_exploratory as trust_score"
+            elif self._has_column("consensus_signals", "trust_score"):
+                trust_sql = "trust_score as trust_score"
+            else:
+                trust_sql = "NULL as trust_score"
             where = "WHERE tenant_id = ? AND ticker = ?"
             params: list[Any] = [tenant_id, str(ticker)]
             if horizon and self._consensus_has_horizon:
                 where += " AND horizon = ?"
                 params.append(str(horizon))
             row = self.conn.execute(
-                """
-                SELECT ticker, created_at as timestamp, direction, confidence, total_weight, participating_strategies, regime
+                f"""
+                SELECT ticker, created_at as timestamp, direction, confidence, total_weight, participating_strategies, regime, {trust_sql}
                 FROM consensus_signals
-                """
-                + where
-                + """
+                {where}
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -648,6 +673,7 @@ class EngineReadStore:
             active_regime=str(row["regime"]) if row["regime"] is not None else None,
             high_vol_strength=float(high_strength) if high_strength is not None else None,
             low_vol_strength=float(low_strength) if low_strength is not None else None,
+            trust=float(row["trust_score"]) if ("trust_score" in row.keys() and row["trust_score"] is not None) else None,
         )
 
     def get_latest_consensus_by_horizon(
@@ -679,6 +705,12 @@ class EngineReadStore:
                 where.append("sig.ticker = ?")
                 params.append(str(ticker))
 
+            if self._has_column("signals", "trust_exploratory"):
+                trust_sql = "sig.trust_exploratory as trust_score"
+            elif self._has_column("signals", "trust_score"):
+                trust_sql = "sig.trust_score as trust_score"
+            else:
+                trust_sql = "NULL as trust_score"
             rows = self.conn.execute(
                 f"""
                 SELECT
@@ -687,6 +719,7 @@ class EngineReadStore:
                   sig.direction as prediction,
                   sig.confidence as confidence,
                   sig.regime as regime,
+                  {trust_sql},
                   s.strategy_type as strategy_type,
                   s.version as version
                 FROM signals sig
@@ -740,6 +773,7 @@ class EngineReadStore:
                     confidence=float(r["confidence"]),
                     strategy=f"{stype}:{ver}" if ver else stype,
                     regime=str(r["regime"]) if r["regime"] is not None else None,
+                    trust=float(r["trust_score"]) if ("trust_score" in r.keys() and r["trust_score"] is not None) else None,
                 )
             )
         return out

@@ -42,6 +42,7 @@ class ConsensusView:
     active_regime: str | None
     high_vol_strength: float | None
     low_vol_strength: float | None
+    trust: float | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class SignalView:
     strategy: str
     regime: str | None
     confidence: float
+    trust: float | None = None
 
 
 @dataclass(frozen=True)
@@ -279,6 +281,7 @@ class DashboardService:
             active_regime=row.active_regime,
             high_vol_strength=row.high_vol_strength,
             low_vol_strength=row.low_vol_strength,
+            trust=row.trust,
         )
 
     def get_latest_consensus(self, *, tenant_id: str = "default", ticker: str) -> ConsensusView | None: 
@@ -304,6 +307,7 @@ class DashboardService:
             strategy=row.strategy,
             regime=row.regime,
             confidence=row.confidence,
+            trust=row.trust,
         )
 
     def get_recent_signals(
@@ -728,7 +732,7 @@ class DashboardService:
             timeframe=timeframe,
             forecast_days=None,  # Get all horizons for comprehensive champion computation
             limit=200,  # Limit to prevent unbounded cache growth
-            min_samples=10  # Only include strategies with sufficient samples
+            min_samples=20  # Only include strategies with sufficient samples
         )
         
         # Load strategy overlays (real data only)

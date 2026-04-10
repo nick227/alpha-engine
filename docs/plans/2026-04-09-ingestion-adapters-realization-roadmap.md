@@ -1,4 +1,4 @@
-# Implementation Roadmap: Real Ingestion Adapters + Placeholder Removal
+﻿# Implementation Roadmap: Real Ingestion Adapters + Placeholder Removal
 
 Date: 2026-04-09
 

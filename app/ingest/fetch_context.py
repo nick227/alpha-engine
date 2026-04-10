@@ -12,7 +12,7 @@ class FetchContext:
     key_manager: KeyManager
     rate_limiter: RateLimiter
     cache_handle: Any | None = None
-    run_timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    start_date: str | None = None
-    end_date: str | None = None
+    run_timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    start_date: datetime | None = None
+    end_date: datetime | None = None
     run_metadata: dict[str, Any] = field(default_factory=dict)

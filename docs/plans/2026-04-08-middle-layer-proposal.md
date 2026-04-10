@@ -1,4 +1,4 @@
-# Middle Layer Proposal (Dashboard ↔ Engine Data)
+﻿# Middle Layer Proposal (Dashboard ↔ Engine Data)
 
 Date: 2026-04-08
 

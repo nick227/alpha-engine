@@ -248,9 +248,16 @@ CREATE TABLE IF NOT EXISTS signals (
     prediction_id TEXT NOT NULL,
     strategy_id TEXT NOT NULL,
     ticker TEXT NOT NULL,
+    horizon TEXT,
     timestamp TEXT NOT NULL,
     direction TEXT NOT NULL,
     confidence REAL NOT NULL,
+    predicted_return REAL NOT NULL DEFAULT 0.0,
+    trust_score REAL,
+    trust_conservative REAL,
+    trust_exploratory REAL,
+    trust_json TEXT,
+    trust_updated_at TEXT,
     track TEXT NOT NULL,
     regime TEXT,
     created_at TEXT NOT NULL
@@ -275,6 +282,13 @@ CREATE TABLE IF NOT EXISTS consensus_signals (
     confidence REAL,
     total_weight REAL,
     participating_strategies INTEGER,
+    weights_json TEXT,
+    strategies_json TEXT,
+    trust_score REAL,
+    trust_conservative REAL,
+    trust_exploratory REAL,
+    trust_json TEXT,
+    trust_updated_at TEXT,
     sentiment_strategy_id TEXT,
     quant_strategy_id TEXT,
     sentiment_score REAL,
@@ -301,6 +315,38 @@ CREATE TABLE IF NOT EXISTS strategy_weights (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_strategy_weights_strategy
   ON strategy_weights(tenant_id, strategy_id);
+
+CREATE TABLE IF NOT EXISTS strategy_trust (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    horizon TEXT NOT NULL,
+    trust_score REAL NOT NULL,
+    trust_conservative REAL NOT NULL,
+    trust_exploratory REAL NOT NULL,
+    sample_size INTEGER NOT NULL,
+    effective_sample_size REAL NOT NULL,
+    calibration_score REAL NOT NULL,
+    stability_score REAL NOT NULL,
+    recency_score REAL NOT NULL,
+    brier REAL,
+    mean_confidence REAL,
+    realized_accuracy REAL,
+    mean_return REAL,
+    std_return REAL,
+    mean_drawdown REAL,
+    std_drawdown REAL,
+    evidence_start_at TEXT,
+    evidence_end_at TEXT,
+    computed_at TEXT NOT NULL,
+    params_json TEXT NOT NULL,
+    components_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(tenant_id, strategy_id, horizon)
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_trust_lookup
+  ON strategy_trust(tenant_id, strategy_id, horizon, updated_at);
 """
 
 
@@ -407,8 +453,32 @@ class Repository:
             for col, ddl in (
                 ("track", "ALTER TABLE signals ADD COLUMN track TEXT NOT NULL DEFAULT 'unknown';"),
                 ("regime", "ALTER TABLE signals ADD COLUMN regime TEXT;"),
+                ("horizon", "ALTER TABLE signals ADD COLUMN horizon TEXT;"),
+                ("predicted_return", "ALTER TABLE signals ADD COLUMN predicted_return REAL NOT NULL DEFAULT 0.0;"),
+                ("trust_score", "ALTER TABLE signals ADD COLUMN trust_score REAL;"),
+                ("trust_conservative", "ALTER TABLE signals ADD COLUMN trust_conservative REAL;"),
+                ("trust_exploratory", "ALTER TABLE signals ADD COLUMN trust_exploratory REAL;"),
+                ("trust_json", "ALTER TABLE signals ADD COLUMN trust_json TEXT;"),
+                ("trust_updated_at", "ALTER TABLE signals ADD COLUMN trust_updated_at TEXT;"),
             ):
                 if sig_cols and col not in sig_cols:
+                    self.conn.execute(ddl)
+        except Exception:
+            pass
+
+        # consensus_signals additive columns (weights payloads + trust)
+        try:
+            cs_cols2 = {str(r["name"]) for r in self.conn.execute("PRAGMA table_info(consensus_signals)").fetchall()}
+            for col, ddl in (
+                ("weights_json", "ALTER TABLE consensus_signals ADD COLUMN weights_json TEXT;"),
+                ("strategies_json", "ALTER TABLE consensus_signals ADD COLUMN strategies_json TEXT;"),
+                ("trust_score", "ALTER TABLE consensus_signals ADD COLUMN trust_score REAL;"),
+                ("trust_conservative", "ALTER TABLE consensus_signals ADD COLUMN trust_conservative REAL;"),
+                ("trust_exploratory", "ALTER TABLE consensus_signals ADD COLUMN trust_exploratory REAL;"),
+                ("trust_json", "ALTER TABLE consensus_signals ADD COLUMN trust_json TEXT;"),
+                ("trust_updated_at", "ALTER TABLE consensus_signals ADD COLUMN trust_updated_at TEXT;"),
+            ):
+                if cs_cols2 and col not in cs_cols2:
                     self.conn.execute(ddl)
         except Exception:
             pass
@@ -584,6 +654,8 @@ class Repository:
         timestamp: datetime,
         direction: str,
         confidence: float,
+        horizon: str | None = None,
+        predicted_return: float | None = None,
         track: str,
         regime: str | None,
         tenant_id: str = "default",
@@ -595,25 +667,46 @@ class Repository:
         "signals" from the predictions table.
         """
         now = _isoz(datetime.now(timezone.utc))
+        cols = {str(r["name"]) for r in self.conn.execute("PRAGMA table_info(signals)").fetchall()}
+
+        insert_cols = [
+            "id",
+            "tenant_id",
+            "prediction_id",
+            "strategy_id",
+            "ticker",
+            "timestamp",
+            "direction",
+            "confidence",
+            "track",
+            "regime",
+            "created_at",
+        ]
+        values: list[Any] = [
+            f"sig_{prediction_id}",
+            tenant_id,
+            str(prediction_id),
+            str(strategy_id),
+            str(ticker),
+            _isoz(timestamp),
+            str(direction),
+            float(confidence),
+            str(track),
+            regime,
+            now,
+        ]
+
+        if "horizon" in cols:
+            insert_cols.insert(6, "horizon")
+            values.insert(6, str(horizon) if horizon is not None else None)
+        if "predicted_return" in cols:
+            insert_cols.append("predicted_return")
+            values.append(float(predicted_return) if predicted_return is not None else 0.0)
+
+        placeholders = ",".join(["?"] * len(insert_cols))
         self.conn.execute(
-            """
-            INSERT OR REPLACE INTO signals
-              (id, tenant_id, prediction_id, strategy_id, ticker, timestamp, direction, confidence, track, regime, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                f"sig_{prediction_id}",
-                tenant_id,
-                str(prediction_id),
-                str(strategy_id),
-                str(ticker),
-                _isoz(timestamp),
-                str(direction),
-                float(confidence),
-                str(track),
-                regime,
-                now,
-            ),
+            f"INSERT OR REPLACE INTO signals ({','.join(insert_cols)}) VALUES ({placeholders})",
+            tuple(values),
         )
 
     def upsert_strategy_weight(
@@ -675,40 +768,78 @@ class Repository:
         This is a pure write-through of the engine's consensus output, so the dashboard
         doesn't need to parse `predictions.feature_snapshot_json`.
         """
+        cols = {str(r["name"]) for r in self.conn.execute("PRAGMA table_info(consensus_signals)").fetchall()}
+
         total_weight = None
         if ws is not None and wq is not None:
             total_weight = float(ws) + float(wq)
 
-        participating = 2
+        strategies_payload: list[dict[str, Any]] = []
+        weights_payload: dict[str, float] = {}
+        if sentiment_strategy_id:
+            strategies_payload.append({"strategy_id": str(sentiment_strategy_id), "track": "sentiment", "score": sentiment_score})
+            if ws is not None:
+                weights_payload[str(sentiment_strategy_id)] = float(ws)
+        if quant_strategy_id:
+            strategies_payload.append({"strategy_id": str(quant_strategy_id), "track": "quant", "score": quant_score})
+            if wq is not None:
+                weights_payload[str(quant_strategy_id)] = float(wq)
+
+        insert_cols = [
+            "id",
+            "tenant_id",
+            "ticker",
+            "horizon",
+            "regime",
+            "direction",
+            "confidence",
+            "total_weight",
+            "participating_strategies",
+            "sentiment_strategy_id",
+            "quant_strategy_id",
+            "sentiment_score",
+            "quant_score",
+            "ws",
+            "wq",
+            "agreement_bonus",
+            "p_final",
+            "stability_score",
+            "created_at",
+        ]
+        values: list[Any] = [
+            f"cs_{prediction_id}",
+            tenant_id,
+            str(ticker),
+            str(horizon) if horizon is not None else None,
+            regime,
+            str(direction),
+            float(confidence),
+            float(total_weight) if total_weight is not None else None,
+            int(len(strategies_payload) or 0),
+            sentiment_strategy_id,
+            quant_strategy_id,
+            float(sentiment_score) if sentiment_score is not None else None,
+            float(quant_score) if quant_score is not None else None,
+            float(ws) if ws is not None else None,
+            float(wq) if wq is not None else None,
+            float(agreement_bonus) if agreement_bonus is not None else None,
+            float(p_final) if p_final is not None else None,
+            float(stability_score) if stability_score is not None else None,
+            _isoz(timestamp),
+        ]
+
+        # Optional richer payloads (used by TrustEngine + modern UI models).
+        if "weights_json" in cols and "weights_json" not in insert_cols:
+            insert_cols.append("weights_json")
+            values.append(json.dumps(weights_payload, sort_keys=True, separators=(",", ":")))
+        if "strategies_json" in cols and "strategies_json" not in insert_cols:
+            insert_cols.append("strategies_json")
+            values.append(json.dumps(strategies_payload, sort_keys=True, separators=(",", ":")))
+
+        placeholders = ",".join(["?"] * len(insert_cols))
         self.conn.execute(
-            """
-            INSERT OR REPLACE INTO consensus_signals
-              (id, tenant_id, ticker, horizon, regime, direction, confidence, total_weight, participating_strategies,
-               sentiment_strategy_id, quant_strategy_id, sentiment_score, quant_score,
-               ws, wq, agreement_bonus, p_final, stability_score, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                f"cs_{prediction_id}",
-                tenant_id,
-                str(ticker),
-                str(horizon) if horizon is not None else None,
-                regime,
-                str(direction),
-                float(confidence),
-                float(total_weight) if total_weight is not None else None,
-                int(participating),
-                sentiment_strategy_id,
-                quant_strategy_id,
-                float(sentiment_score) if sentiment_score is not None else None,
-                float(quant_score) if quant_score is not None else None,
-                float(ws) if ws is not None else None,
-                float(wq) if wq is not None else None,
-                float(agreement_bonus) if agreement_bonus is not None else None,
-                float(p_final) if p_final is not None else None,
-                float(stability_score) if stability_score is not None else None,
-                _isoz(timestamp),
-            ),
+            f"INSERT OR REPLACE INTO consensus_signals ({','.join(insert_cols)}) VALUES ({placeholders})",
+            tuple(values),
         )
 
     def persist_outcome(self, out: PredictionOutcome, tenant_id: str = "default") -> None:
@@ -949,4 +1080,101 @@ class Repository:
         self.conn.execute(
             "UPDATE strategies SET active = ? WHERE tenant_id = ? AND id = ?",
             (1 if active else 0, tenant_id, str(strategy_id)),
+        )
+
+    def get_prediction_outcomes(self, tenant_id: str = "default") -> list[dict]:
+        """Get all prediction outcomes for analytics."""
+        rows = self.conn.execute(
+            """
+            SELECT id, prediction_id, horizon, target_time, exit_price, actual_return, 
+                   return_pct, direction_correct, evaluated_at, exit_reason
+            FROM prediction_outcomes 
+            WHERE tenant_id = ?
+            ORDER BY evaluated_at DESC
+            """,
+            (tenant_id,),
+        ).fetchall()
+        
+        return [dict(row) for row in rows]
+
+    def get_signals(self, tenant_id: str = "default") -> list[dict]:
+        """Get all signals for analytics."""
+        rows = self.conn.execute(
+            """
+            SELECT id, prediction_id, ticker, strategy_id, horizon, timestamp, 
+                   direction, confidence, predicted_return
+            FROM signals 
+            WHERE tenant_id = ?
+            ORDER BY timestamp DESC
+            """,
+            (tenant_id,),
+        ).fetchall()
+        
+        return [dict(row) for row in rows]
+
+    def persist_strategy_performance(
+        self,
+        *,
+        strategy_id: str,
+        horizon: str,
+        score: float,
+        accuracy: float,
+        avg_return: float,
+        sample_size: int,
+        timestamp: datetime,
+        tenant_id: str = "default"
+    ) -> None:
+        """Persist strategy performance metrics."""
+        perf_id = f"perf_{strategy_id}_{horizon}_{timestamp.isoformat()}"
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO strategy_performance
+            (id, tenant_id, strategy_id, horizon, score, accuracy, avg_return, sample_size, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (perf_id, tenant_id, strategy_id, horizon, score, accuracy, avg_return, sample_size, _isoz(timestamp)),
+        )
+
+    def persist_strategy_weight(
+        self,
+        *,
+        strategy_id: str,
+        horizon: str,
+        weight: float,
+        timestamp: datetime,
+        tenant_id: str = "default"
+    ) -> None:
+        """Persist strategy weight."""
+        weight_id = f"weight_{strategy_id}_{horizon}_{timestamp.isoformat()}"
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO strategy_weights
+            (id, tenant_id, strategy_id, horizon, weight, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (weight_id, tenant_id, strategy_id, horizon, weight, _isoz(timestamp)),
+        )
+
+    def persist_promotion_event(
+        self,
+        *,
+        strategy_id: str,
+        horizon: str,
+        rank: int,
+        score: float,
+        win_rate: float,
+        stability: float,
+        weight: float,
+        timestamp: datetime,
+        tenant_id: str = "default"
+    ) -> None:
+        """Persist promotion event."""
+        promo_id = f"promo_{strategy_id}_{horizon}_{timestamp.isoformat()}"
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO promotion_events
+            (id, tenant_id, strategy_id, horizon, rank, score, win_rate, stability, weight, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (promo_id, tenant_id, strategy_id, horizon, rank, score, win_rate, stability, weight, _isoz(timestamp)),
         )

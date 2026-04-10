@@ -1,9 +1,4 @@
 from __future__ import annotations
-
-import asyncio
-import json
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from app.ingest.source_spec import SourceSpec
@@ -12,110 +7,84 @@ from app.ingest.fetch_context import FetchContext
 class YahooFinanceAdapter:
     async def fetch_raw(self, spec: SourceSpec, ctx: FetchContext) -> list[dict[str, Any]]:
         """
-        Backfill-only: fetch and persist yfinance company profiles once per ticker.
+        Historical-friendly market feed using yfinance OHLCV as synthetic "market events".
 
-        This adapter intentionally returns no ingest Events; it exists to populate a local
-        profile cache for tickers during historical runs.
+        Emits rows compatible with sources.yaml for `yahoo_market_watch`:
+          - symbol
+          - published_at
+          - headline
+          - open/high/low/close/volume (optional)
         """
-        await ctx.rate_limiter.throttle()
+        try:
+            import yfinance as yf  # type: ignore
+            import pandas as pd  # type: ignore
+        except Exception as e:
+            raise ImportError("yfinance is not installed; cannot use yahoo_finance adapter.") from e
 
-        mode = str((ctx.run_metadata or {}).get("mode") or "").strip().lower()
-        if mode != "backfill":
-            return []
+        symbols = spec.symbols if isinstance(spec.symbols, list) else ["SPY", "QQQ"]
+        start_dt = ctx.start_date or ctx.run_timestamp
+        end_dt = ctx.end_date or start_dt
+        if end_dt <= start_dt:
+            end_dt = start_dt
 
-        symbols = spec.symbols if isinstance(spec.symbols, list) else []
-        tickers = [str(s).strip().upper() for s in symbols if str(s).strip()]
-        if not tickers:
-            return []
+        # yfinance `end` is exclusive-ish; keep slices inclusive by adding a small buffer.
+        end_dt_fetch = end_dt
+        if hasattr(end_dt_fetch, "replace"):
+            end_dt_fetch = end_dt_fetch.replace(microsecond=0)
 
-        cache = ctx.cache_handle if isinstance(ctx.cache_handle, dict) else None
-        attempted: set[str] | None = None
-        if cache is not None:
-            attempted = cache.get("company_profiles_attempted")
-            if not isinstance(attempted, set):
-                attempted = set()
-                cache["company_profiles_attempted"] = attempted
+        interval = str((spec.options or {}).get("interval") or "1h").strip() or "1h"
 
-        out_dir = Path("data") / "company_profiles"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        async def _fetch_info(ticker: str) -> dict[str, Any] | None:
-            try:
-                import yfinance as yf  # type: ignore
-            except Exception as e:
-                raise ImportError("yfinance is not installed; cannot fetch company profiles.") from e
-
-            def _do() -> dict[str, Any]:
-                info = yf.Ticker(ticker).info
-                return info if isinstance(info, dict) else {}
-
-            info = await asyncio.to_thread(_do)
-            if not info:
-                return None
-
-            # Only keep the fields we explicitly care about (stable contract).
-            picked: dict[str, Any] = {
-                "shortName": info.get("shortName"),
-                "longName": info.get("longName"),
-                "website": info.get("website"),
-                "sector": info.get("sector"),
-                "industry": info.get("industry"),
-                "city": info.get("city"),
-                "country": info.get("country"),
-                "marketCap": info.get("marketCap"),
-                "sharesOutstanding": info.get("sharesOutstanding"),
-                "beta": info.get("beta"),
-                "52WeekChange": info.get("52WeekChange"),
-                "grossMargins": info.get("grossMargins"),
-                "operatingMargins": info.get("operatingMargins"),
-                "profitMargins": info.get("profitMargins"),
-            }
-            return picked
-
-        def _profile_path(ticker: str) -> Path:
-            safe_name = "".join([c if (c.isalnum() or c in {"-", "_", "."}) else "_" for c in ticker])
-            return out_dir / f"{safe_name}.json"
-
-        to_fetch: list[str] = []
-        for ticker in tickers:
-            if attempted is not None and ticker in attempted:
-                continue
-            if _profile_path(ticker).exists():
-                if attempted is not None:
-                    attempted.add(ticker)
-                continue
-            to_fetch.append(ticker)
-
-        sem = asyncio.Semaphore(4)
-
-        async def _fetch_and_write(ticker: str) -> None:
-            async with sem:
-                try:
-                    profile = await _fetch_info(ticker)
-                except Exception:
-                    if attempted is not None:
-                        attempted.add(ticker)
-                    return
-
-            if profile is None:
-                if attempted is not None:
-                    attempted.add(ticker)
-                return
-
-            payload = {
-                "ticker": ticker,
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-                "provider": "yfinance",
-                **profile,
-            }
-            _profile_path(ticker).write_text(
-                json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False),
-                encoding="utf-8",
+        try:
+            df = yf.download(
+                tickers=symbols,
+                start=start_dt,
+                end=end_dt_fetch,
+                interval=interval,
+                progress=False,
+                auto_adjust=False,
+                actions=False,
+                threads=False,
             )
-            if attempted is not None:
-                attempted.add(ticker)
+        except Exception:
+            return []
 
-        if to_fetch:
-            await asyncio.gather(*[_fetch_and_write(t) for t in to_fetch])
+        if df is None or getattr(df, "empty", True):
+            return []
 
-        return []
+        df = df.reset_index()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = ["_".join([str(x) for x in col if x]) for col in df.columns]
+
+        # Handle different date column names.
+        date_col = "Datetime" if "Datetime" in df.columns else ("Date" if "Date" in df.columns else None)
+        if date_col and date_col != "Datetime":
+            df["Datetime"] = df[date_col]
+
+        # Determine available symbols by column scanning (e.g. Close_SPY).
+        found_symbols: set[str] = set()
+        for col in df.columns:
+            if "_" not in col:
+                continue
+            head, tail = col.split("_", 1)
+            if head in {"Open", "High", "Low", "Close", "Volume", "Adj Close"} and tail:
+                found_symbols.add(tail)
+
+        results: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            ts = row.get("Datetime")
+            if ts is None:
+                continue
+            for sym in sorted(found_symbols):
+                close = row.get(f"Close_{sym}")
+                record: dict[str, Any] = {
+                    "symbol": sym,
+                    "published_at": ts,
+                    "headline": f"{sym} close {close}" if close is not None else f"{sym} market update",
+                }
+                for k in ("Open", "High", "Low", "Close", "Volume"):
+                    v = row.get(f"{k}_{sym}")
+                    if v is not None:
+                        record[k.lower()] = v
+                results.append(record)
+
+        return results

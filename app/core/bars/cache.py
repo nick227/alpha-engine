@@ -114,7 +114,13 @@ class BarsCache:
             if self._has_coverage(repo=repo, ticker=ticker, timeframe=tf, start=start_utc, end=end_utc):
                 return 0
 
-            bars: list[OHLCVBar] = self.provider.fetch_bars(timeframe=tf, ticker=str(ticker), start=start_utc, end=end_utc)
+            try:
+                bars: list[OHLCVBar] = self.provider.fetch_bars(
+                    timeframe=tf, ticker=str(ticker), start=start_utc, end=end_utc
+                )
+            except Exception:
+                # Never stall a replay due to transient provider errors; treat as "no new bars".
+                return 0
             if not bars:
                 return 0
 

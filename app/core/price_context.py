@@ -139,6 +139,12 @@ def build_price_context_for_event(
         elif minutes == 43200:
             ctx["return_30d"] = past_r
             ctx["future_return_30d"] = future_r
+        elif minutes == 10080:
+            ctx["return_7d"] = past_r
+            ctx["future_return_7d"] = future_r
+        elif minutes == 43200:
+            ctx["return_30d"] = past_r
+            ctx["future_return_30d"] = future_r
 
     # Short trend (5m lookback).
     if idx >= 5:

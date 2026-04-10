@@ -153,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     promote_man.add_argument("--timeframe", default="1d")
     promote_man.add_argument("--forecast_days", type=int, default=None)
     promote_man.add_argument("--regime", default=None)
-    promote_man.add_argument("--min-samples", type=int, default=10)
+    promote_man.add_argument("--min-samples", type=int, default=20)
     promote_man.add_argument("--min-total-forecast-days", type=int, default=0)
     promote_man.add_argument("--min-efficiency", type=float, default=0.1)
     promote_man.add_argument("--min-delta", type=float, default=0.01)
@@ -320,6 +320,14 @@ def main(argv: list[str] | None = None) -> int:
                     min_samples=int(args.min_samples),
                     min_total_forecast_days=int(args.min_total_forecast_days),
                 )
+                if bool(args.apply) and challenger is not None:
+                    try:
+                        s = int(challenger.get("samples") or 0)
+                    except Exception:
+                        s = 0
+                    if s < int(args.min_samples):
+                        print(f"{tk} gate_fail reason=champion_samples<{int(args.min_samples)} challenger={challenger.get('strategy_id')}")
+                        return 3
 
                 decision = decide_efficiency_champion(
                     incumbent=incumbent,

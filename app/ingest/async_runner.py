@@ -1,10 +1,9 @@
 from __future__ import annotations
 import asyncio
+import time
 from typing import Dict
 
 from app.ingest.key_manager import KeyManager
-from app.ingest.rate_limit import RateLimiter
-from app.ingest.fetch_context import FetchContext
 from app.ingest.extractor import Extractor
 from app.ingest.validator import validate_sources_yaml, validate_events
 from app.ingest.registry import resolve_adapter
@@ -13,50 +12,31 @@ from app.ingest.metrics import metrics_registry
 from app.ingest.dedupe import Deduper
 from app.ingest.event_store import EventStore
 from app.ingest.router import EventRouter
+from app.ingest.runner_core import build_ctx, safe_adapter_fetch
 
-# Global rate limiters cache to persist state across fetches in a long-running app
-_rate_limiters: dict[str, RateLimiter] = {}
 
-def get_limiter(provider: str) -> RateLimiter:
-    if provider not in _rate_limiters:
-        _rate_limiters[provider] = RateLimiter(provider)
-    return _rate_limiters[provider]
-
-async def _fetch_and_process(spec, key_manager: KeyManager, extractor: Extractor) -> list[Event]:
+async def _fetch_and_process(spec, key_manager: KeyManager, extractor: Extractor) -> tuple[list[Event], float, str | None, int]:
     adapter = resolve_adapter(spec.adapter)
     if not adapter:
-        print(f"Skipping unknown adapter: {spec.adapter}")
-        return []
-
-    provider = "unknown"
-    if "alpaca" in spec.adapter:
-        provider = "alpaca"
-    elif "reddit" in spec.adapter:
-        provider = "reddit"
-    elif "fred" in spec.adapter:
-        provider = "fred"
-    elif "yahoo" in spec.adapter:
-        provider = "yahoo"
-    else:
-        provider = spec.id
-
-    limiter = get_limiter(provider)
-    ctx = FetchContext(
-        provider=provider,
-        key_manager=key_manager,
-        rate_limiter=limiter,
-    )
+        print(f"[ingest] mode=live source={spec.id} adapter={spec.adapter} error=unknown_adapter")
+        return [], 0.0, "unknown_adapter", 0
 
     try:
-        raw_rows = await adapter.fetch_raw(spec, ctx)
+        ctx = build_ctx(
+            adapter_name=str(spec.adapter),
+            source_id=str(spec.id),
+            key_manager=key_manager,
+            mode="live",
+        )
+        t0 = time.perf_counter()
+        raw_rows = await safe_adapter_fetch(adapter, spec, ctx, timeout_s=10.0, retries=0)
         events = extractor.normalize_many(raw_rows, spec)
         valid_events = validate_events(events)
-        
-        return valid_events
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        return valid_events, latency_ms, None, len(raw_rows)
     except Exception as e:
-        print(f"Error fetching from {spec.id} using {spec.adapter}: {e}")
-        metrics_registry.record_error(spec.id)
-        return []
+        print(f"[ingest] mode=live source={spec.id} adapter={spec.adapter} error={type(e).__name__}:{e}")
+        return [], 0.0, "exception", 0
 
 async def fetch_all_sources_async(path: str = "config/sources.yaml") -> Dict[str, list[Event]]:
     specs = validate_sources_yaml(path)
@@ -68,11 +48,11 @@ async def fetch_all_sources_async(path: str = "config/sources.yaml") -> Dict[str
     store = EventStore()
     router = EventRouter()
 
-    tasks = []
+    tasks: list[tuple[object, asyncio.Task[tuple[list[Event], float, str | None, int]]]] = []
     for spec in specs:
         if not spec.enabled:
             continue
-        tasks.append((spec, _fetch_and_process(spec, key_manager, extractor)))
+        tasks.append((spec, asyncio.create_task(_fetch_and_process(spec, key_manager, extractor))))
 
     # Gather tasks
     gather_results = await asyncio.gather(*(t[1] for t in tasks), return_exceptions=True)
@@ -86,7 +66,10 @@ async def fetch_all_sources_async(path: str = "config/sources.yaml") -> Dict[str
             metrics_registry.record_error(spec.id)
             continue
             
-        events: list[Event] = result
+        events, latency_ms, err_kind, raw_rows_count = result
+        if err_kind is not None:
+            metrics_registry.record_error(spec.id)
+            continue
         
         # 1. Dedupe
         unique_events, dropped_count = deduper.process(events)
@@ -97,13 +80,41 @@ async def fetch_all_sources_async(path: str = "config/sources.yaml") -> Dict[str
             source_id=spec.id,
             new_events=len(unique_events),
             dropped=dropped_count,
-            latency_ms=10.0 # Placeholder latency tracking for now
+            latency_ms=float(latency_ms),
         )
 
-    # 3. Persistence
-    inserted_db = store.save_batch(all_unique_events)
-    print(f"Ingestion run complete. {len(all_unique_events)} unique, {inserted_db} new to DB.")
+        # 3. Per-source timing log (single line; safe under concurrency)
+        print(
+            f"[ingest] mode=live source={spec.id} adapter={spec.adapter} raw={raw_rows_count} "
+            f"valid={len(events)} unique={len(unique_events)} dropped={dropped_count} "
+            f"total_ms={latency_ms:.2f}"
+        )
 
-    # 4. Routing
+    # 4. Persistence
+    inserted_db = store.save_batch(all_unique_events)
+    print(f"[ingest] mode=live complete unique={len(all_unique_events)} inserted={inserted_db}")
+
+    # 5. Routing
     routed = router.route(all_unique_events)
     return routed
+
+
+def main() -> int:
+    path = "config/sources.yaml"
+    try:
+        import os
+
+        path = str(os.getenv("ALPHA_SOURCES_YAML", path) or path)
+    except Exception:
+        pass
+
+    try:
+        asyncio.run(fetch_all_sources_async(path))
+        return 0
+    except KeyboardInterrupt:
+        print("[ingest] mode=live interrupted")
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
