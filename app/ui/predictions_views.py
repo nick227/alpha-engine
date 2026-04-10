@@ -11,6 +11,7 @@ def _consensus_row(consensus) -> dict:
         "ticker": consensus.ticker,
         "direction": f"{arrow(consensus.direction)} {consensus.direction}",
         "confidence": f"{consensus.confidence:.0%}",
+        "trust": f"{consensus.trust:.0%}" if getattr(consensus, "trust", None) is not None else "â€”",
         "strategies": consensus.participating_strategies,
         "regime": consensus.active_regime or "—",
     }
@@ -126,6 +127,7 @@ def predictions_views_main(
                         "ticker": s.ticker,
                         "direction": s.direction,
                         "confidence": s.confidence,
+                        "trust": s.trust,
                         "strategy": s.strategy,
                         "regime": s.regime,
                     }

@@ -3,15 +3,15 @@ import asyncio
 import hashlib
 import json
 import os
-import random
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from app.ingest.key_manager import KeyManager
-from app.ingest.fetch_context import FetchContext
 from app.ingest.extractor import Extractor
 from app.ingest.validator import validate_sources_yaml, validate_events_with_reasons
 from app.ingest.registry import resolve_adapter
@@ -19,25 +19,211 @@ from app.ingest.event_model import Event
 from app.ingest.dedupe import Deduper
 from app.ingest.event_store import EventStore
 from app.ingest.router import EventRouter
-from app.ingest.fetchers import fetch_rows
 from app.core.types import RawEvent
 from app.core.repository import Repository
 from app.core.time_utils import to_utc_datetime, normalize_timestamp
-from app.core.bars import BarsCache, bar_window_for_events, build_bars_provider
+from app.core.bars import BarsCache, bar_window_for_events, build_bars_provider, FallbackBarsProvider
 from app.core.price_context import build_price_contexts_from_bars_multi
 from app.core.target_stocks import get_target_stocks, get_target_stocks_registry
-from app.db.repository import AlphaRepository
 from app.core.macro.config import load_macro_series_specs
 from app.core.macro.yfinance_series import fetch_and_build_macro_features
 from app.core.company_profiles.yfinance_profiles import ensure_yfinance_company_profiles
-from app.engine.runner import run_pipeline
-from app.engine.continuous_learning import ContinuousLearner
-from app.engine.strategy_registry import StrategyRegistry
-from app.engine.promotion_engine import PromotionEngine
-from app.engine.genetic_optimizer import GeneticOptimizer
+from app.ingest.replay_engine import ReplayEngine
+from app.ingest.runner_core import provider_for_adapter
+from app.ingest.runner_core import build_ctx
+from app.ingest.runner_core import safe_adapter_fetch
 
 BACKFILL_TENANT_ID = "backfill"
-DEFAULT_HORIZONS_MINUTES = (1, 5, 15, 60, 240, 1440)
+DEFAULT_HORIZONS_MINUTES = (1, 5, 15, 60, 240, 1440, 10080, 43200)
+_TICKER_TOKEN_RE = re.compile(r"(?:(?<=\$)|\b)([A-Z]{1,5}(?:\.[A-Z])?)(?=\b)")
+_PAREN_TICKER_RE = re.compile(r"\(([A-Z]{1,5}(?:\.[A-Z])?)\)")
+_COMMON_FALSE_TICKERS = {
+    "A",
+    "I",
+    "AN",
+    "AND",
+    "ARE",
+    "AS",
+    "AT",
+    "BE",
+    "BY",
+    "CEO",
+    "CFO",
+    "COO",
+    "CPI",
+    "BUY",
+    "CALL",
+    "DAY",
+    "DAYS",
+    "EPS",
+    "ETF",
+    "EU",
+    "FED",
+    "FOR",
+    "GDP",
+    "IN",
+    "IPO",
+    "IS",
+    "IT",
+    "ITS",
+    "HOLD",
+    "LLC",
+    "NYSE",
+    "NASDAQ",
+    "OF",
+    "ON",
+    "OR",
+    "SEC",
+    "SELL",
+    "THE",
+    "TO",
+    "UK",
+    "US",
+    "USA",
+    "WSB",
+    "YOY",
+    "YTD",
+    "PUT",
+}
+
+
+def _event_primary_type(tags: list[str] | None) -> str | None:
+    if not tags:
+        return None
+    known = {
+        "news",
+        "market",
+        "macro",
+        "social",
+        "crowd",
+        "market_structure",
+        "volatility_event",
+        "positioning",
+        "regime",
+        "sentiment_index",
+        "intermarket_regime",
+        "momentum",
+        "bundle",
+    }
+    for t in tags:
+        s = str(t or "").strip().lower()
+        if s in known:
+            return s
+    return None
+
+
+def _unique_preserve_order(items: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for x in items:
+        if x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return out
+
+
+def _parse_ticker_candidates(value: str | None) -> list[str]:
+    """
+    Parse possible tickers from a stored ticker field.
+
+    Handles cases like:
+      - "NVDA"
+      - "NVDA, AAPL"
+      - "['NVDA', 'AAPL']" (common when adapters return lists)
+      - "Apple (AAPL)"
+    """
+    if value is None:
+        return []
+    s = str(value).strip().upper()
+    if not s:
+        return []
+
+    out: list[str] = []
+
+    # Parenthetical tickers often appear as "Company (TICKER)".
+    out.extend([m.group(1) for m in _PAREN_TICKER_RE.finditer(s)])
+
+    # General tokens (also catches "$NVDA").
+    out.extend([m.group(1) for m in _TICKER_TOKEN_RE.finditer(s)])
+
+    cleaned: list[str] = []
+    for t in out:
+        tt = str(t).strip().upper()
+        if not tt or tt in _COMMON_FALSE_TICKERS:
+            continue
+        cleaned.append(tt)
+    return _unique_preserve_order(cleaned)
+
+
+def _infer_tickers_from_text(
+    text: str | None,
+    *,
+    allowed: set[str],
+    company_name_map: dict[str, str] | None = None,
+) -> list[str]:
+    if not text or not str(text).strip():
+        return []
+    s = str(text)
+    candidates = _parse_ticker_candidates(s)
+    if candidates:
+        in_allowed = [t for t in candidates if t in allowed]
+        if in_allowed:
+            return _unique_preserve_order(in_allowed)
+
+    # Company name fallback (best-effort): match shortName/longName against text.
+    if company_name_map:
+        s_low = s.lower()
+        hits: list[str] = []
+        for name_low, ticker in company_name_map.items():
+            try:
+                if name_low and name_low in s_low:
+                    hits.append(ticker)
+            except Exception:
+                continue
+        hits = [t for t in hits if t in allowed]
+        if hits:
+            return _unique_preserve_order(hits)
+
+    return []
+
+
+def _load_company_name_map_for_allowed(
+    allowed: set[str],
+    *,
+    profiles_dir: str | Path = Path("data") / "company_profiles",
+) -> dict[str, str]:
+    """
+    Build a {lower(company_name): TICKER} mapping from yfinance profiles (best-effort).
+    """
+    out: dict[str, str] = {}
+    try:
+        base = Path(profiles_dir)
+        if not base.exists():
+            return out
+        for t in allowed:
+            p = base / f"{str(t).strip().upper()}.json"
+            if not p.exists():
+                continue
+            try:
+                payload = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            for k in ("shortName", "longName"):
+                v = payload.get(k)
+                if not v:
+                    continue
+                name = str(v).strip()
+                if len(name) < 4:
+                    continue
+                out[name.lower()] = str(t).strip().upper()
+    except Exception:
+        return out
+    return out
+
+
+def _isoz(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _spec_hash_for(store: EventStore, spec: Any) -> str:
@@ -62,24 +248,22 @@ class ReplaySummary:
     replayed: int = 0
     deferred: int = 0
     deferred_reasons: Counter[str] = field(default_factory=Counter)
+    tradeable_seen: int = 0
+    no_ticker_tradeable: int = 0
 
     def merge(self, other: "ReplaySummary") -> None:
         self.replayed += int(other.replayed or 0)
         self.deferred += int(other.deferred or 0)
         self.deferred_reasons.update(other.deferred_reasons or {})
+        self.tradeable_seen += int(getattr(other, "tradeable_seen", 0) or 0)
+        self.no_ticker_tradeable += int(getattr(other, "no_ticker_tradeable", 0) or 0)
 
 
-def _provider_group(spec) -> str:
-    adapter = str(getattr(spec, "adapter", "") or "")
-    if "alpaca" in adapter:
-        return "alpaca"
-    if "reddit" in adapter:
-        return "reddit"
-    if "fred" in adapter:
-        return "fred"
-    if "yahoo" in adapter:
-        return "yahoo"
-    return str(getattr(spec, "id", "unknown") or "unknown")
+def _provider_for_spec(spec) -> str:
+    return provider_for_adapter(
+        str(getattr(spec, "adapter", "") or ""),
+        source_id=str(getattr(spec, "id", "unknown") or "unknown"),
+    )
 
 
 def _running_ttl_s_for_provider(provider: str) -> int:
@@ -160,25 +344,26 @@ async def _fetch_slice(
     except Exception:
         pass
 
-    adapter = None
-    if getattr(spec, "fetch", None) is None:
-        adapter = resolve_adapter(spec.adapter)
-        if not adapter:
-            return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error="adapter_not_found", provider=_provider_group(spec))
+    adapter = resolve_adapter(spec.adapter)
+    if not adapter:
+        return SliceFetchResult(
+            source_id=str(spec.id),
+            events=[],
+            ok=False,
+            error="adapter_not_found",
+            provider=_provider_for_spec(spec),
+        )
 
-    from app.ingest.async_runner import get_limiter
-    provider = _provider_group(spec)
-    limiter = get_limiter(provider)
-    
-    ctx = FetchContext(
-        provider=provider,
+    ctx = build_ctx(
+        adapter_name=str(getattr(spec, "adapter", "") or ""),
+        source_id=str(getattr(spec, "id", "unknown") or "unknown"),
         key_manager=key_manager,
-        rate_limiter=limiter,
-        start_date=start_date.isoformat(),
-        end_date=end_date.isoformat(),
         cache_handle=cache_handle,
-        run_metadata={"mode": "backfill", "source_id": spec.id},
+        mode="backfill",
+        start_date=start_date,
+        end_date=end_date,
     )
+    provider = str(getattr(ctx, "provider", "") or _provider_for_spec(spec))
 
     try:
         t0 = time.perf_counter()
@@ -218,11 +403,8 @@ async def _fetch_slice(
             raw_rows = request_cache[request_hash]
             cache_hit = True
         else:
-            if getattr(spec, "fetch", None) is not None:
-                raw_rows = await fetch_rows(spec, ctx)
-            else:
-                raw_rows = await adapter.fetch_raw(spec, ctx)  # type: ignore[union-attr]
-            if request_cache is not None and isinstance(raw_rows, list):
+            raw_rows = await safe_adapter_fetch(adapter, spec, ctx, timeout_s=30.0, retries=0)
+            if request_cache is not None:
                 request_cache[request_hash] = raw_rows
         dt_fetch = time.perf_counter() - t0
 
@@ -257,7 +439,10 @@ async def _fetch_slice(
         dropped_out_of_bounds = max(0, len(valid_events) - len(bounded))
         
         dt_total = time.perf_counter() - t0
-        print(f"[{datetime.now(timezone.utc).isoformat()}] {spec.id}: {dt_total:.2f}s (fetch: {dt_fetch:.2f}s), {len(bounded)} events")
+        print(
+            f"[ingest] mode=backfill source={spec.id} adapter={spec.adapter} raw={len(raw_rows_list)} "
+            f"bounded={len(bounded)} fetch_ms={dt_fetch*1000.0:.2f} total_ms={dt_total*1000.0:.2f}"
+        )
         return SliceFetchResult(
             source_id=str(spec.id),
             events=bounded,
@@ -277,8 +462,8 @@ async def _fetch_slice(
             dropped_out_of_bounds=int(dropped_out_of_bounds),
         )
     except Exception as e:
-        print(f"Backfill Error [{spec.id}]: {e}")
-        return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error=str(e), provider=_provider_group(spec))
+        print(f"[ingest] mode=backfill source={spec.id} adapter={getattr(spec, 'adapter', '')} error={type(e).__name__}:{e}")
+        return SliceFetchResult(source_id=str(spec.id), events=[], ok=False, error=str(e), provider=_provider_for_spec(spec))
 
 class BackfillRunner:
     def __init__(self, db_path: str = "data/alpha.db", *, bars_provider: str | None = None):
@@ -288,25 +473,7 @@ class BackfillRunner:
         self.extractor = Extractor()
         self._fetch_cache: dict[str, Any] = {}
         self.bars_provider_name = bars_provider or os.getenv("HISTORICAL_BARS_PROVIDER", "").strip() or None
-        
-        # Self-learning components
-        self.learner = ContinuousLearner()
-        self.registry = StrategyRegistry()
-        self._promotion_engine: PromotionEngine | None = None
-        self._rng = random.Random()
-        self.genetic_optimizer = GeneticOptimizer(self.registry, rng=self._rng)
-
-    def _get_promotion_engine(self) -> PromotionEngine:
-        if self._promotion_engine is None:
-            # Important: core.Repository may have already ensured schema for this DB.
-            # Create AlphaRepository lazily to avoid schema conflicts on fresh DBs.
-            self._promotion_engine = PromotionEngine(repository=AlphaRepository(db_path=str(self.store.db_path)))
-        return self._promotion_engine
-
-    def _init_determinism(self, *, seed_material: str) -> None:
-        digest = hashlib.sha1(seed_material.encode("utf-8")).hexdigest()
-        seed = int(digest[:16], 16)
-        self._rng.seed(seed)
+        self.replay_engine = ReplayEngine(db_path=str(self.store.db_path))
 
     def _macro_snapshot_for_slice(self, *, asof: datetime) -> dict[str, float]:
         """
@@ -333,7 +500,14 @@ class BackfillRunner:
 
             for candidate in candidates:
                 try:
-                    provider = build_bars_provider(candidate)
+                    primary = build_bars_provider(candidate)
+                    fallbacks: list[Any] = [primary]
+                    if str(candidate).lower() != "yfinance":
+                        try:
+                            fallbacks.append(build_bars_provider("yfinance"))
+                        except Exception:
+                            pass
+                    provider = FallbackBarsProvider(fallbacks) if len(fallbacks) > 1 else primary
                     self.bars_provider_name = candidate
                     return BarsCache(db_path=str(self.store.db_path), provider=provider, tenant_id=BACKFILL_TENANT_ID)
                 except Exception:
@@ -344,7 +518,14 @@ class BackfillRunner:
                 if str(os.getenv("ALLOW_MOCK_BARS", "false")).lower() != "true":
                     raise RuntimeError("Mock bars provider requested but ALLOW_MOCK_BARS is false. Replay rejected for economic safety.")
 
-            provider = build_bars_provider(self.bars_provider_name)
+            primary = build_bars_provider(self.bars_provider_name)
+            fallbacks2: list[Any] = [primary]
+            if str(self.bars_provider_name).lower() != "yfinance":
+                try:
+                    fallbacks2.append(build_bars_provider("yfinance"))
+                except Exception:
+                    pass
+            provider = FallbackBarsProvider(fallbacks2) if len(fallbacks2) > 1 else primary
         except Exception as e:
             print(f"[BackfillRunner] Bars provider '{self.bars_provider_name}' unavailable: {e}")
             return None
@@ -384,38 +565,7 @@ class BackfillRunner:
         zero_insert_streak = 0
         try:
             specs = validate_sources_yaml()
-
-            # Optimization: if a custom bundle has no rows anywhere in the requested range,
-            # skip it for the whole run to avoid per-slice overhead.
-            effective_specs = []
-            for spec in specs:
-                if not getattr(spec, "enabled", True):
-                    continue
-                if str(getattr(spec, "adapter", "")).strip().lower() == "custom_bundle":
-                    try:
-                        ctx = FetchContext(
-                            provider=_provider_group(spec),
-                            key_manager=self.key_manager,
-                            rate_limiter=None,
-                            start_date=start_time.isoformat(),
-                            end_date=end_time.isoformat(),
-                            cache_handle=self._fetch_cache,
-                            run_metadata={"mode": "backfill", "source_id": spec.id, "prefilter": True},
-                        )
-                        if getattr(spec, "fetch", None) is not None:
-                            raw_rows = await fetch_rows(spec, ctx)
-                        else:
-                            adapter = resolve_adapter(spec.adapter)
-                            if adapter is None:
-                                continue
-                            raw_rows = await adapter.fetch_raw(spec, ctx)
-                        if not raw_rows:
-                            continue
-                    except Exception:
-                        # If prefilter fails, keep the source enabled (safer than skipping).
-                        pass
-                effective_specs.append(spec)
-            specs = effective_specs
+            specs = [s for s in specs if getattr(s, "enabled", True)]
             try:
                 specs = sorted(specs, key=lambda s: (int(getattr(s, "priority", 9999)), str(getattr(s, "id", ""))))
             except Exception:
@@ -425,7 +575,7 @@ class BackfillRunner:
             current_start = start_time
             while current_start < end_time:
                 current_end = min(current_start + timedelta(days=batch_size_days), end_time)
-                print(f"[{datetime.now(timezone.utc).isoformat()}] Fetching slice: {current_start.date()} to {current_end.date()}")
+                print(f"[ingest] mode=backfill slice={current_start.date()}..{current_end.date()}")
                 
                 t_slice_start = time.perf_counter()
                 slice_start_ts = normalize_timestamp(current_start)
@@ -452,7 +602,7 @@ class BackfillRunner:
                                     start_ts=slice_start_ts,
                                     end_ts=slice_end_ts,
                                     spec_hash=spec_hash,
-                                    provider=_provider_group(spec),
+                                    provider=_provider_for_spec(spec),
                                     ok=True,
                                     fetched_count=0,
                                     emitted_count=0,
@@ -486,7 +636,7 @@ class BackfillRunner:
                                     start_ts=slice_start_ts,
                                     end_ts=slice_end_ts,
                                     spec_hash=spec_hash,
-                                    provider=_provider_group(spec),
+                                    provider=_provider_for_spec(spec),
                                     ok=True,
                                     fetched_count=0,
                                     emitted_count=0,
@@ -498,7 +648,7 @@ class BackfillRunner:
 
                         # In-progress lock: if another worker is already fetching this window, skip.
                         try:
-                            provider = _provider_group(spec)
+                            provider = _provider_for_spec(spec)
                             if not self.store.begin_ingest_window(
                                 source_id=sid,
                                 start_ts=slice_start_ts,
@@ -515,7 +665,7 @@ class BackfillRunner:
                         # Force-refetch path: ignore ingest_runs/slice markers/existing-events checks, but still lock.
                         spec_hash = _spec_hash_for(self.store, spec)
                         try:
-                            provider = _provider_group(spec)
+                            provider = _provider_for_spec(spec)
                             if not self.store.begin_ingest_window(
                                 source_id=sid,
                                 start_ts=slice_start_ts,
@@ -564,6 +714,30 @@ class BackfillRunner:
                 inserted = self.store.save_batch(unique_events)
                 db_skipped = max(0, len(unique_events) - inserted)
                 dt_store = time.perf_counter() - t_store_start
+
+                # Coverage metrics: how dense/usable is this slice?
+                try:
+                    active_sources = {
+                        str(r.source_id)
+                        for r in results
+                        if isinstance(r, SliceFetchResult) and bool(r.ok) and int(len(r.events or [])) > 0
+                    }
+                except Exception:
+                    active_sources = set()
+                try:
+                    allowed = set(get_target_stocks(asof=current_end))
+                except Exception:
+                    allowed = set()
+                tickers_seen: set[str] = set()
+                for e in unique_events:
+                    for t in _parse_ticker_candidates(getattr(e, "ticker", None)):
+                        if not allowed or t in allowed:
+                            tickers_seen.add(t)
+                print(
+                    f"[coverage] slice={current_start.date()}..{current_end.date()} "
+                    f"sources_active={len(active_sources)} unique={len(unique_events)} inserted={inserted} "
+                    f"tickers={len(tickers_seen)} existing={existing_in_slice} db_skipped={db_skipped}"
+                )
 
                 # Per-source duplicate counts (after dedupe).
                 pre_counts: dict[str, int] = {}
@@ -670,7 +844,7 @@ class BackfillRunner:
                                 start_ts=slice_start_ts,
                                 end_ts=slice_end_ts,
                                 spec_hash=spec_hash,
-                                provider=str(r.provider or _provider_group(spec_obj) if spec_obj is not None else ""),
+                                provider=str(r.provider or (_provider_for_spec(spec_obj) if spec_obj is not None else "")),
                                 ok=bool(ok_override),
                                 fetched_count=int(r.raw_rows_count or 0),
                                 emitted_count=int(emitted),
@@ -759,6 +933,57 @@ class BackfillRunner:
                     top = replay_summary.deferred_reasons.most_common(6)
                     reasons_str = ", ".join([f"{k}={v}" for k, v in top])
                     print(f"Deferred reasons (top {len(top)}): {reasons_str}")
+
+                # Hard quality gates to prevent "fake learning" runs.
+                # These gates intentionally fail fast when the backfill is too sparse to train on.
+                if fail_fast:
+                    start_ts = normalize_timestamp(start_time)
+                    end_ts = normalize_timestamp(end_time)
+                    days = max(1.0, (to_utc_datetime(end_time) - to_utc_datetime(start_time)).total_seconds() / 86400.0)
+
+                    total_events = self.store.count_events_in_half_open_range(start_ts=start_ts, end_ts=end_ts)
+                    events_per_day = float(total_events) / float(days)
+                    sources_active = self.store.count_active_sources_in_half_open_range(start_ts=start_ts, end_ts=end_ts)
+
+                    tradeable = int(replay_summary.tradeable_seen or 0)
+                    no_ticker = int(replay_summary.no_ticker_tradeable or 0)
+                    no_ticker_pct = (float(no_ticker) / float(max(1, tradeable))) * 100.0
+
+                    try:
+                        row = repo.conn.execute(
+                            """
+                            SELECT COUNT(1) AS n
+                            FROM predictions
+                            WHERE tenant_id = ?
+                              AND timestamp >= ?
+                              AND timestamp < ?
+                            """,
+                            (BACKFILL_TENANT_ID, _isoz(to_utc_datetime(start_time)), _isoz(to_utc_datetime(end_time))),
+                        ).fetchone()
+                        if not row:
+                            predictions_n = 0
+                        else:
+                            try:
+                                predictions_n = int(row["n"])  # sqlite3.Row
+                            except Exception:
+                                predictions_n = int(row[0] or 0)  # tuple
+                    except Exception:
+                        predictions_n = 0
+
+                    failures: list[str] = []
+                    if events_per_day < 50.0:
+                        failures.append(f"events/day={events_per_day:.1f} (< 50)")
+                    if sources_active < 3:
+                        failures.append(f"sources_active={sources_active} (< 3)")
+                    if no_ticker_pct > 20.0:
+                        failures.append(f"no_ticker={no_ticker_pct:.1f}% (> 20%) (tradeable_seen={tradeable})")
+                    if predictions_n < 20:
+                        failures.append(f"predictions={predictions_n} (< 20)")
+
+                    if failures:
+                        raise RuntimeError(
+                            "Backfill quality gates failed: " + "; ".join(failures) + f" (range={start_ts}..{end_ts})"
+                        )
         finally:
             repo.close()
 
@@ -861,8 +1086,10 @@ class BackfillRunner:
         if start_time >= end_time:
             return ReplaySummary()
 
-        seed_material = f"{BACKFILL_TENANT_ID}:{normalize_timestamp(start_time)}:{normalize_timestamp(end_time)}"
-        self._init_determinism(seed_material=seed_material)
+        # Stable run_id for this replay window (reruns should upsert, not duplicate rows).
+        run_id = hashlib.sha1(
+            f"{BACKFILL_TENANT_ID}|{normalize_timestamp(start_time)}|{normalize_timestamp(end_time)}".encode("utf-8")
+        ).hexdigest()[:16]
 
         start_ts = normalize_timestamp(start_time)
         end_ts = normalize_timestamp(end_time)
@@ -891,13 +1118,6 @@ class BackfillRunner:
             reg = None
 
         slice_days = 1
-        generation_counter = 1
-        try:
-            stored_gen = repo.get_kv("backfill_generation_counter", tenant_id=BACKFILL_TENANT_ID)
-            if stored_gen:
-                generation_counter = int(stored_gen)
-        except Exception:
-            generation_counter = 1
         
         processed_min: RawEvent | None = None
         processed_max: RawEvent | None = None
@@ -906,6 +1126,8 @@ class BackfillRunner:
         total_replayed = 0
         total_deferred = 0
         deferred_reasons: Counter[str] = Counter()
+        tradeable_seen = 0
+        no_ticker_tradeable = 0
 
         now_ref = datetime.now(timezone.utc).replace(microsecond=0)
         slice_start = start_time
@@ -944,19 +1166,51 @@ class BackfillRunner:
             # Target Stocks filtering: events may enrich, but do not define tickers.
             raw_events: list[RawEvent] = []
             macro_snapshot: dict[str, float] = self._macro_snapshot_for_slice(asof=slice_end)
+            try:
+                allowed = set(get_target_stocks(asof=slice_end))
+            except Exception:
+                allowed = set()
+            company_name_map: dict[str, str] | None = None
+            try:
+                cache_key = ("company_name_map", tuple(sorted(allowed)))
+                cached = self._fetch_cache.get(cache_key)
+                if isinstance(cached, dict):
+                    company_name_map = cached  # type: ignore[assignment]
+                else:
+                    company_name_map = _load_company_name_map_for_allowed(allowed)
+                    self._fetch_cache[cache_key] = company_name_map
+            except Exception:
+                company_name_map = None
+
+            skipped_nontradeable = 0
             for e in bounded:
                 evt_ts = to_utc_datetime(e.timestamp)
-                ticker = str(e.ticker).strip().upper() if e.ticker else None
-                if ticker:
-                    try:
-                        allowed = set(get_target_stocks(asof=evt_ts))
-                    except Exception:
-                        allowed = set()
-                    if ticker not in allowed:
+                tickers: list[str] = []
+                evt_type = _event_primary_type(getattr(e, "tags", None))
+                is_tradeable = bool(evt_type in {"news", "social", "market", "volatility_event", "positioning"})
+                if is_tradeable:
+                    tradeable_seen += 1
+
+                # Normalize any pre-extracted ticker field first (handles list-ish strings).
+                if e.ticker:
+                    candidates = _parse_ticker_candidates(str(e.ticker))
+                    tickers = [t for t in candidates if (not allowed or t in allowed)]
+
+                # Text-based inference fallback (WSB style "$NVDA", "Apple (AAPL)", etc.).
+                if not tickers:
+                    tickers = _infer_tickers_from_text(
+                        e.text,
+                        allowed=allowed,
+                        company_name_map=company_name_map,
+                    )
+
+                # If still untickered, drop clearly non-tradeable source types to avoid drowning replay.
+                if not tickers:
+                    if is_tradeable:
+                        no_ticker_tradeable += 1
+                    if evt_type and evt_type not in {"news", "social", "market", "volatility_event", "positioning"}:
+                        skipped_nontradeable += 1
                         continue
-                    tickers = [ticker]
-                else:
-                    tickers = []
 
                 raw_events.append(
                     RawEvent(
@@ -973,6 +1227,10 @@ class BackfillRunner:
             if not raw_events:
                 slice_start = slice_end
                 continue
+            if skipped_nontradeable:
+                print(
+                    f"[{datetime.now(timezone.utc).isoformat()}] Skipped {skipped_nontradeable} non-tradeable events (no ticker)."
+                )
 
             bars_cache = self._bars_cache()
             price_contexts: dict[str, dict] = {}
@@ -1006,7 +1264,12 @@ class BackfillRunner:
 
             try:
                 t_bars_start = time.perf_counter()
-                window = bar_window_for_events(event_times=[re.timestamp for re in raw_events])
+                # Lookahead must cover the largest horizon (30d) so outcomes can be resolved without lookahead bias.
+                window = bar_window_for_events(
+                    event_times=[re.timestamp for re in raw_events],
+                    lookback=timedelta(days=5),
+                    lookahead=timedelta(days=35),
+                )
 
                 # Ensure coverage.
                 #
@@ -1022,13 +1285,19 @@ class BackfillRunner:
 
                 # Important: for historical replays, policy windows should be relative to the slice time,
                 # not wall-clock "now", otherwise old data only fetches 1d bars and contexts will be missing.
-                bars_cache.ensure_policy(tickers=targets, start=window.start, end=window.end, now=slice_end)
+                #
+                # Also: never request bars beyond wall-clock now (providers may reject future ranges).
+                bars_end = min(window.end, now_ref)
+                if window.start >= bars_end:
+                    raise RuntimeError("bars_window_empty")
+
+                bars_cache.ensure_policy(tickers=targets, start=window.start, end=bars_end, now=slice_end)
 
                 # Fetch only the tickers we need to build contexts for.
                 bars_by_tf = {
-                    "1m": bars_cache.fetch_bars_df(timeframe="1m", tickers=tickers, start=window.start, end=window.end),
-                    "1h": bars_cache.fetch_bars_df(timeframe="1h", tickers=tickers, start=window.start, end=window.end),
-                    "1d": bars_cache.fetch_bars_df(timeframe="1d", tickers=tickers, start=window.start, end=window.end),
+                    "1m": bars_cache.fetch_bars_df(timeframe="1m", tickers=tickers, start=window.start, end=bars_end),
+                    "1h": bars_cache.fetch_bars_df(timeframe="1h", tickers=tickers, start=window.start, end=bars_end),
+                    "1d": bars_cache.fetch_bars_df(timeframe="1d", tickers=tickers, start=window.start, end=bars_end),
                 }
                 dt_bars = time.perf_counter() - t_bars_start
                 
@@ -1151,19 +1420,13 @@ class BackfillRunner:
             if processed_max is None or processable[-1].timestamp > processed_max.timestamp:
                 processed_max = processable[-1]
             
-            # Execute pipeline with learner components
+            # Replay: write raw/scored/mra + predictions/outcomes + read models (signals/consensus).
             t_pipeline_start = time.perf_counter()
-            run_pipeline(
+            self.replay_engine.replay_batch(
                 raw_events=processable,
                 price_contexts=price_contexts,
-                persist=True,
-                db_path=self.store.db_path,
-                mode_override="backfill",
-                learner=self.learner,
-                registry=self.registry,
-                promotion_engine=self._get_promotion_engine(),
-                genetic_optimizer=self.genetic_optimizer,
-                generation_counter=generation_counter
+                tenant_id=BACKFILL_TENANT_ID,
+                run_id=run_id,
             )
             dt_pipeline = time.perf_counter() - t_pipeline_start
             
@@ -1175,11 +1438,6 @@ class BackfillRunner:
             last_id = str(processable[-1].id or "")
             repo.set_kv("backfill_replay_cursor_ts", last_ts, tenant_id=BACKFILL_TENANT_ID)
             repo.set_kv("backfill_replay_cursor_id", last_id, tenant_id=BACKFILL_TENANT_ID)
-            repo.set_kv("backfill_generation_counter", str(generation_counter), tenant_id=BACKFILL_TENANT_ID)
-
-            # Increment generation every 10 chunks (placeholder policy).
-            if slice_idx % 10 == 0:
-                generation_counter += 1
             
             dt_chunk = time.perf_counter() - t_chunk_start
             print(f"[{datetime.now(timezone.utc).isoformat()}] Slice {slice_idx}: {len(processable)} replayed in {dt_chunk:.2f}s (pipeline: {dt_pipeline:.2f}s)")
@@ -1201,7 +1459,14 @@ class BackfillRunner:
                 repo.set_kv("backfill_replayed_max_id", str(new_max.id or ""), tenant_id=BACKFILL_TENANT_ID)
 
         print(f"[{datetime.now(timezone.utc).isoformat()}] Replay complete: {total_replayed} replayed, {total_deferred} deferred.")
-        return ReplaySummary(replayed=total_replayed, deferred=total_deferred, deferred_reasons=deferred_reasons)
+
+        return ReplaySummary(
+            replayed=total_replayed,
+            deferred=total_deferred,
+            deferred_reasons=deferred_reasons,
+            tradeable_seen=tradeable_seen,
+            no_ticker_tradeable=no_ticker_tradeable,
+        )
 
 if __name__ == "__main__":
     runner = BackfillRunner()

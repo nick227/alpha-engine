@@ -1,4 +1,4 @@
-# Proposal: Single Declarative Ingestion Mini-Pipeline (Replace Per-Adapter Logic)
+﻿# Proposal: Single Declarative Ingestion Mini-Pipeline (Replace Per-Adapter Logic)
 
 Date: 2026-04-09
 

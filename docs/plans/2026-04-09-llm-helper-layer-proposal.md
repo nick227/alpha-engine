@@ -1,4 +1,4 @@
-# LLM Helper Layer Proposal (Pipeline Enrichment + Company Touchpoints)
+﻿# LLM Helper Layer Proposal (Pipeline Enrichment + Company Touchpoints)
 
 Date: 2026-04-09
 

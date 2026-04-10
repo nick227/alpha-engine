@@ -199,6 +199,28 @@ class EventStore:
             ).fetchone()
             return int(row[0] or 0)
 
+    def count_events_in_half_open_range(self, *, start_ts: str, end_ts: str) -> int:
+        """
+        Returns count of events in [start_ts, end_ts).
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ?",
+                (str(start_ts), str(end_ts)),
+            ).fetchone()
+            return int(row[0] or 0)
+
+    def count_active_sources_in_half_open_range(self, *, start_ts: str, end_ts: str) -> int:
+        """
+        Returns distinct source count in [start_ts, end_ts).
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT source) FROM events WHERE timestamp >= ? AND timestamp < ?",
+                (str(start_ts), str(end_ts)),
+            ).fetchone()
+            return int(row[0] or 0)
+
     def count_events_for_source_in_range(
         self,
         *,

@@ -89,6 +89,7 @@ class PredictionOutcome:
     max_drawdown: float
     evaluated_at: datetime
     exit_reason: str = "horizon"
+    mode: str = "backtest"  # backtest | paper | live - keeps corpus clean
 
 
 @dataclass(slots=True)
