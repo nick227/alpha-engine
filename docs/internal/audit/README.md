@@ -23,3 +23,4 @@ Provide a baseline technical documentation set for auditors and developers revie
 
 ## Useful supporting pages
 - Schema map: `docs/internal/audit/schema-map.md`
+- LLM side-car verification: `docs/internal/audit/llm-sidecar-analyst-verification.md`

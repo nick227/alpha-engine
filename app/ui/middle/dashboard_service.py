@@ -231,6 +231,322 @@ class DashboardService:
             # Fallback to store-based ticker listing
             return self.store.list_tickers(tenant_id=tenant_id)
 
+    def list_paper_trades(
+        self,
+        *,
+        tenant_id: str = "default",
+        mode: str | None = "paper",
+        ticker: str | None = None,
+        strategy_id: str | None = None,
+        status: str | None = None,
+        since_iso: str | None = None,
+        limit: int = 250,
+    ) -> list[dict[str, Any]]:
+        rows = self.store.list_trades(
+            tenant_id=tenant_id,
+            mode=mode,
+            ticker=ticker,
+            strategy_id=strategy_id,
+            status=status,
+            since_iso=since_iso,
+            limit=limit,
+        )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            pnl_pct = None
+            try:
+                denom = float(r.entry_price) * float(r.quantity)
+                if r.pnl is not None and denom:
+                    pnl_pct = float(r.pnl) / denom
+            except Exception:
+                pnl_pct = None
+
+            out.append(
+                {
+                    "id": r.id,
+                    "timestamp": r.timestamp,
+                    "ticker": r.ticker,
+                    "direction": r.direction,
+                    "quantity": r.quantity,
+                    "entry_price": r.entry_price,
+                    "exit_price": r.exit_price,
+                    "pnl": r.pnl,
+                    "pnl_pct": pnl_pct,
+                    "status": r.status,
+                    "mode": r.mode,
+                    "strategy_id": r.strategy_id,
+                    "analysis": r.analysis,
+                    "llm_prediction": r.llm_prediction,
+                    "engine_decision": r.engine_decision,
+                    "llm_status": r.llm_status,
+                    "llm_agrees": r.llm_agrees,
+                }
+            )
+        return out
+
+    def list_paper_positions(
+        self,
+        *,
+        tenant_id: str = "default",
+        mode: str | None = "paper",
+        ticker: str | None = None,
+        price_timeframe: str = "1d",
+    ) -> list[dict[str, Any]]:
+        rows = self.store.list_positions(tenant_id=tenant_id, mode=mode, ticker=ticker)
+        tickers = sorted({r.ticker for r in rows})
+        last_prices = self.store.get_latest_close_prices(
+            tenant_id=tenant_id,
+            timeframe=price_timeframe,
+            tickers=tickers,
+        )
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            last = last_prices.get(r.ticker)
+            unreal = None
+            unreal_pct = None
+            if last is not None:
+                try:
+                    if str(r.direction).lower() == "short":
+                        unreal = float(r.quantity) * (float(r.average_entry_price) - float(last))
+                    else:
+                        unreal = float(r.quantity) * (float(last) - float(r.average_entry_price))
+                    denom = float(r.average_entry_price) * float(r.quantity)
+                    if denom:
+                        unreal_pct = float(unreal) / denom
+                except Exception:
+                    unreal = None
+                    unreal_pct = None
+
+            out.append(
+                {
+                    "ticker": r.ticker,
+                    "direction": r.direction,
+                    "quantity": r.quantity,
+                    "avg_entry": r.average_entry_price,
+                    "last_price": last,
+                    "unrealized_pnl": unreal,
+                    "unrealized_pnl_pct": unreal_pct,
+                    "mode": r.mode,
+                }
+            )
+        return out
+
+    def get_paper_overview(
+        self,
+        *,
+        tenant_id: str = "default",
+        mode: str | None = "paper",
+        ticker: str | None = None,
+        limit: int = 250,
+    ) -> dict[str, Any]:
+        trades = self.list_paper_trades(tenant_id=tenant_id, mode=mode, ticker=ticker, limit=limit)
+        closed = [t for t in trades if str(t.get("status", "")).upper() == "CLOSED" and t.get("pnl") is not None]
+        open_trades = [t for t in trades if str(t.get("status", "")).upper() != "CLOSED"]
+
+        realized = float(sum(float(t["pnl"]) for t in closed if t.get("pnl") is not None) or 0.0)
+        wins = len([t for t in closed if float(t.get("pnl") or 0.0) > 0.0])
+        win_rate = (wins / len(closed)) if closed else None
+
+        return {
+            "realized_pnl": realized,
+            "closed_trades": len(closed),
+            "open_trades": len(open_trades),
+            "win_rate": win_rate,
+        }
+
+    def get_ingest_run_summary(
+        self,
+        *,
+        start_ts: str | None = None,
+        end_ts: str | None = None,
+        source_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = self.store.summarize_ingest_runs(start_ts=start_ts, end_ts=end_ts, source_id=source_id)
+        return [
+            {
+                "source_id": r.source_id,
+                "windows": r.windows,
+                "complete": r.complete_windows,
+                "running": r.running_windows,
+                "failed": r.failed_windows,
+                "empty": r.empty_windows,
+                "retries": r.retries_total,
+                "fetched": r.fetched_rows,
+                "emitted": r.emitted_rows,
+                "skipped": r.skipped_windows,
+            }
+            for r in rows
+        ]
+
+    def get_recent_ingest_runs(
+        self,
+        *,
+        start_ts: str | None = None,
+        end_ts: str | None = None,
+        source_id: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        rows = self.store.list_recent_ingest_runs(
+            start_ts=start_ts, end_ts=end_ts, source_id=source_id, status=status, limit=limit
+        )
+        return [
+            {
+                "source_id": r.source_id,
+                "start_ts": r.start_ts,
+                "end_ts": r.end_ts,
+                "status": r.status,
+                "provider": r.provider,
+                "ok": r.ok,
+                "retry_count": r.retry_count,
+                "fetched_count": r.fetched_count,
+                "emitted_count": r.emitted_count,
+                "empty_count": r.empty_count,
+                "newest_event_ts": r.newest_event_ts,
+                "last_error": r.last_error,
+                "updated_at": r.updated_at,
+            }
+            for r in rows
+        ]
+
+    def get_backfill_horizons(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        rows = self.store.list_backfill_horizons(limit=limit)
+        return [
+            {
+                "source_id": r.source_id,
+                "spec_hash": r.spec_hash,
+                "backfilled_until_ts": r.backfilled_until_ts,
+                "updated_at": r.updated_at,
+            }
+            for r in rows
+        ]
+
+    def get_events_freshness(
+        self,
+        *,
+        start_ts: str | None = None,
+        end_ts: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        return self.store.summarize_events_freshness(start_ts=start_ts, end_ts=end_ts, limit=limit)
+
+    def get_coverage_month_counts(
+        self,
+        *,
+        dataset: str,
+        tenant_id: str = "default",
+        ticker: str | None = None,
+        timeframe: str = "1d",
+        source_id: str | None = None,
+        start_ym: str,
+        end_ym: str,
+    ) -> dict[str, int]:
+        ds = str(dataset).strip().lower()
+        if ds == "price_bars":
+            return self.store.monthly_counts_price_bars(
+                tenant_id=tenant_id, ticker=ticker, timeframe=timeframe, start_ym=start_ym, end_ym=end_ym
+            )
+        if ds == "events":
+            return self.store.monthly_counts_events(source_id=source_id, start_ym=start_ym, end_ym=end_ym)
+        if ds == "ingest_runs":
+            return self.store.monthly_counts_ingest_runs(source_id=source_id, start_ym=start_ym, end_ym=end_ym)
+        if ds in {"ml", "ml_7d", "ml_learning_rows"}:
+            return self.store.monthly_counts_ml_learning_rows(
+                tenant_id=tenant_id,
+                symbol=ticker,
+                horizon="7d",
+                labeled_only=True,
+                start_ym=start_ym,
+                end_ym=end_ym,
+            )
+        return {}
+
+    def list_ml_symbols(self, *, tenant_id: str = "backfill", horizon: str = "7d", limit: int = 200) -> list[str]:
+        return self.store.list_ml_symbols(tenant_id=tenant_id, horizon=horizon, limit=limit)
+
+    def get_ml_readiness_per_ticker(
+        self,
+        *,
+        tenant_id: str = "backfill",
+        horizon: str = "7d",
+        start_date: str,
+        end_date: str,
+        min_feature_coverage: float = 0.8,
+        symbol: str | None = None,
+        limit_symbols: int = 80,
+    ) -> list[dict[str, Any]]:
+        rows = self.store.summarize_ml_readiness_per_ticker(
+            tenant_id=tenant_id,
+            horizon=horizon,
+            start_date=start_date,
+            end_date=end_date,
+            min_feature_coverage=min_feature_coverage,
+            symbol_filter=symbol,
+            limit_symbols=limit_symbols,
+        )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            out.append(
+                {
+                    "symbol": r.symbol,
+                    "horizon": r.horizon,
+                    "train_rows_total": r.train_rows_total,
+                    "train_rows_labeled": r.train_rows_labeled,
+                    "label_null_rate": r.label_null_rate,
+                    "coverage_p10": r.coverage_p10,
+                    "coverage_median": r.coverage_median,
+                    "pct_cov_ge_min": r.pct_coverage_ge_min,
+                    "n_features_est": r.n_features_est,
+                    "min_rows_required": r.min_rows_required,
+                    "ready": r.ready,
+                    "top_blocker": r.top_blocker,
+                    "suggested_action": r.suggested_action,
+                    "suggested_action_kind": r.suggested_action_kind,
+                }
+            )
+        return out
+
+    def get_ml_dataset_state(
+        self,
+        *,
+        tenant_id: str = "backfill",
+        horizon: str = "7d",
+        start_date: str,
+        end_date: str,
+        symbol: str | None = None,
+    ) -> dict[str, int]:
+        return self.store.ml_dataset_state(
+            tenant_id=tenant_id, horizon=horizon, start_date=start_date, end_date=end_date, symbol=symbol
+        )
+
+    def get_ml_low_coverage_window(
+        self,
+        *,
+        tenant_id: str = "backfill",
+        symbol: str,
+        horizon: str = "7d",
+        start_date: str,
+        end_date: str,
+        min_feature_coverage: float = 0.8,
+    ) -> dict[str, Any]:
+        w = self.store.ml_low_coverage_window(
+            tenant_id=tenant_id,
+            symbol=symbol,
+            horizon=horizon,
+            start_date=start_date,
+            end_date=end_date,
+            min_feature_coverage=min_feature_coverage,
+        )
+        return {
+            "symbol": w.symbol,
+            "horizon": w.horizon,
+            "min_bad_date": w.min_bad_date,
+            "max_bad_date": w.max_bad_date,
+            "bad_rows": w.bad_rows,
+            "total_rows": w.total_rows,
+        }
+
     def get_target_stocks_panel(self, *, asof: str | None = None) -> dict:
         """
         UI helper: return Target Stocks metadata for display.

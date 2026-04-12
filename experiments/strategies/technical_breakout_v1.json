@@ -1,0 +1,20 @@
+{
+  "id": "technical-breakout-v1",
+  "name": "technical_breakout_v1",
+  "version": "v1",
+  "strategy_type": "technical_range_breakout_continuation",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "breakout_buffer": 0.0025,
+    "min_range_expansion": 1.15,
+    "min_volume_ratio": 1.2,
+    "horizon": "30d",
+    "deny_volatility_regimes": ["HIGH"],
+    "regime_gating": {
+      "deny_trend_strength": ["WEAK"],
+      "reason": "avoid breakouts in chop"
+    }
+  }
+}
+

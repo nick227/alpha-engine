@@ -1,0 +1,607 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Alpha Engine — Declarative Factor Configuration
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Schema overview:
+#   meta          — global quality controls applied during training
+#   groups        — factor families with relative importance weights
+#   horizon_sets  — explicit factor whitelist per horizon (overrides window guard)
+#   expand        — shorthand blocks that auto-generate factor families
+#   factors       — individual factor definitions
+#
+# Factor fields:
+#   name          unique key used in feature vectors and model weights
+#   source        price | fred | price_relative
+#   symbol        ticker to fetch; use "{ticker}" for the predicted stock
+#   benchmark     second ticker for price_relative source (e.g. SPY)
+#   series        FRED series ID when source=fred
+#   transform     see transform reference below
+#   window        lookback in trading days
+#   lag           calendar days subtracted from as_of before fetching
+#                 (use for FRED publication delays)
+#   category      group membership — must match a key in `groups`
+#   enabled       false = skip this factor entirely (fast toggle)
+#   winsorize     per-factor override of global winsorization (default true)
+#
+# Transform reference:
+#   return          log(close_t / close_{t-window})
+#   level           close_t  (raw value, standardized at train time)
+#   diff            close_t - close_{t-1}
+#   volatility      annualized rolling std of log returns over window
+#   zscore          (close_t - rolling_mean_window) / rolling_std_window
+#   percentile      rolling rank of close_t in window (0–1)
+#   atr_ratio       average_true_range_window / close_t
+#   range_expansion (high_t - low_t) / avg_daily_range_window
+#   rsi             RSI formula (default window=14)
+#   stochastic      %K = (close - rolling_low) / (rolling_high - rolling_low)
+#   ma_distance     (close_t - SMA_window) / SMA_window
+#   drawdown        (close_t - rolling_max_window) / rolling_max_window
+#   trend_slope     OLS slope of log_close over window, scaled by close
+#   volume_surge    close_volume_t / rolling_avg_volume_window
+#   dollar_volume_trend  OLS slope of (close * volume) over window
+#   relative_return stock_return_window - benchmark_return_window
+#   beta            rolling OLS beta of stock vs benchmark over window
+#
+# Horizon-window guard (automatic fallback when horizon_sets not defined):
+#   factor excluded when window > horizon_days * 6
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Global quality controls ───────────────────────────────────────────────
+meta:
+  min_coverage: 0.8          # minimum fraction of eligible factors that must return a value
+  max_corr: 0.92             # drop one of any pair with |corr| > this
+  min_weight: 0.01           # ignore factors whose abs(model weight) < this
+  allow_negative: true       # keep factors with negative learned weights
+  stability_window: 30       # days of forward data used to measure model stability
+
+# ── Factor families ───────────────────────────────────────────────────────
+# Weight is applied as a pre-fit feature scaler: higher weight = more influence.
+groups:
+  momentum:
+    weight: 1.0
+  volatility:
+    weight: 1.2
+  regime:
+    weight: 1.1
+  macro:
+    weight: 0.8
+  cross_asset:
+    weight: 0.9
+  volume:
+    weight: 0.7
+  mean_reversion:
+    weight: 0.9
+
+# ── Horizon-specific factor whitelists ────────────────────────────────────
+# When a horizon key matches, only listed factors are eligible.
+# Factors not in the whitelist are skipped (not counted toward coverage).
+# Delete a horizon key to fall back to the automatic window guard.
+horizon_sets:
+  1d:
+    - stock_r1
+    - stock_r3
+    - stock_r5
+    - stock_vol5d
+    - vix_level
+    - vix_change
+    - volume_surge
+    - zscore_5d
+    - rsi_14
+    - ma_distance_20
+    - atr_ratio
+    - stock_vs_spy_r5
+    - spy_r5
+    - range_expansion
+    - opt_iv_rank
+    - opt_gamma
+    - opt_put_call_ratio
+    - opt_iv_term_slope
+    - opt_iv_skew
+    - short_float
+    - short_volume
+
+  7d:
+    - stock_r5
+    - stock_r10
+    - stock_vol10d
+    - vix_level
+    - vix_percentile
+    - spy_trend_slope
+    - spy_drawdown
+    - stock_vs_spy_r5
+    - rolling_beta
+    - yield_spread
+    - tlt_return_5d
+    - btc_return_5d
+    - small_vs_large_r5
+    - qqq_r5
+    - volume_surge
+    - zscore_20d
+    - opt_iv_rank
+    - opt_gamma
+    - opt_put_call_ratio
+    - opt_iv_term_slope
+    - opt_iv_skew
+    - short_float
+    - short_volume
+
+  30d:
+    - stock_r20
+    - stock_vol20d
+    - spy_drawdown
+    - fedfunds_level
+    - yield_spread
+    - real_rates
+    - dxy_return_20d
+    - oil_r20
+    - gold_return_20d
+    - small_vs_large_r20
+    - growth_vs_value_r20
+    - vix_percentile
+    - unemployment
+    - opt_iv_rank
+    - opt_gamma
+    - opt_put_call_ratio
+    - opt_iv_term_slope
+    - opt_iv_skew
+    - short_float
+    - short_volume
+
+# ── Auto-expansion blocks ─────────────────────────────────────────────────
+# Each block generates multiple factor entries from a shared template.
+# Override any template field per-entry.
+expand:
+  - template:
+      source: price
+      symbol: "{ticker}"
+      enabled: true
+    entries:
+      # Price returns
+      - {name: stock_r1,  transform: return,     window: 1,  category: momentum}
+      - {name: stock_r3,  transform: return,     window: 3,  category: momentum}
+      - {name: stock_r5,  transform: return,     window: 5,  category: momentum}
+      - {name: stock_r10, transform: return,     window: 10, category: momentum}
+      - {name: stock_r20, transform: return,     window: 20, category: momentum}
+      # Realized volatility
+      - {name: stock_vol5d,  transform: volatility, window: 5,  category: volatility}
+      - {name: stock_vol10d, transform: volatility, window: 10, category: volatility}
+      - {name: stock_vol20d, transform: volatility, window: 20, category: volatility}
+      # Mean reversion signals
+      - {name: zscore_5d,     transform: zscore,    window: 5,  category: mean_reversion}
+      - {name: zscore_20d,    transform: zscore,    window: 20, category: mean_reversion}
+      - {name: ma_distance_20,transform: ma_distance, window: 20, category: mean_reversion}
+      - {name: rsi_14,        transform: rsi,       window: 14, category: mean_reversion}
+      - {name: stochastic_14, transform: stochastic, window: 14, category: mean_reversion}
+      - {name: drawdown_52w,  transform: drawdown,  window: 252, category: mean_reversion}
+      - {name: trend_slope_20, transform: trend_slope, window: 20, category: momentum}
+      # Price structure
+      - {name: atr_ratio,       transform: atr_ratio,       window: 14, category: volatility}
+      - {name: range_expansion, transform: range_expansion, window: 20, category: volatility}
+      # Volume / liquidity
+      - {name: volume_surge,       transform: volume_surge,         window: 20, category: volume}
+      - {name: dollar_vol_trend,   transform: dollar_volume_trend,  window: 20, category: volume}
+
+# ── Individual factor definitions ─────────────────────────────────────────
+factors:
+
+  # ── Market regime ─────────────────────────────────────────────────────
+  - name: vix_level
+    source: price
+    symbol: ^VIX
+    transform: level
+    window: 1
+    lag: 0
+    category: regime
+    enabled: true
+
+  - name: vix_change
+    source: price
+    symbol: ^VIX
+    transform: return
+    window: 1
+    lag: 0
+    category: regime
+    enabled: true
+
+  - name: vix_percentile
+    source: price
+    symbol: ^VIX
+    transform: percentile
+    window: 252
+    lag: 0
+    category: regime
+    enabled: true
+
+  - name: spy_trend_slope
+    source: price
+    symbol: SPY
+    transform: trend_slope
+    window: 20
+    lag: 0
+    category: regime
+    enabled: true
+
+  - name: spy_drawdown
+    source: price
+    symbol: SPY
+    transform: drawdown
+    window: 252
+    lag: 0
+    category: regime
+    enabled: true
+
+  # ── Relative strength ──────────────────────────────────────────────────
+  - name: stock_vs_spy_r5
+    source: price_relative
+    symbol: "{ticker}"
+    benchmark: SPY
+    transform: relative_return
+    window: 5
+    lag: 0
+    category: momentum
+    enabled: true
+
+  - name: rolling_beta
+    source: price_relative
+    symbol: "{ticker}"
+    benchmark: SPY
+    transform: beta
+    window: 60
+    lag: 0
+    category: momentum
+    enabled: true
+
+  # ── Cross-asset momentum ───────────────────────────────────────────────
+  - name: spy_r5
+    source: price
+    symbol: SPY
+    transform: return
+    window: 5
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: qqq_r5
+    source: price
+    symbol: QQQ
+    transform: return
+    window: 5
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: tlt_return_5d
+    source: price
+    symbol: TLT
+    transform: return
+    window: 5
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: oil_r5
+    source: price
+    symbol: CL=F
+    transform: return
+    window: 5
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: oil_r20
+    source: price
+    symbol: CL=F
+    transform: return
+    window: 20
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: gold_return_20d
+    source: price
+    symbol: GLD
+    transform: return
+    window: 20
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: dxy_return_20d
+    source: price
+    symbol: DX-Y.NYB
+    transform: return
+    window: 20
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: btc_return_5d
+    source: price
+    symbol: BTC-USD
+    transform: return
+    window: 5
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: small_vs_large_r5
+    source: price_relative
+    symbol: IWM
+    benchmark: SPY
+    transform: relative_return
+    window: 5
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: small_vs_large_r20
+    source: price_relative
+    symbol: IWM
+    benchmark: SPY
+    transform: relative_return
+    window: 20
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  - name: growth_vs_value_r20
+    source: price_relative
+    symbol: QQQ
+    benchmark: IWD
+    transform: relative_return
+    window: 20
+    lag: 0
+    category: cross_asset
+    enabled: true
+
+  # ── Macro / FRED ──────────────────────────────────────────────────────
+  - name: fedfunds_level
+    source: fred
+    series: FEDFUNDS
+    transform: level
+    window: 1
+    lag: 7
+    category: macro
+    enabled: true
+
+  - name: yield_spread
+    source: fred
+    series: T10Y2Y
+    transform: level
+    window: 1
+    lag: 1
+    category: macro
+    enabled: true
+
+  - name: real_rates
+    source: fred
+    series: DFII10
+    transform: level
+    window: 1
+    lag: 1
+    category: macro
+    enabled: true
+
+  - name: unemployment
+    source: fred
+    series: UNRATE
+    transform: level
+    window: 1
+    lag: 35
+    category: macro
+    enabled: true
+
+  # Credit spreads (risk appetite)
+  - name: hy_oas_level
+    source: fred
+    series: BAMLH0A0HYM2
+    transform: level
+    window: 1
+    lag: 1
+    category: macro
+    enabled: true
+
+  - name: ig_oas_level
+    source: fred
+    series: BAMLC0A0CM
+    transform: level
+    window: 1
+    lag: 1
+    category: macro
+    enabled: true
+
+  - name: hy_oas_change_5
+    source: fred
+    series: BAMLH0A0HYM2
+    transform: return
+    window: 5
+    lag: 1
+    category: macro
+    enabled: true
+
+  # Yield curve levels (macro regime)
+  - name: dgs10_level
+    source: fred
+    series: DGS10
+    transform: level
+    window: 1
+    lag: 1
+    category: macro
+    enabled: true
+
+  - name: dgs2_level
+    source: fred
+    series: DGS2
+    transform: level
+    window: 1
+    lag: 1
+    category: macro
+    enabled: true
+
+  # Inflation expectations
+  - name: breakeven_5y
+    source: fred
+    series: T5YIE
+    transform: level
+    window: 1
+    lag: 1
+    category: macro
+    enabled: true
+
+  # Labor / liquidity
+  - name: initial_claims
+    source: fred
+    series: ICSA
+    transform: level
+    window: 1
+    lag: 7
+    category: macro
+    enabled: true
+
+  - name: m2_level
+    source: fred
+    series: M2SL
+    transform: level
+    window: 1
+    lag: 14
+    category: macro
+    enabled: true
+
+  # ---------------------------------------------------------------------------
+  # Derived-series factors (OPTIONS / EARNINGS / SHORTS / INTERNALS)
+  #
+  # These read from synthetic tickers that must be loaded into `price_bars` via:
+  #   scripts/load_derived_series.py
+  #
+  # Keep disabled by default to avoid reducing feature coverage until dumps exist.
+  # ---------------------------------------------------------------------------
+
+  # Options / volatility layer
+  - name: opt_iv_level
+    source: price
+    symbol: "OPT:{ticker}:IV"
+    transform: level
+    window: 1
+    lag: 0
+    category: regime
+    enabled: false
+
+  - name: opt_iv_rank
+    source: price
+    symbol: "OPT:{ticker}:IV_RANK"
+    transform: level
+    window: 1
+    lag: 0
+    category: regime
+    enabled: true
+
+  - name: opt_gamma
+    source: price
+    symbol: "OPT:{ticker}:GAMMA"
+    transform: level
+    window: 1
+    lag: 0
+    category: regime
+    enabled: true
+
+  - name: opt_put_call_ratio
+    source: price
+    symbol: "OPT:{ticker}:PUT_CALL_RATIO"
+    transform: level
+    window: 1
+    lag: 0
+    category: regime
+    enabled: true
+
+  - name: opt_open_interest
+    source: price
+    symbol: "OPT:{ticker}:OI"
+    transform: level
+    window: 1
+    lag: 0
+    category: regime
+    enabled: false
+
+  - name: opt_options_volume
+    source: price
+    symbol: "OPT:{ticker}:VOLUME"
+    transform: level
+    window: 1
+    lag: 0
+    category: regime
+    enabled: false
+
+  - name: opt_iv_term_slope
+    source: price
+    symbol: "OPT:{ticker}:IV_TERM_SLOPE"
+    transform: level
+    window: 1
+    lag: 0
+    category: regime
+    enabled: true
+
+  - name: opt_iv_skew
+    source: price
+    symbol: "OPT:{ticker}:IV_SKEW"
+    transform: level
+    window: 1
+    lag: 0
+    category: regime
+    enabled: true
+
+  # Earnings / expectations
+  - name: earn_eps_surprise
+    source: price
+    symbol: "EARN:{ticker}:EPS_SURPRISE_PCT"
+    transform: level
+    window: 1
+    lag: 0
+    category: macro
+    enabled: false
+
+  - name: earn_est_rev_30d
+    source: price
+    symbol: "EARN:{ticker}:ESTIMATE_REVISION_30D"
+    transform: level
+    window: 1
+    lag: 0
+    category: macro
+    enabled: false
+
+  # Short interest / crowding
+  - name: short_float
+    source: price
+    symbol: "SHORT:{ticker}:SHORT_FLOAT"
+    transform: level
+    window: 1
+    lag: 0
+    category: macro
+    enabled: true
+
+  - name: short_days_to_cover
+    source: price
+    symbol: "SHORT:{ticker}:DAYS_TO_COVER"
+    transform: level
+    window: 1
+    lag: 0
+    category: macro
+    enabled: false
+
+  - name: short_volume
+    source: price
+    symbol: "SHORT:{ticker}:SHORT_VOLUME"
+    transform: level
+    window: 1
+    lag: 0
+    category: macro
+    enabled: true
+
+  # Market internals / breadth (market-level)
+  - name: breadth_nh_nl
+    source: price
+    symbol: "INT:NYSE:NH_NL"
+    transform: level
+    window: 1
+    lag: 0
+    category: macro
+    enabled: false

@@ -14,6 +14,7 @@ from app.core.types import RawEvent, StrategyConfig
 from app.engine.outcome_resolver import OutcomeWrite, resolve_outcome
 from app.engine.prediction_writer import PredictionWrite, upsert_prediction
 from app.engine.strategy_factory import build_strategy_instance
+from app.engine.regime_service import build_regime_context, decide_strategy_gate
 from app.read_models.consensus_writer import ConsensusWrite, upsert_consensus
 from app.read_models.signal_writer import SignalWrite, upsert_signal
 
@@ -487,10 +488,22 @@ class ReplayEngine:
                         if entry_price <= 0:
                             continue
 
+                        regime_ctx = build_regime_context(price_context=features_ctx)
+                        # Make regime available to downstream read-model writers.
+                        features_ctx.setdefault("regime", regime_ctx.volatility_regime)
+                        features_ctx.setdefault("trend_strength", regime_ctx.trend_strength)
+
                         consensus_buckets: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
                         emitted_by_horizon: dict[str, bool] = {"1d": False, "7d": False, "30d": False}
 
                         for cfg, strat in strategies:
+                            gate = decide_strategy_gate(
+                                strategy_type=str(cfg.strategy_type),
+                                strategy_config=dict(cfg.config or {}),
+                                regime=regime_ctx,
+                            )
+                            if not gate.allowed:
+                                continue
                             pred = strat.maybe_predict(scored, mra, features_ctx, raw.timestamp)
                             if pred is None:
                                 continue
@@ -500,6 +513,8 @@ class ReplayEngine:
                                 direction = "flat"
 
                             confidence = float(getattr(pred, "confidence", 0.0) or 0.0)
+                            if gate.confidence_multiplier != 1.0:
+                                confidence = float(confidence) * float(gate.confidence_multiplier)
                             horizon = str(getattr(pred, "horizon", cfg.config.get("horizon", "1d"))).strip().lower()
                             if horizon not in {"1d", "7d", "30d"}:
                                 continue
@@ -523,7 +538,14 @@ class ReplayEngine:
                                 "entry_price": entry_price,
                                 "strategy_type": str(cfg.strategy_type),
                                 "strategy_version": str(cfg.version),
+                                "regime": str(regime_ctx.volatility_regime),
+                                "trend_strength": str(regime_ctx.trend_strength),
+                                "regime_snapshot": dict(regime_ctx.payload),
                             }
+                            if gate.confidence_multiplier != 1.0:
+                                feature_snapshot["regime_gate_conf_mult"] = float(gate.confidence_multiplier)
+                            if gate.reason:
+                                feature_snapshot["regime_gate_reason"] = str(gate.reason)
 
                             pred_id = upsert_prediction(
                                 conn,

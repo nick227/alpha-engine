@@ -14,6 +14,8 @@ import uuid
 import asyncio
 import logging
 
+from app.db.repository import AlphaRepository
+from app.trading.base import TradingProvider
 from app.trading.position_sizing import PositionSizer, SizingContext
 from app.trading.risk_engine import RiskEngine, RiskCheckResult, RiskAction
 from app.trading.trade_lifecycle import (
@@ -21,6 +23,7 @@ from app.trading.trade_lifecycle import (
 )
 from app.trading.execution_planner import ExecutionPlanner, ExecutionPlan
 from app.trading.execution_simulator import ExecutionSimulator, ExecutionResult
+from app.trading.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -42,23 +45,10 @@ class SignalType(Enum):
     ENTRY = "entry"
     EXIT = "exit"
 
-
-@dataclass
-class ExecutionResult:
-    """Result of realistic execution price calculation"""
-    execution_price: float
-    spread_cost_bps: float
-    slippage_bps: float
-    total_cost_bps: float
-    total_cost_per_share: float
-
-
-@dataclass
-class FillResult:
-    """Result of partial fill calculation"""
-    filled_quantity: float
-    fill_ratio: float
-    partial_fills: List[Dict[str, Any]]
+class LLMDecision(Enum):
+    QUALIFIED = "QUALIFIED"
+    CAUTION = "CAUTION"
+    REJECT = "REJECT"
 
 
 @dataclass
@@ -121,6 +111,7 @@ class PortfolioState:
     pending_orders: List[str]  # trade IDs
     last_updated: datetime
     initial_capital: float = 100000.0
+    peak_value: float = 0.0
     
     # Portfolio metrics
     total_value: float = 0.0
@@ -132,6 +123,7 @@ class PortfolioState:
     realized_pnl: float = 0.0
     total_pnl: float = 0.0
     daily_pnl: float = 0.0
+    daily_pnl_last_reset: Optional[datetime] = None
     
     # Risk metrics
     sector_exposure: Dict[str, float] = field(default_factory=dict)
@@ -161,11 +153,142 @@ class PortfolioState:
         self.total_pnl = self.realized_pnl + self.unrealized_pnl
         
         # Update drawdown
-        peak_value = max(self.initial_capital, self.total_value + self.realized_pnl)
-        self.current_drawdown = (peak_value - self.total_value - self.realized_pnl) / peak_value
+        if self.peak_value <= 0.0:
+            self.peak_value = max(self.initial_capital, self.total_value)
+        else:
+            self.peak_value = max(self.peak_value, self.total_value)
+
+        self.current_drawdown = (self.peak_value - self.total_value) / self.peak_value if self.peak_value > 0 else 0.0
         self.max_drawdown = max(self.max_drawdown, self.current_drawdown)
         
         self.last_updated = datetime.now(timezone.utc)
+
+    def reset_daily_pnl(self, reset_timestamp: Optional[datetime] = None) -> None:
+        """Explicitly reset daily P&L at a boundary (e.g., market open)."""
+        self.daily_pnl = 0.0
+        self.daily_pnl_last_reset = reset_timestamp or datetime.now(timezone.utc)
+        self.last_updated = datetime.now(timezone.utc)
+
+    def _apply_realized_pnl(self, pnl: float) -> None:
+        self.realized_pnl += pnl
+        self.daily_pnl += pnl
+
+    def open_position_from_trade(self, trade: Trade) -> None:
+        """Apply an entry fill from a Trade to cash + positions."""
+        if not trade.position:
+            return
+
+        ticker = trade.ticker
+        fill_price = float(trade.position.average_entry_price)
+        fill_qty = float(trade.position.filled_quantity)
+        signed_qty = fill_qty if trade.direction == "long" else -fill_qty
+
+        # Order-based cash math: buy decreases cash, sell increases cash
+        self.cash -= signed_qty * fill_price
+
+        if ticker in self.positions:
+            pos = self.positions[ticker]
+            new_qty = pos.quantity + signed_qty
+
+            # Same-side add: update weighted-average entry price
+            same_side_add = (pos.quantity > 0 and signed_qty > 0) or (pos.quantity < 0 and signed_qty < 0)
+            if same_side_add:
+                total_cost = (abs(pos.quantity) * pos.entry_price) + (abs(signed_qty) * fill_price)
+                pos.entry_price = total_cost / abs(new_qty) if abs(new_qty) > 0 else pos.entry_price
+                pos.quantity = new_qty
+                pos.trades_count += 1
+                pos.update_current_price(fill_price)
+            else:
+                # Opposite-side fill: reduce or flip position and realize P&L on the closed portion
+                closed_qty = min(abs(signed_qty), abs(pos.quantity))
+                if closed_qty > 0:
+                    if pos.quantity > 0:  # reducing a long via sell
+                        realized = (fill_price - pos.entry_price) * closed_qty
+                    else:  # reducing a short via buy-to-cover
+                        realized = (pos.entry_price - fill_price) * closed_qty
+                    self._apply_realized_pnl(realized)
+
+                if abs(new_qty) < 0.00001:
+                    del self.positions[ticker]
+                else:
+                    # If we flipped through zero, the remainder is a new position at the fill price
+                    flipped = (pos.quantity > 0 and new_qty < 0) or (pos.quantity < 0 and new_qty > 0)
+                    pos.quantity = new_qty
+                    if flipped:
+                        pos.entry_price = fill_price
+                    pos.trades_count += 1
+                    pos.update_current_price(fill_price)
+        else:
+            self.positions[ticker] = Position(
+                ticker=ticker,
+                quantity=signed_qty,
+                entry_price=fill_price,
+                entry_timestamp=datetime.now(timezone.utc),
+                strategy_id=trade.strategy_id,
+            )
+            self.positions[ticker].trades_count = 1
+            self.positions[ticker].update_current_price(fill_price)
+
+        self.last_updated = datetime.now(timezone.utc)
+
+    def close_position_for_trade(self, trade: Trade, exit_price: float) -> float:
+        """Close the portfolio position for a trade's ticker at a given price."""
+        ticker = trade.ticker
+        if ticker not in self.positions:
+            return 0.0
+
+        pos = self.positions[ticker]
+        exit_qty = abs(pos.quantity)
+        if exit_qty < 0.00001:
+            del self.positions[ticker]
+            return 0.0
+
+        pnl = 0.0
+        if pos.quantity > 0:  # long
+            pnl = (exit_price - pos.entry_price) * exit_qty
+            self.cash += exit_price * exit_qty
+        else:  # short
+            pnl = (pos.entry_price - exit_price) * exit_qty
+            self.cash -= exit_price * exit_qty
+
+        self._apply_realized_pnl(pnl)
+        del self.positions[ticker]
+        self.last_updated = datetime.now(timezone.utc)
+        return pnl
+
+    def partial_close_for_trade(self, trade: Trade, exit_quantity: float, exit_price: float) -> float:
+        """Partially close the portfolio position for a trade's ticker."""
+        ticker = trade.ticker
+        if ticker not in self.positions:
+            return 0.0
+
+        pos = self.positions[ticker]
+        exit_qty = float(exit_quantity)
+        if exit_qty <= 0:
+            return 0.0
+
+        available_qty = abs(pos.quantity)
+        exit_qty = min(exit_qty, available_qty)
+
+        pnl = 0.0
+        if pos.quantity > 0:  # long
+            pnl = (exit_price - pos.entry_price) * exit_qty
+            self.cash += exit_price * exit_qty
+            pos.quantity -= exit_qty
+        else:  # short
+            pnl = (pos.entry_price - exit_price) * exit_qty
+            self.cash -= exit_price * exit_qty
+            pos.quantity += exit_qty
+
+        self._apply_realized_pnl(pnl)
+
+        if abs(pos.quantity) < 0.00001:
+            del self.positions[ticker]
+        else:
+            pos.update_current_price(exit_price)
+
+        self.last_updated = datetime.now(timezone.utc)
+        return pnl
     
     def add_position(self, position: Position):
         """Add new position or update existing"""
@@ -236,7 +359,7 @@ class QualificationLayer:
         self.name = name
         self.config = config
     
-    def qualify(self, signal_data: Dict[str, Any], context: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    async def qualify(self, signal_data: Dict[str, Any], context: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Qualify a trade event.
         
@@ -249,7 +372,7 @@ class QualificationLayer:
 class SignalQualityFilter(QualificationLayer):
     """Filter trades based on signal quality metrics."""
     
-    def qualify(self, signal_data: Dict[str, Any], context: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    async def qualify(self, signal_data: Dict[str, Any], context: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
         metadata = {}
         
         # Minimum confidence threshold
@@ -288,7 +411,7 @@ class RiskEngineLayer(QualificationLayer):
         super().__init__(name, {})
         self.risk_engine = risk_engine
     
-    def qualify(self, signal_data: Dict[str, Any], context: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    async def qualify(self, signal_data: Dict[str, Any], context: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
         metadata = {}
         
         # Get portfolio and current prices from context
@@ -305,112 +428,127 @@ class RiskEngineLayer(QualificationLayer):
         }
         
         # Run comprehensive risk checks
-        risk_result = self.risk_engine.check_trade_risk(
+        risk_checks = self.risk_engine.check_trade_risk(
             ticker=signal_data['ticker'],
-            direction=signal_data['direction'],
+            direction=signal_data['direction'].value if hasattr(signal_data['direction'], 'value') else signal_data['direction'],
             position_size=signal_data['position_size'],
             entry_price=signal_data['entry_price'],
             confidence=signal_data['confidence'],
-            context=risk_context
+            strategy_id=signal_data['strategy_id'],
+            portfolio_value=portfolio.get_total_value(current_prices),
+            current_positions=portfolio.positions,
+            current_exposure={},  # Simplified
+            daily_pnl=context.get('daily_pnl', 0.0)
         )
         
-        # Store risk check results
-        metadata['risk_check'] = risk_result.to_dict()
+        # Decide based on risk checks (reject if any fail)
+        passed = all(c.passed for c in risk_checks)
+        failed_checks = [c for c in risk_checks if not c.passed]
+        reason = failed_checks[0].reason if failed_checks else "Risk engine checks passed"
         
-        if risk_result.action == RiskAction.REJECT:
-            return False, risk_result.reason, metadata
+        # Store risk check results
+        metadata['risk_checks'] = [c.__dict__ for c in risk_checks]
+        
+        if not passed:
+            return False, reason, metadata
         
         return True, "Risk engine checks passed", metadata
 
 
-class LLMValidationLayer(QualificationLayer):
-    """Optional LLM validation for high-conviction trades."""
+class LLMAnalysisLayer(QualificationLayer):
+    """LLM-based signal analysis for narrative justification."""
     
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         self.enabled = config.get('enabled', False)
-        self.min_confidence_for_llm = config.get('min_confidence_for_llm', 0.8)
+        self.min_confidence_for_llm = config.get('min_confidence_for_llm', config.get('min_confidence', 0.0))
+        self.mode = config.get("mode", "sidecar")  # sidecar | gatekeeper
+        self.client = LLMClient(config)
+        self.template_path = "app/trading/prompts/signal_analysis.txt"
     
-    def qualify(self, signal_data: Dict[str, Any], context: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    @staticmethod
+    def _normalize_decision(raw: Any) -> str:
+        if raw is None:
+            return ""
+        decision = str(raw).strip().upper()
+        return decision if decision in {d.value for d in LLMDecision} else ""
+    
+    async def qualify(self, signal_data: Dict[str, Any], context: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
         metadata = {}
         
-        # Only use LLM for high-conviction trades
-        if not self.enabled or signal_data['confidence'] < self.min_confidence_for_llm:
+        # Only use LLM for high-conviction trades (or if enabled)
+        if not self.enabled:
             metadata['llm_skipped'] = True
-            return True, "LLM validation not required", metadata
+            metadata["llm_status"] = "SKIPPED"
+            metadata["analysis"] = ""
+            metadata["llm_prediction"] = ""
+            return True, "LLM validation disabled", metadata
+
+        if signal_data['confidence'] < self.min_confidence_for_llm:
+            metadata['llm_skipped'] = True
+            metadata["llm_status"] = "SKIPPED"
+            metadata["analysis"] = ""
+            metadata["llm_prediction"] = ""
+            return True, f"Confidence {signal_data['confidence']} below LLM threshold {self.min_confidence_for_llm}", metadata
         
-        # Simulate LLM validation (would integrate with actual LLM here)
-        llm_result = self._simulate_llm_validation(signal_data, context)
+        # Prepare data for prompt
+        # We need to format the features into a readable string
+        features = signal_data.get('feature_snapshot', {})
+        feature_str = "\n".join([f"- {k}: {v}" for k, v in features.items()])
         
-        metadata['llm_confidence'] = llm_result['confidence']
-        metadata['llm_recommendation'] = llm_result['recommendation']
-        
-        if llm_result['recommendation'] == 'reject':
-            return False, f"LLM rejected: {llm_result['reasoning']}", metadata
-        elif llm_result['recommendation'] == 'manual_review':
-            return False, f"LLM requires manual review: {llm_result['reasoning']}", metadata
-        
-        return True, "LLM validation passed", metadata
-    
-    def _simulate_llm_validation(self, signal_data: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Simulate LLM validation (replace with actual LLM integration)."""
-        features = signal_data['feature_snapshot']
-        
-        # Simple rule-based simulation
-        reasoning_parts = []
-        
-        # Trend analysis
-        adx = features.get('adx_14', 25)
-        if adx > 40:
-            reasoning_parts.append("Strong trend detected")
-        elif adx < 20:
-            reasoning_parts.append("Weak trend - caution advised")
-        
-        # Volatility analysis
-        vol = features.get('realized_vol_20', 0.02)
-        if vol > 0.05:
-            reasoning_parts.append("High volatility environment")
-        
-        # Volume analysis
-        vol_ratio = features.get('volume_ratio_20', 1.0)
-        if vol_ratio > 2.0:
-            reasoning_parts.append("Unusual volume spike")
-        
-        # Cross-asset context
-        cross_asset_regime = features.get('cross_asset_regime', 'NEUTRAL')
-        if cross_asset_regime == 'RISK_OFF':
-            reasoning_parts.append("Risk-off environment detected")
-        
-        reasoning = "; ".join(reasoning_parts) if reasoning_parts else "Normal market conditions"
-        
-        # Simple recommendation logic
-        if 'High volatility' in reasoning and 'Weak trend' in reasoning:
-            recommendation = 'reject'
-            confidence = 0.3
-        elif 'Strong trend' in reasoning and cross_asset_regime != 'RISK_OFF':
-            recommendation = 'approve'
-            confidence = 0.8
-        else:
-            recommendation = 'manual_review'
-            confidence = 0.6
-        
-        return {
-            'reasoning': reasoning,
-            'recommendation': recommendation,
-            'confidence': confidence
+        prompt_data = {
+            'ticker': signal_data['ticker'],
+            'direction': signal_data['direction'].value if hasattr(signal_data['direction'], 'value') else signal_data['direction'],
+            'confidence': f"{signal_data['confidence']:.3f}",
+            'consensus_score': f"{signal_data['consensus_score']:.3f}",
+            'entry_price': f"{signal_data['entry_price']:.2f}",
+            'alpha_score': f"{signal_data['alpha_score']:.3f}",
+            'regime': signal_data.get('regime', 'UNKNOWN'),
+            'features': feature_str
         }
+        
+        prompt = self.client.format_prompt(self.template_path, prompt_data)
+        
+        # Call LLM
+        logger.info(f"Generating LLM analysis for {signal_data['ticker']}...")
+        result = await self.client.validate_signal(prompt)
+        
+        if not result:
+            # Fail-safe: Skip validation if LLM fails
+            logger.warning(f"LLM analysis failed for {signal_data['ticker']}. Proceeding without narrative.")
+            metadata["llm_status"] = "ERROR"
+            metadata["analysis"] = "LLM_ERROR: No response from LLM client."
+            metadata["llm_prediction"] = ""
+            return True, "LLM analysis failed (Fail-Safe skip)", metadata
+         
+        analysis = result.get('analysis', result.get('reasoning', "No analysis provided."))
+        decision = self._normalize_decision(result.get("decision"))
+         
+        metadata["analysis"] = str(analysis or "")
+        metadata["llm_prediction"] = decision
+        metadata["llm_status"] = "OK" if decision else "MALFORMED"
+
+        if self.mode == "gatekeeper" and decision == LLMDecision.REJECT.value:
+            return False, "LLM gatekeeper rejected trade", metadata
+
+        return True, "Analysis generated as background layer.", metadata
 
 
 class PaperTrader:
     """Main paper trading engine."""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], provider: Optional[TradingProvider] = None, repository: Optional[AlphaRepository] = None):
         self.config = config
+        self.provider = provider
+        self.repository = repository
+        initial_cash = config.get('initial_cash', 100000.0)
         self.portfolio = PortfolioState(
-            cash=config.get('initial_cash', 100000.0),
+            cash=initial_cash,
             positions={},
             pending_orders=[],
-            last_updated=datetime.now(timezone.utc)
+            last_updated=datetime.now(timezone.utc),
+            initial_capital=initial_cash,
+            peak_value=initial_cash
         )
         
         # Initialize position sizer
@@ -419,18 +557,17 @@ class PaperTrader:
         # Initialize risk engine
         self.risk_engine = RiskEngine(config)
         
-        # Initialize trade lifecycle manager
-        self.trade_lifecycle = TradeLifecycleManager(config)
+        # Initialize trade lifecycle manager with provider and repository
+        self.trade_lifecycle = TradeLifecycleManager(config, provider, repository)
         
         # Initialize execution planner and simulator
         self.execution_planner = ExecutionPlanner(config)
-        self.execution_simulator = ExecutionSimulator(config)
+        self.execution_simulator = ExecutionSimulator(config, seed=config.get("simulation_seed"))
         
         # Initialize qualification layers
         self.qualification_layers = self._build_qualification_layers()
         
         # Performance tracking
-        self.daily_pnl = 0.0
         self.trade_count = 0
         self.win_count = 0
         
@@ -452,11 +589,11 @@ class PaperTrader:
             self.risk_engine
         ))
         
-        # LLM validation (optional)
+        # LLM analysis (non-blocking)
         llm_config = self.config.get('llm_validation', {})
         if llm_config.get('enabled', False):
-            layers.append(LLMValidationLayer(
-                "llm_validation",
+            layers.append(LLMAnalysisLayer(
+                "llm_analysis",
                 llm_config
             ))
         
@@ -504,11 +641,12 @@ class PaperTrader:
         context = {
             'portfolio': self.portfolio,
             'prices': {ticker: entry_price},
-            'daily_pnl': self.daily_pnl
+            'daily_pnl': self.portfolio.daily_pnl,
+            'trade_count': self.trade_count
         }
         
         for layer in self.qualification_layers:
-            qualified, reason, metadata = layer.qualify(signal_data, context)
+            qualified, reason, metadata = await layer.qualify(signal_data, context)
             
             signal_data['qualification_layers'].append(layer.name)
             signal_data['decision_path'][layer.name] = {
@@ -523,6 +661,51 @@ class PaperTrader:
                 return signal_data
         
         # Execute trade
+        # Extract LLM analysis and prediction if present
+        analysis = ""
+        llm_prediction = ""
+        llm_status = "SKIPPED"
+        engine_decision = LLMDecision.QUALIFIED.value
+        llm_agrees: Optional[int] = None
+        for layer_res in signal_data['decision_path'].values():
+            if 'analysis' in layer_res['metadata']:
+                analysis = layer_res['metadata']['analysis']
+                llm_prediction = layer_res['metadata'].get('llm_prediction', "")
+                llm_status = layer_res["metadata"].get("llm_status", llm_status)
+                break
+
+        if llm_prediction in {d.value for d in LLMDecision}:
+            llm_agrees = 1 if llm_prediction == engine_decision else 0
+        
+        signal_data['analysis'] = analysis
+        signal_data['llm_prediction'] = llm_prediction
+        signal_data["llm_status"] = llm_status
+        signal_data["engine_decision"] = engine_decision
+        signal_data["llm_agrees"] = llm_agrees
+        
+        # Log LLM comparison consistently (not only CAUTION/REJECT)
+        if llm_status in {"OK", "MALFORMED", "ERROR"}:
+            logger.info(
+                "LLM_COMPARISON: %s engine=%s llm=%s agrees=%s status=%s",
+                signal_data["ticker"],
+                engine_decision,
+                llm_prediction or "(none)",
+                llm_agrees,
+                llm_status,
+            )
+            if llm_prediction == LLMDecision.REJECT.value:
+                logger.warning(
+                    "STRATEGY DISAGREEMENT: Engine is EXECUTING %s but LLM recommends REJECT. Justification: %s...",
+                    signal_data["ticker"],
+                    (analysis or "")[:100],
+                )
+            elif llm_prediction == LLMDecision.CAUTION.value:
+                logger.info(
+                    "STRATEGY CAUTION: LLM suggests CAUTION for %s. Justification: %s...",
+                    signal_data["ticker"],
+                    (analysis or "")[:100],
+                )
+        
         await self._execute_trade(signal_data)
         
         return signal_data
@@ -541,10 +724,14 @@ class PaperTrader:
         # Create sizing context
         sizing_context = SizingContext(
             portfolio_value=self.portfolio.get_total_value({signal_data['ticker']: signal_data['entry_price']}),
+            available_cash=self.portfolio.cash,
             current_positions=self.portfolio.positions,
-            recent_trades=[],  # Would track recent trades
-            max_drawdown=0.0,      # Would track historically
-            current_drawdown=0.0,  # Would calculate from current state
+            current_exposure={},  # Simplified for now
+            sector_exposure={},
+            strategy_exposure={},
+            daily_pnl=self.portfolio.daily_pnl,
+            max_drawdown=self.portfolio.max_drawdown,
+            current_drawdown=self.portfolio.current_drawdown,
             volatility_regime=features.get('volatility_regime', 'NORMAL'),
             market_regime=features.get('cross_asset_regime', 'NEUTRAL')
         )
@@ -578,6 +765,8 @@ class PaperTrader:
             },
             'metadata': sizing_result.metadata
         }
+        
+        return sizing_result.size_shares
     async def _execute_trade(self, signal_data: Dict[str, Any]) -> None:
         """Execute the paper trade using trade lifecycle manager."""
         try:
@@ -597,11 +786,16 @@ class PaperTrader:
                 target_price=signal_data.get('target_price'),
                 stop_loss_price=signal_data.get('stop_loss'),
                 feature_snapshot=signal_data['feature_snapshot'],
-                order_type=OrderType.MARKET
+                order_type=OrderType.MARKET,
+                analysis=signal_data.get('analysis', ""),
+                llm_prediction=signal_data.get('llm_prediction', ""),
+                engine_decision=signal_data.get("engine_decision", ""),
+                llm_status=signal_data.get("llm_status", ""),
+                llm_agrees=signal_data.get("llm_agrees")
             )
             
             # Execute entry immediately (in real system, would wait for market execution)
-            entry_success = self.trade_lifecycle.execute_entry(
+            entry_success = await self.trade_lifecycle.execute_entry(
                 trade.id,
                 signal_data['entry_price'],
                 signal_data['position_size']
@@ -640,22 +834,7 @@ class PaperTrader:
     
     def _update_portfolio_from_trade(self, trade: Trade) -> None:
         """Update portfolio based on trade position."""
-        if not trade.position:
-            return
-        
-        # Calculate position value
-        position_value = trade.position.filled_quantity * trade.position.average_entry_price
-        
-        # Update portfolio
-        if trade.direction == "long":
-            self.portfolio.cash -= position_value
-            self.portfolio.positions[trade.ticker] = self.portfolio.positions.get(trade.ticker, 0.0) + trade.position.filled_quantity
-        else:  # short
-            self.portfolio.cash += position_value
-            self.portfolio.positions[trade.ticker] = self.portfolio.positions.get(trade.ticker, 0.0) - trade.position.filled_quantity
-        
-        # Update portfolio timestamp
-        self.portfolio.last_updated = datetime.now(timezone.utc)
+        self.portfolio.open_position_from_trade(trade)
     
     def get_portfolio_summary(self) -> Dict[str, Any]:
         """Get current portfolio summary."""
@@ -664,7 +843,7 @@ class PaperTrader:
             'positions': dict(self.portfolio.positions),
             'total_trades': self.trade_count,
             'win_rate': self.win_count / max(self.trade_count, 1),
-            'daily_pnl': self.daily_pnl,
+            'daily_pnl': self.portfolio.daily_pnl,
             'pending_orders': len(self.portfolio.pending_orders),
             'last_updated': self.portfolio.last_updated.isoformat()
         }
@@ -697,24 +876,28 @@ class PaperTrader:
         
         return trade_history
     
-    def update_market_prices(self, price_updates: Dict[str, float]) -> None:
+    async def update_market_prices(self, price_updates: Dict[str, float]) -> None:
         """Update market prices and handle trade lifecycle events."""
         # Update trade lifecycle manager
         self.trade_lifecycle.update_market_prices(price_updates)
         
+        active_trades = self.trade_lifecycle.get_active_trades()
+        trades_by_ticker: Dict[str, List[Trade]] = {}
+        for trade in active_trades:
+            trades_by_ticker.setdefault(trade.ticker, []).append(trade)
+
         # Update risk engine with current prices
         for ticker, price in price_updates.items():
             # Check for any exit conditions
-            active_trades = self.trade_lifecycle.get_active_trades()
-            for trade in active_trades:
-                if trade.ticker == ticker and trade.position:
+            for trade in trades_by_ticker.get(ticker, []):
+                if trade.position:
                     # Check for exit conditions and execute if needed
                     position_update = self.trade_lifecycle.update_position(trade.id, price)
                     if position_update and position_update.get('exit_actions'):
                         for action in position_update['exit_actions']:
                             if action['action'] == 'close':
                                 # Execute close
-                                self.trade_lifecycle.close_trade(trade.id, price, ExitReason.TARGET_REACHED)
+                                await self.trade_lifecycle.close_trade(trade.id, price, ExitReason.TARGET_REACHED)
                                 # Update portfolio
                                 self._update_portfolio_on_exit(trade, price)
                                 # Record in risk engine
@@ -729,7 +912,7 @@ class PaperTrader:
                                 self._update_portfolio_on_partial_exit(trade, partial_quantity, price)
                             elif action['action'] in ['stop_loss', 'trailing_stop']:
                                 # Execute stop loss
-                                self.trade_lifecycle.execute_stop_loss(trade.id, price, action['reason'])
+                                await self.trade_lifecycle.execute_stop_loss(trade.id, price, action['reason'])
                                 # Update portfolio
                                 self._update_portfolio_on_exit(trade, price)
                                 # Record in risk engine
@@ -738,53 +921,18 @@ class PaperTrader:
     
     def _update_portfolio_on_exit(self, trade: Trade, exit_price: float) -> None:
         """Update portfolio when trade is completely closed."""
-        if not trade.position:
-            return
+        pnl = self.portfolio.close_position_for_trade(trade, exit_price)
         
-        # Calculate final P&L
-        if trade.direction == "long":
-            pnl = (exit_price - trade.position.average_entry_price) * trade.position.filled_quantity
-        else:  # short
-            pnl = (trade.position.average_entry_price - exit_price) * trade.position.filled_quantity
-        
-        # Update cash
-        self.portfolio.cash += (trade.position.average_entry_price * trade.position.filled_quantity) + pnl
-        
-        # Remove position
-        if trade.ticker in self.portfolio.positions:
-            del self.portfolio.positions[trade.ticker]
-        
-        # Update P&L tracking
-        self.daily_pnl += pnl
         if pnl > 0:
             self.win_count += 1
-        
-        # Update portfolio timestamp
-        self.portfolio.last_updated = datetime.now(timezone.utc)
     
     def _update_portfolio_on_partial_exit(self, trade: Trade, exit_quantity: float, exit_price: float) -> None:
         """Update portfolio for partial exit."""
-        if not trade.position:
-            return
-        
-        # Calculate partial P&L
-        if trade.direction == "long":
-            pnl = (exit_price - trade.position.average_entry_price) * exit_quantity
-        else:  # short
-            pnl = (trade.position.average_entry_price - exit_price) * exit_quantity
-        
-        # Update cash
-        self.portfolio.cash += (trade.position.average_entry_price * exit_quantity) + pnl
-        
-        # Update position (reduce quantity)
-        if trade.ticker in self.portfolio.positions:
-            self.portfolio.positions[trade.ticker] -= exit_quantity
-        
-        # Update P&L tracking
-        self.daily_pnl += pnl
-        
-        # Update portfolio timestamp
-        self.portfolio.last_updated = datetime.now(timezone.utc)
+        pnl = self.portfolio.partial_close_for_trade(trade, exit_quantity, exit_price)
+
+    def reset_daily_pnl(self, reset_timestamp: Optional[datetime] = None) -> None:
+        """Trigger the daily P&L reset boundary explicitly (e.g., by a scheduler at market open)."""
+        self.portfolio.reset_daily_pnl(reset_timestamp)
     
     def get_active_positions(self) -> Dict[str, Any]:
         """Get current active positions from trade lifecycle manager."""
@@ -894,6 +1042,6 @@ class PaperTrader:
             'cash': self.portfolio.cash,
             'positions': dict(self.portfolio.positions),
             'exposure': self.portfolio.total_exposure,
-            'daily_pnl': self.daily_pnl,
+            'daily_pnl': self.portfolio.daily_pnl,
             'trade_count': self.trade_count
         }

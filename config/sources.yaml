@@ -1,3 +1,150 @@
+# ═══════════════════════════════════════════════════════════════════════
+# DUMP ADAPTERS  (priority 1 — run before all API sources)
+# These read pre-downloaded parquet files and never make network calls.
+# Download data once with: python scripts/download_stooq_dump.py, etc.
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: stooq_dump
+  type: market
+  adapter: stooq_dump
+  enabled: true
+  priority: 1
+  poll: null
+  weight: 1.0
+  backfill_days: 365
+  symbols: ["AAPL", "MSFT", "SPY", "NVDA", "TSLA", "AMZN", "META", "AMD", "QQQ", "IWM"]
+  options:
+    dump_dir: "data/raw_dumps/stooq"
+  extract:
+    text: "symbol"
+    timestamp: "date"
+    ticker: "symbol"
+    numeric_features:
+      open: "open"
+      high: "high"
+      low: "low"
+      close: "close"
+      volume: "volume"
+
+- id: fnspid_dump
+  type: news
+  adapter: fnspid_dump
+  enabled: true
+  priority: 1
+  poll: null
+  weight: 0.9
+  backfill_days: 365
+  symbols: ["AAPL", "MSFT", "SPY", "NVDA", "TSLA", "AMZN", "META", "AMD", "QQQ", "IWM"]
+  options:
+    dump_dir: "data/raw_dumps/fnspid"
+  extract:
+    text: "headline"
+    timestamp: "date"
+    ticker: "ticker"
+
+- id: fred_dump
+  type: macro
+  adapter: fred_dump
+  enabled: true
+  priority: 1
+  poll: null
+  weight: 0.8
+  backfill_days: 365
+  options:
+    dump_dir: "data/raw_dumps/fred"
+    series: ["FEDFUNDS", "T10Y2Y", "UNRATE", "CPIAUCSL"]
+  extract:
+    timestamp: "date"
+    numeric_features:
+      macro_value: "value"
+
+- id: csv_price_dump
+  type: market
+  adapter: csv_price_dump
+  enabled: true
+  priority: 1
+  poll: null
+  weight: 1.0
+  backfill_days: 365
+  symbols: ["AAPL", "MSFT", "SPY", "NVDA", "TSLA", "AMZN", "META", "AMD", "QQQ", "IWM"]
+  options:
+    dump_dir: "data/raw_dumps/full_history"
+  extract:
+    timestamp: "timestamp"
+    ticker: "ticker"
+    numeric_features:
+      price_open: "price_open"
+      price_high: "price_high"
+      price_low: "price_low"
+      price_close: "price_close"
+      price_adj_close: "price_adj_close"
+      volume: "volume"
+
+- id: analyst_ratings_dump
+  type: news
+  adapter: analyst_ratings_dump
+  enabled: true
+  priority: 1
+  poll: null
+  weight: 0.9
+  backfill_days: 365
+  symbols: ["AAPL", "MSFT", "SPY", "NVDA", "TSLA", "AMZN", "META", "AMD", "QQQ", "IWM"]
+  options:
+    headlines_file: "data/raw_dumps/raw_partner_headlines.csv"
+    ratings_file: "data/raw_dumps/raw_analyst_ratings.csv"
+  extract:
+    text: "text"
+    timestamp: "timestamp"
+    ticker: "ticker"
+
+- id: alpha_vantage_dump
+  type: market
+  adapter: alpha_vantage_dump
+  enabled: true
+  priority: 1
+  poll: null
+  weight: 1.0
+  backfill_days: 100
+  symbols: ["AAPL", "MSFT", "SPY", "NVDA", "TSLA", "AMZN", "META", "AMD", "QQQ", "IWM"]
+  options:
+    dump_dir: "data/raw_dumps/alpha_vantage"
+  extract:
+    timestamp: "timestamp"
+    ticker: "ticker"
+    numeric_features:
+      price_open: "price_open"
+      price_high: "price_high"
+      price_low: "price_low"
+      price_close: "price_close"
+      volume: "volume"
+
+- id: tiingo_dump
+  type: market
+  adapter: tiingo_dump
+  enabled: true
+  priority: 1
+  poll: null
+  weight: 1.0
+  backfill_days: 730
+  symbols: ["AAPL", "MSFT", "SPY", "NVDA", "TSLA", "AMZN", "META", "AMD", "QQQ", "IWM", "GOOGL", "META", "BRK-B", "JPM", "V", "UNH", "HD", "PG", "MA", "DIS", "PYPL", "BAC", "XOM", "PFE", "CSCO", "INTC", "VZ", "T", "MRK", "ABT", "KO", "WMT", "PEP", "CVX", "ABBV", "ACN", "NKE", "ADBE", "CRM", "NFLX", "TXN", "AMD", "QCOM", "AVGO", "ORCL", "IBM", "NOW", "INTU", "AMAT", "BKNG", "ISRG"]
+  options:
+    dump_dir: "data/raw_dumps/tiingo"
+  extract:
+    timestamp: "timestamp"
+    ticker: "ticker"
+    numeric_features:
+      price_open: "price_open"
+      price_high: "price_high"
+      price_low: "price_low"
+      price_close: "price_close"
+      price_adj_close: "price_adj_close"
+      volume: "volume"
+
+# ═══════════════════════════════════════════════════════════════════════
+# API ADAPTERS  (priority 2+ — only queried for recent data, last 3 days)
+# Historical backfill is handled by the dump adapters above.
+# ═══════════════════════════════════════════════════════════════════════
+
 - id: alpaca_news_main
   type: news
   adapter: alpaca_news

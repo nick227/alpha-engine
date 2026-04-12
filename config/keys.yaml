@@ -1,6 +1,6 @@
 alpaca:
-  key: "ENV:ALPACA_KEY"
-  secret: "ENV:ALPACA_SECRET"
+  key: "ENV:ALPACA_API_KEY"
+  secret: "ENV:ALPACA_API_SECRET"
 
 polygon:
   key: "ENV:POLYGON_KEY"

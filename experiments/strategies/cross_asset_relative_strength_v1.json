@@ -1,0 +1,21 @@
+{
+  "id": "cross-asset-relative-strength-v1",
+  "name": "cross_asset_relative_strength_v1",
+  "version": "v1",
+  "strategy_type": "cross_asset_relative_strength",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "benchmark": "SPY",
+    "signal_horizon": "7d",
+    "horizon": "30d",
+    "min_rel_return": 0.01,
+    "min_abs_return": 0.0,
+    "require_benchmark_alignment": false,
+    "regime_gating": {
+      "deny_trend_strength": ["WEAK"],
+      "reason": "relative strength is noisier in chop"
+    }
+  }
+}
+

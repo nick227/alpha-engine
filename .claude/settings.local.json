@@ -3,7 +3,13 @@
     "allow": [
       "Bash(wc:*)",
       "Bash(find:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(ls -la /c/wamp64/www/alpha-engine-poc/app/ui/*.py)",
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(wmic process:*)"
     ]
   }
 }

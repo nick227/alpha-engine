@@ -23,6 +23,8 @@ from app.ui.middle.dashboard_service import DashboardService  # noqa: E402
 from app.ui.audit import audit_main  # noqa: E402
 from app.ui.dashboard_compact import dashboard_compact_main  # noqa: E402
 from app.ui.intelligence_hub import intelligence_hub_main  # noqa: E402
+from app.ui.ops_data_console import ops_data_console_main  # noqa: E402
+from app.ui.paper_trades import paper_trades_main  # noqa: E402
 from app.ui.shell.filter_state import render_sidebar_filters  # noqa: E402
 from app.ui.shell.top_bar import render_top_bar  # noqa: E402
 from app.ui.theme import apply_theme  # noqa: E402
@@ -58,6 +60,24 @@ def main() -> None:
             service,
             show_page_header=False,
             show_local_controls=False,
+        )
+        return
+    
+    if route == "paper":
+        paper_trades_main(
+            service,
+            tenant_id=filters["tenant_id"],
+            ticker=filters["ticker"],
+            show_page_header=False,
+        )
+        return
+    
+    if route == "ops":
+        ops_data_console_main(
+            service,
+            tenant_id=filters["tenant_id"],
+            ticker=filters["ticker"],
+            show_page_header=False,
         )
         return
 

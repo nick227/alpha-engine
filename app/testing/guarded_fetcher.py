@@ -61,6 +61,20 @@ class ExecutionCounters:
     errors: int = 0
     warnings: int = 0
     
+    def reset(self):
+        """Reset all counters to zero."""
+        self.api_calls = 0
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.events = 0
+        self.predictions = 0
+        self.trades = 0
+        self.outcomes = 0
+        self.learner_updates = 0
+        self.weight_updates = 0
+        self.errors = 0
+        self.warnings = 0
+    
     def check_minima(self, phase) -> Tuple[bool, List[str]]:
         """
         Verify minimum counts for each phase.

@@ -318,6 +318,77 @@ class AlphaRepository:
 
         CREATE INDEX IF NOT EXISTS idx_efficiency_champions_lookup
           ON efficiency_champions(tenant_id, ticker, timeframe, forecast_days, regime);
+
+         CREATE TABLE IF NOT EXISTS trades (
+             id TEXT PRIMARY KEY,
+             tenant_id TEXT NOT NULL DEFAULT 'default',
+             ticker TEXT NOT NULL,
+             direction TEXT NOT NULL,
+             quantity REAL NOT NULL,
+             entry_price REAL NOT NULL,
+             exit_price REAL,
+             pnl REAL,
+             status TEXT NOT NULL,
+             mode TEXT NOT NULL,
+             strategy_id TEXT,
+             timestamp TEXT NOT NULL,
+             analysis TEXT,
+             llm_prediction TEXT,
+             engine_decision TEXT,
+             llm_status TEXT,
+             llm_agrees INTEGER
+         );
+
+        CREATE TABLE IF NOT EXISTS positions (
+            ticker TEXT NOT NULL,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            direction TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            average_entry_price REAL NOT NULL,
+            mode TEXT NOT NULL,
+            PRIMARY KEY (ticker, tenant_id, mode)
+        );
+
+        CREATE TABLE IF NOT EXISTS ml_learning_rows (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            timestamp TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            horizon TEXT NOT NULL,
+            features_json TEXT NOT NULL,
+            future_return REAL,
+            coverage_ratio REAL NOT NULL,
+            split TEXT NOT NULL DEFAULT 'train',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ml_rows_symbol_ts
+          ON ml_learning_rows(tenant_id, symbol, horizon, timestamp);
+
+        CREATE TABLE IF NOT EXISTS ml_models (
+            model_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            horizon TEXT NOT NULL,
+            train_start TEXT NOT NULL,
+            train_end TEXT NOT NULL,
+            weights_json TEXT NOT NULL,
+            scaler_json TEXT NOT NULL,
+            clip_params_json TEXT NOT NULL,
+            feature_importance_json TEXT NOT NULL,
+            baseline_accuracy REAL NOT NULL,
+            model_accuracy REAL NOT NULL,
+            ic_score REAL NOT NULL,
+            avg_return REAL NOT NULL,
+            win_rate REAL NOT NULL,
+            train_rows INTEGER NOT NULL,
+            feature_coverage_used REAL NOT NULL,
+            score_std REAL NOT NULL DEFAULT 0.01,
+            passed_gate INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ml_models_horizon_date
+          ON ml_models(horizon, passed_gate, created_at DESC);
         """
         self.conn.executescript(schema)
         self._ensure_additive_schema()
@@ -350,6 +421,14 @@ class AlphaRepository:
                 self.conn.execute("ALTER TABLE prediction_scores ADD COLUMN regime TEXT;")
             except Exception:
                 pass
+
+        # ml_models additions
+        ml_cols = cols("ml_models")
+        if ml_cols and "group_weights_json" not in ml_cols:
+            try:
+                self.conn.execute("ALTER TABLE ml_models ADD COLUMN group_weights_json TEXT NOT NULL DEFAULT '{}';")
+            except Exception:
+                pass
         if ps_cols and "attribution_json" not in ps_cols:
             try:
                 self.conn.execute("ALTER TABLE prediction_scores ADD COLUMN attribution_json TEXT NOT NULL DEFAULT '{}';")
@@ -369,6 +448,31 @@ class AlphaRepository:
             if ps_cols and col not in ps_cols:
                 try:
                     self.conn.execute(f"ALTER TABLE prediction_scores ADD COLUMN {col} {col_type};")
+                except Exception:
+                    pass
+
+        # trades additions
+        t_cols = cols("trades")
+        if t_cols and "analysis" not in t_cols:
+            try:
+                self.conn.execute("ALTER TABLE trades ADD COLUMN analysis TEXT;")
+            except Exception:
+                pass
+        
+        if t_cols and "llm_prediction" not in t_cols:
+            try:
+                self.conn.execute("ALTER TABLE trades ADD COLUMN llm_prediction TEXT;")
+            except Exception:
+                pass
+        
+        for col, col_type in [
+            ("engine_decision", "TEXT"),
+            ("llm_status", "TEXT"),
+            ("llm_agrees", "INTEGER"),
+        ]:
+            if t_cols and col not in t_cols:
+                try:
+                    self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {col_type};")
                 except Exception:
                     pass
 
@@ -398,6 +502,9 @@ class AlphaRepository:
                 self.conn.execute("ALTER TABLE efficiency_champions ADD COLUMN alpha_strategy REAL DEFAULT 0.0;")
             except Exception:
                 pass
+
+        # trades and positions (handled by CREATE TABLE IF NOT EXISTS in _create_schema, 
+        # but if we need new columns later we add them here)
 
         try:
             self.conn.execute(
@@ -1301,6 +1408,106 @@ class AlphaRepository:
     def now_iso(self) -> str:
         """Get current UTC timestamp as ISO string"""
         return datetime.now(timezone.utc).isoformat()
+
+    def save_trade(self, trade_data: Dict[str, Any], tenant_id: str = "default") -> str:
+        """Save a trade to the database."""
+        trade_id = trade_data.get("id") or str(uuid4())
+        self.conn.execute("""
+            INSERT OR REPLACE INTO trades 
+            (id, tenant_id, ticker, direction, quantity, entry_price, exit_price, pnl, status, mode, strategy_id, timestamp, analysis, llm_prediction, engine_decision, llm_status, llm_agrees)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            trade_id,
+            tenant_id,
+            trade_data["ticker"],
+            trade_data["direction"],
+            trade_data["quantity"],
+            trade_data["entry_price"],
+            trade_data.get("exit_price"),
+            trade_data.get("pnl"),
+            trade_data["status"],
+            trade_data["mode"],
+            trade_data.get("strategy_id"),
+            trade_data.get("timestamp") or self.now_iso(),
+            trade_data.get("analysis"),
+            trade_data.get("llm_prediction"),
+            trade_data.get("engine_decision"),
+            trade_data.get("llm_status"),
+            trade_data.get("llm_agrees"),
+        ))
+        self.conn.commit()
+        return trade_id
+    
+    def upsert_position(self, position_data: Dict[str, Any], tenant_id: str = "default") -> None:
+        """Insert or update a position row (ticker + tenant + mode)."""
+        self.conn.execute("""
+            INSERT OR REPLACE INTO positions
+            (ticker, tenant_id, direction, quantity, average_entry_price, mode)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            position_data["ticker"],
+            tenant_id,
+            position_data["direction"],
+            float(position_data["quantity"]),
+            float(position_data["average_entry_price"]),
+            position_data["mode"],
+        ))
+        self.conn.commit()
+
+    def get_positions(self, mode: Optional[str] = None, tenant_id: str = "default") -> List[Dict[str, Any]]:
+        """Get positions, optionally filtered by mode."""
+        query = "SELECT * FROM positions WHERE tenant_id = ?"
+        params: List[Any] = [tenant_id]
+        if mode:
+            query += " AND mode = ?"
+            params.append(mode)
+        rows = self.conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_trades(self, ticker: Optional[str] = None, tenant_id: str = "default") -> List[Dict[str, Any]]:
+        """Get all trades, optionally filtered by ticker."""
+        query = "SELECT * FROM trades WHERE tenant_id = ?"
+        params = [tenant_id]
+        
+        if ticker:
+            query += " AND ticker = ?"
+            params.append(ticker)
+            
+        rows = self.conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_price_bars(self, ticker: str, timeframe: str, bars: List[Any], tenant_id: str = "default") -> None:
+        """
+        Save OHLCV bars to the price_bars table.
+        Args:
+            ticker: Ticker symbol
+            timeframe: Bar timeframe (e.g., '1d', '1h')
+            bars: List of Bar objects (must have timestamp, open, high, low, close, volume attributes)
+            tenant_id: Tenant identifier
+        """
+        if not bars:
+            return
+
+        rows = []
+        for bar in bars:
+            rows.append((
+                tenant_id,
+                ticker,
+                timeframe,
+                bar.timestamp,
+                float(bar.open),
+                float(bar.high),
+                float(bar.low),
+                float(bar.close),
+                float(bar.volume)
+            ))
+
+        self.conn.executemany("""
+            INSERT OR REPLACE INTO price_bars 
+            (tenant_id, ticker, timeframe, timestamp, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+        self.conn.commit()
 
     def close(self) -> None:
         """Close database connection"""

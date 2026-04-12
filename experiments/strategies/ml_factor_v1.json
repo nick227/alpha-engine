@@ -1,0 +1,13 @@
+{
+  "id": "ml-factor-v1",
+  "name": "ml_factor_v1",
+  "version": "v1",
+  "strategy_type": "ml_factor",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "horizon": "7d",
+    "min_feature_coverage": 0.55,
+    "max_model_age_days": 30
+  }
+}

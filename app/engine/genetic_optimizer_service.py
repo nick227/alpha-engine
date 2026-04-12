@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from app.core.price_context import build_price_contexts_from_bars
+from app.core.price_context import build_price_contexts_from_bars, default_benchmark_tickers
 from app.core.repository import Repository
 from app.core.types import RawEvent, StrategyConfig
 from app.engine.mutation_engine import mutate_strategy_config
@@ -121,7 +121,12 @@ class GeneticOptimizerService:
                     bars_prepared["timestamp"] = pd.to_datetime(ts, utc=True)
 
         all_events = list(train_events) + list(forward_events)
-        ctx_all = build_price_contexts_from_bars(raw_events=all_events, bars=bars_prepared, bars_already_utc=True)
+        ctx_all = build_price_contexts_from_bars(
+            raw_events=all_events,
+            bars=bars_prepared,
+            bars_already_utc=True,
+            benchmark_tickers=default_benchmark_tickers(),
+        )
 
         def precompute(events: list[RawEvent]) -> list[GeneticOptimizerService.PrecomputedEvent]:
             out: list[GeneticOptimizerService.PrecomputedEvent] = []

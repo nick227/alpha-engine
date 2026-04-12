@@ -125,6 +125,9 @@ class Trade:
     feature_snapshot: Dict[str, Any] = field(default_factory=dict)
     risk_metrics: Dict[str, Any] = field(default_factory=dict)
     mode: str = "backtest"  # backtest | paper | live - keeps corpus clean
+    analysis: str = ""      # LLM generated analysis/justification
+    llm_prediction: str = "" # LLM recommendation (QUALIFIED | CAUTION | REJECT)
+
     on_entry: Optional[Callable] = None
     on_exit: Optional[Callable] = None
     on_partial_exit: Optional[Callable] = None
@@ -142,8 +145,10 @@ class TradeLifecycleManager:
     Handles entry, holding, partial exits, stops, and closing.
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], provider: Optional[TradingProvider] = None, repository: Optional[AlphaRepository] = None):
         self.config = config
+        self.provider = provider
+        self.repository = repository
         self.active_trades: Dict[str, Trade] = {}
         self.completed_trades: Dict[str, Trade] = {}
         self.trade_history: List[Trade] = []
@@ -159,7 +164,7 @@ class TradeLifecycleManager:
         # Monitoring
         self.price_subscribers: Dict[str, List[Callable]] = {}
         
-        logger.info("Trade lifecycle manager initialized")
+        logger.info(f"Trade lifecycle manager initialized with provider: {getattr(provider, 'name', 'None')}")
     
     def create_trade_from_signal(
         self,
@@ -176,7 +181,12 @@ class TradeLifecycleManager:
         feature_snapshot: Optional[Dict[str, Any]] = None,
         order_type: OrderType = OrderType.MARKET,
         prediction_id: str = "",
-        mode: str = "backtest"
+        mode: str = "backtest",
+        analysis: str = "",
+        llm_prediction: str = "",
+        engine_decision: str = "",
+        llm_status: str = "",
+        llm_agrees: Optional[int] = None
     ) -> Trade:
         """
         Create a new trade from a trading signal.
@@ -229,7 +239,10 @@ class TradeLifecycleManager:
             'feature_snapshot': feature_snapshot or {},
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'prediction_id': prediction_id,  # For learning loop traceability
-            'mode': mode  # backtest | paper | live - keeps corpus clean
+            'mode': mode,  # backtest | paper | live - keeps corpus clean
+            'engine_decision': engine_decision,
+            'llm_status': llm_status,
+            'llm_agrees': llm_agrees
         }
         
         # Create trade with signal snapshot
@@ -265,7 +278,9 @@ class TradeLifecycleManager:
             regime=regime,
             feature_snapshot=feature_snapshot or {},
             risk_metrics={},
-            mode=mode
+            mode=mode,
+            analysis=analysis,
+            llm_prediction=llm_prediction
         )
         
         # Store as active trade
@@ -275,7 +290,7 @@ class TradeLifecycleManager:
         
         return trade
     
-    def execute_entry(self, trade_id: str, execution_price: float, execution_quantity: Optional[float] = None) -> bool:
+    async def execute_entry(self, trade_id: str, execution_price: float, execution_quantity: Optional[float] = None) -> bool:
         """
         Execute trade entry.
         
@@ -295,9 +310,30 @@ class TradeLifecycleManager:
         if trade.state != TradeState.SIGNAL and trade.state != TradeState.PENDING_ENTRY:
             logger.error(f"Trade {trade_id} in invalid state for entry: {trade.state}")
             return False
+
+        # If we have a provider, submit the order to the real/sim broker
+        if self.provider:
+            try:
+                # Use requested quantity if execution_quantity not provided
+                qty = execution_quantity if execution_quantity is not None else trade.quantity
+                
+                order_result = await self.provider.submit_order(
+                    ticker=trade.ticker,
+                    quantity=qty,
+                    direction=trade.direction,
+                    order_type=trade.order_type
+                )
+                
+                # Update with actual fill data from provider if possible
+                execution_price = order_result.get("average_fill_price", execution_price)
+                filled_quantity = order_result.get("filled_quantity", qty)
+            except Exception as e:
+                logger.error(f"Provider failed to execute entry for {trade.ticker}: {e}")
+                return False
         
         # Use execution quantity or default to requested quantity
-        filled_quantity = execution_quantity if execution_quantity is not None else trade.quantity
+        if not self.provider:
+            filled_quantity = execution_quantity if execution_quantity is not None else trade.quantity
         
         # Create entry leg
         entry_leg = TradeLeg(
@@ -312,6 +348,35 @@ class TradeLifecycleManager:
             reason="Market entry execution"
         )
         
+        # Record entry in repository if available
+        if self.repository:
+            try:
+                self.repository.save_trade({
+                    "id": trade.id,
+                    "ticker": trade.ticker,
+                    "direction": trade.direction,
+                    "quantity": filled_quantity,
+                    "entry_price": execution_price,
+                    "status": "EXECUTED",
+                    "mode": trade.mode,
+                    "strategy_id": trade.strategy_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "analysis": trade.analysis,
+                    "llm_prediction": trade.llm_prediction,
+                    "engine_decision": trade.signal_snapshot.get("engine_decision"),
+                    "llm_status": trade.signal_snapshot.get("llm_status"),
+                    "llm_agrees": trade.signal_snapshot.get("llm_agrees")
+                })
+                self.repository.upsert_position({
+                    "ticker": trade.ticker,
+                    "direction": trade.direction,
+                    "quantity": filled_quantity,
+                    "average_entry_price": execution_price,
+                    "mode": trade.mode
+                })
+            except Exception as e:
+                logger.error(f"Failed to persist trade entry to repository: {e}")
+
         # Update trade
         trade.legs.append(entry_leg)
         trade.entry_timestamp = entry_leg.timestamp
@@ -567,36 +632,45 @@ class TradeLifecycleManager:
                 trade.on_stop(trade, stop_leg, stop_pnl)
             except Exception as e:
                 logger.error(f"Error in stop callback for trade {trade_id}: {e}")
-        
         logger.warning(f"Trade {trade_id} stop loss: {trade.position.remaining_quantity} @ {stop_price}")
         
         return True
     
-    def close_trade(
+    async def close_trade(
         self,
         trade_id: str,
         close_price: Optional[float] = None,
         reason: ExitReason = ExitReason.MANUAL_CLOSE
     ) -> bool:
         """
-        Close trade completely.
-        
-        Args:
-            trade_id: Trade identifier
-            close_price: Close price (defaults to current price)
-            reason: Close reason
-            
-        Returns:
-            True if trade closed, False otherwise
+        Close a trade completely.
         """
         trade = self.active_trades.get(trade_id)
-        if not trade:
-            logger.error(f"Trade {trade_id} not found for closing")
+        if not trade or not trade.position:
+            logger.error(f"Trade {trade_id} not found or no position to close")
             return False
         
+        if trade.state in [TradeState.CLOSED, TradeState.CANCELLED]:
+            logger.error(f"Trade {trade_id} already in terminal state: {trade.state}")
+            return False
+
+        # If we have a provider, submit the exit order
+        if self.provider:
+            try:
+                order_result = await self.provider.submit_order(
+                    ticker=trade.ticker,
+                    quantity=trade.position.remaining_quantity,
+                    direction="sell" if trade.direction == "long" else "buy",
+                    order_type=OrderType.MARKET
+                )
+                close_price = order_result.get("average_fill_price", close_price)
+            except Exception as e:
+                logger.error(f"Provider failed to execute close for {trade.ticker}: {e}")
+                return False
+
         # Use current price if not provided
         if close_price is None:
-            close_price = trade.position.current_price if trade.position else trade.entry_price
+            close_price = trade.position.current_price
         
         # Create close leg
         close_leg = TradeLeg(
@@ -663,7 +737,33 @@ class TradeLifecycleManager:
         # Move to completed trades
         self.completed_trades[trade_id] = trade
         self.trade_history.append(trade)
-        del self.active_trades[trade_id]
+        
+        # Record close in repository if available
+        if self.repository:
+            try:
+                self.repository.save_trade({
+                    "id": trade.id,
+                    "ticker": trade.ticker,
+                    "direction": trade.direction,
+                    "quantity": trade.quantity,
+                    "entry_price": trade.entry_price,
+                    "exit_price": exit_price,
+                    "pnl": trade.realized_pnl,
+                    "status": "CLOSED",
+                    "mode": trade.mode,
+                    "strategy_id": trade.strategy_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "analysis": trade.analysis,
+                    "llm_prediction": trade.llm_prediction,
+                    "engine_decision": trade.signal_snapshot.get("engine_decision"),
+                    "llm_status": trade.signal_snapshot.get("llm_status"),
+                    "llm_agrees": trade.signal_snapshot.get("llm_agrees")
+                })
+            except Exception as e:
+                logger.error(f"Failed to persist trade close to repository: {e}")
+
+        if trade_id in self.active_trades:
+            del self.active_trades[trade_id]
         
         logger.info(f"Trade {trade_id} completed with P&L: {trade.realized_pnl:.4f}")
     

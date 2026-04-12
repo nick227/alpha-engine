@@ -1,0 +1,20 @@
+{
+  "id": "technical-vol-crush-v1",
+  "name": "technical_vol_crush_v1",
+  "version": "v1",
+  "strategy_type": "technical_vol_crush_reversion",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "min_prev_max_vol": 0.02,
+    "crush_ratio": 0.75,
+    "max_vol_z": -0.3,
+    "min_abs_price_z": 1.5,
+    "horizon": "1d",
+    "regime_gating": {
+      "deny_trend_strength": ["STRONG"],
+      "reason": "avoid fading strong trends"
+    }
+  }
+}
+

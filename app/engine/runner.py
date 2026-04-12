@@ -16,6 +16,7 @@ from app.core.scoring import score_event
 from app.core.types import RawEvent, StrategyConfig, Prediction, PredictionOutcome
 from app.engine.evaluate import evaluate_prediction, summarize_outcomes
 from app.engine.strategy_factory import build_strategy_instance
+from app.engine.regime_service import build_regime_context, decide_strategy_gate
 
 # Intelligent Loop Imports
 from app.engine.continuous_learning import ContinuousLearner, Signal, SignalOutcome
@@ -373,30 +374,27 @@ def run_pipeline(
             )
 
             event_predictions: list[tuple[str, StrategyConfig, Prediction]] = []
-
-            realized_vol = _estimate_realized_volatility(price_context)
+            regime_ctx = build_regime_context(price_context=price_context, regime_manager=regime_manager)
+            realized_vol = float(regime_ctx.snapshot.volatility_value)
             hist_window = price_context.get("historical_volatility_window")
             if not isinstance(hist_window, list) or not hist_window:
+                hist_window = price_context.get("historical_volatility")
+            if not isinstance(hist_window, list) or not hist_window:
                 hist_window = [realized_vol for _ in range(20)]
+            adx_value = getattr(regime_ctx.snapshot, "adx_value", None)
 
-            adx_value: float | None = None
-            for key in ("adx", "adx_14", "adx_value"):
-                if key in price_context:
-                    try:
-                        adx_value = float(price_context[key])
-                    except (TypeError, ValueError):
-                        adx_value = None
-                    break
-
-            regime_snapshot = regime_manager.classify(
-                realized_volatility=float(realized_vol),
-                historical_volatility_window=[float(x) for x in hist_window],
-                adx_value=adx_value,
-            )
-            regime_payload = asdict(regime_snapshot)
-            vol_regime = str(regime_snapshot.volatility_regime)
+            regime_snapshot = regime_ctx.snapshot
+            regime_payload = dict(regime_ctx.payload)
+            vol_regime = str(regime_ctx.volatility_regime)
 
             for cfg, strat in strategies:
+                gate = decide_strategy_gate(
+                    strategy_type=str(cfg.strategy_type),
+                    strategy_config=dict(cfg.config or {}),
+                    regime=regime_ctx,
+                )
+                if not gate.allowed:
+                    continue
                 pred = strat.maybe_predict(scored, mra, price_context, raw.timestamp)
                 if pred is None:
                     continue
@@ -413,9 +411,16 @@ def run_pipeline(
                     mode=str(pred.mode),
                 )
 
+                pred.regime = vol_regime
+                pred.trend_strength = str(regime_snapshot.trend_strength)
                 pred.feature_snapshot.setdefault("regime", vol_regime)
-                pred.feature_snapshot.setdefault("trend_strength", regime_snapshot.trend_strength)
+                pred.feature_snapshot.setdefault("trend_strength", str(regime_snapshot.trend_strength))
                 pred.feature_snapshot.setdefault("regime_snapshot", regime_payload)
+                if gate.confidence_multiplier != 1.0:
+                    pred.confidence = float(pred.confidence) * float(gate.confidence_multiplier)
+                    pred.feature_snapshot.setdefault("regime_gate_conf_mult", float(gate.confidence_multiplier))
+                if gate.reason:
+                    pred.feature_snapshot.setdefault("regime_gate_reason", str(gate.reason))
 
                 track = _strategy_track(cfg.strategy_type)
                 strategy_name = _strategy_display_name(cfg)
@@ -434,7 +439,7 @@ def run_pipeline(
                             confidence=float(pred.confidence),
                             track=str(track),
                             regime=str(vol_regime) if vol_regime is not None else None,
-                            tenant_id=str(tenant_id),
+                                tenant_id=str(tenant_id),
                         )
                     except Exception:
                         # Signals are a UI read model; never break the pipeline.
@@ -458,7 +463,7 @@ def run_pipeline(
                         "regime": vol_regime,
                         "trend_strength": regime_snapshot.trend_strength,
                     }
-                )
+                    )
 
             sentiment = [t for t in event_predictions if t[0] == "sentiment"]
             quant = [t for t in event_predictions if t[0] == "quant"]
@@ -512,10 +517,12 @@ def run_pipeline(
                         horizon=str(horizon),
                         entry_price=float(price_context.get("entry_price", 100.0)),
                         mode=mode_override or "backtest",
+                        regime=str(consensus_payload.get("regime") or vol_regime),
+                        trend_strength=str(regime_snapshot.trend_strength),
                         feature_snapshot={
                             "regime": consensus_payload.get("regime"),
                             "regime_snapshot": consensus_payload.get("regime_snapshot"),
-                            "trend_strength": regime_snapshot.trend_strength,
+                            "trend_strength": str(regime_snapshot.trend_strength),
                             "sentiment_confidence": consensus_payload.get("sentiment_confidence"),
                             "quant_confidence": consensus_payload.get("quant_confidence"),
                             "weighted_consensus": consensus_payload.get("weighted_consensus"),

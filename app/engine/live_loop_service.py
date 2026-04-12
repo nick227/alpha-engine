@@ -183,18 +183,22 @@ class LiveLoopService:
 
         # Build per-event price_context from cached multi-timeframe bars.
         price_contexts: dict[str, dict] = {}
+        from app.core.price_context import default_benchmark_tickers
+
         tickers_needed = sorted({(evt.tickers[0] if evt.tickers else "") for evt in raw_events} - {""})
+        tickers_fetch = sorted(set(tickers_needed).union(set(default_benchmark_tickers())))
         if tickers_needed:
             bars_by_tf = {
-                "1m": bars_cache.fetch_bars_df(timeframe="1m", tickers=tickers_needed, start=window.start, end=window.end),
-                "1h": bars_cache.fetch_bars_df(timeframe="1h", tickers=tickers_needed, start=window.start, end=window.end),
-                "1d": bars_cache.fetch_bars_df(timeframe="1d", tickers=tickers_needed, start=window.start, end=window.end),
+                "1m": bars_cache.fetch_bars_df(timeframe="1m", tickers=tickers_fetch, start=window.start, end=window.end),
+                "1h": bars_cache.fetch_bars_df(timeframe="1h", tickers=tickers_fetch, start=window.start, end=window.end),
+                "1d": bars_cache.fetch_bars_df(timeframe="1d", tickers=tickers_fetch, start=window.start, end=window.end),
             }
             from app.core.price_context import build_price_contexts_from_bars_multi
 
             price_contexts = build_price_contexts_from_bars_multi(
                 raw_events=raw_events,
                 bars_by_timeframe=bars_by_tf,
+                benchmark_tickers=default_benchmark_tickers(),
             )
 
         strategies = load_active_champion_configs(repo, tenant_id=self.tenant_id)

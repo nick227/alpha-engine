@@ -15,7 +15,17 @@ from app.ingest.adapters.market_breadth import MarketBreadthAdapter
 from app.ingest.adapters.market_baseline import MarketBaselineAdapter
 from app.ingest.adapters.yfinance_macro import YFinanceMacroAdapter
 
+# Dump adapters — read pre-downloaded parquet files; no live API calls.
+from app.ingest.adapters.stooq_dump import StooqDumpAdapter
+from app.ingest.adapters.fnspid_dump import FnspidDumpAdapter
+from app.ingest.adapters.fred_dump import FredDumpAdapter
+from app.ingest.adapters.csv_price_dump import CSVPriceDumpAdapter
+from app.ingest.adapters.analyst_ratings_dump import AnalystRatingsDumpAdapter
+from app.ingest.adapters.alpha_vantage_dump import AlphaVantageDumpAdapter
+from app.ingest.adapters.tiingo_dump import TiingoDumpAdapter
+
 ADAPTERS = {
+    # ── API adapters (live; skipped for historical windows) ─────────── #
     "alpaca_news": AlpacaNewsAdapter(),
     "yahoo_finance": YahooFinanceAdapter(),
     "fred_macro": FredMacroAdapter(),
@@ -30,6 +40,15 @@ ADAPTERS = {
     "market_breadth": MarketBreadthAdapter(),
     "market_baseline": MarketBaselineAdapter(),
     "yfinance_macro": YFinanceMacroAdapter(),
+
+    # ── Dump adapters (priority 1; serve all historical data) ────────── #
+    "stooq_dump": StooqDumpAdapter(),
+    "fnspid_dump": FnspidDumpAdapter(),
+    "fred_dump": FredDumpAdapter(),
+    "csv_price_dump": CSVPriceDumpAdapter(),
+    "analyst_ratings_dump": AnalystRatingsDumpAdapter(),
+    "alpha_vantage_dump": AlphaVantageDumpAdapter(),
+    "tiingo_dump": TiingoDumpAdapter(),
 }
 
 def resolve_adapter(name: str) -> SourceAdapter | None:

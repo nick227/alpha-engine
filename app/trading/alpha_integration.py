@@ -6,15 +6,18 @@ Connects consensus signals to qualification pipeline and execution.
 """
 
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time
 from typing import Dict, List, Any, Optional, Tuple
 import asyncio
 import logging
+from zoneinfo import ZoneInfo
 
 from app.trading.paper_trader import PaperTrader, TradeDirection
 from app.core.feature_integration import FeatureIntegration
 from app.engine.consensus_engine import ConsensusPrediction
 from app.core.types import Prediction
+from app.db.repository import AlphaRepository
+from app.trading.base import TradingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -325,15 +328,40 @@ class PaperTradingOrchestrator:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         
+        # Initialize Repository
+        self.repository = AlphaRepository(config.get('db_path', 'data/alpha.db'))
+        
+        # Initialize Trading Provider
+        self.provider = self._initialize_provider()
+        
         # Initialize components
         self.feature_integration = FeatureIntegration()
-        self.paper_trader = PaperTrader(config.get('paper_trader', {}))
+        self.paper_trader = PaperTrader(config.get('paper_trader', {}), self.provider, self.repository)
         self.alpha_integration = AlphaEngineIntegration(self.paper_trader, self.feature_integration)
         
         # Market data simulation
         self.current_prices: Dict[str, float] = {}
         
-        logger.info("Paper Trading Orchestrator initialized")
+        logger.info(f"Paper Trading Orchestrator initialized with provider: {self.provider.name}")
+
+    def _initialize_provider(self) -> TradingProvider:
+        """Initialize the trading provider based on configuration."""
+        import os
+        from app.trading.providers import AlpacaProvider, LocalSimProvider
+        
+        provider_type = self.config.get('trading', {}).get('provider', 'local_sim')
+        
+        if provider_type == 'alpaca_paper':
+            api_key = os.getenv('ALPACA_PAPER_KEY') or self.config.get('alpaca', {}).get('key')
+            api_secret = os.getenv('ALPACA_PAPER_SECRET') or self.config.get('alpaca', {}).get('secret')
+            
+            if not api_key or not api_secret:
+                logger.warning("Alpaca credentials missing, falling back to local_sim")
+                return LocalSimProvider(self.config.get('paper_trader', {}).get('initial_cash', 100000.0))
+                
+            return AlpacaProvider(api_key, api_secret, self.repository, paper=True)
+        else:
+            return LocalSimProvider(self.config.get('paper_trader', {}).get('initial_cash', 100000.0))
     
     async def run_paper_trading_session(
         self,
@@ -353,6 +381,25 @@ class PaperTradingOrchestrator:
             Session results and statistics
         """
         session_start = datetime.now(timezone.utc)
+
+        # Explicit daily P&L reset boundary (paper trading is session-driven today).
+        # Reset once per trading day after market open (9:30am America/Chicago).
+        try:
+            now_utc = session_start
+            if market_data and market_data.get("timestamp"):
+                now_utc = datetime.fromisoformat(market_data["timestamp"].replace("Z", "+00:00"))
+
+            central = ZoneInfo("America/Chicago")
+            now_central = now_utc.astimezone(central)
+            market_open = datetime.combine(now_central.date(), time(hour=9, minute=30), tzinfo=central)
+
+            last_reset = self.paper_trader.portfolio.daily_pnl_last_reset
+            last_reset_date = last_reset.astimezone(central).date() if last_reset else None
+
+            if now_central >= market_open and last_reset_date != now_central.date():
+                self.paper_trader.reset_daily_pnl(reset_timestamp=now_utc)
+        except Exception as e:
+            logger.warning(f"Failed to evaluate daily P&L reset boundary: {e}")
         
         # Update market data
         if market_data:
@@ -367,6 +414,9 @@ class PaperTradingOrchestrator:
         prediction_trades = await self.alpha_integration.process_predictions(
             predictions, self.current_prices
         )
+        
+        # Synchronize provider state (reconciliation)
+        await self.provider.sync()
         
         # Compile session results
         session_results = {

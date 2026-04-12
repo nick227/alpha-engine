@@ -9,6 +9,18 @@ import pandas as pd
 from app.core.types import RawEvent
 
 
+DEFAULT_BENCHMARK_TICKERS: tuple[str, ...] = ("SPY", "QQQ", "XLK", "HYG", "LQD")
+
+
+def default_benchmark_tickers() -> tuple[str, ...]:
+    """
+    Default cross-asset benchmark symbols used for relative-strength and confirmation strategies.
+
+    Call sites should still union this with the event tickers and only pay the cost when data exists.
+    """
+    return DEFAULT_BENCHMARK_TICKERS
+
+
 def _to_utc(ts: str | datetime) -> datetime:
     if isinstance(ts, datetime):
         if ts.tzinfo is None:
@@ -61,6 +73,8 @@ def build_price_context_for_event(
     ticker_bars: pd.DataFrame,
     event_ts: datetime,
     horizons_minutes: Iterable[int] = (1, 5, 15, 60, 240, 1440, 10080, 43200),
+    benchmark_bars_by_ticker: dict[str, pd.DataFrame] | None = None,
+    benchmark_tickers: Iterable[str] | None = None,
     assume_sorted: bool = False,
 ) -> dict:
     """
@@ -226,6 +240,52 @@ def build_price_context_for_event(
         ctx["max_runup"] = 0.0
         ctx["max_drawdown"] = 0.0
 
+    # Rolling range for breakout/structure strategies (prior window, exclude event bar).
+    prior_20 = lookback_20.iloc[:-1] if len(lookback_20) > 1 else lookback_20
+    highs_20 = prior_20["high"].astype(float) if "high" in prior_20.columns else pd.Series([], dtype=float)
+    lows_20 = prior_20["low"].astype(float) if "low" in prior_20.columns else pd.Series([], dtype=float)
+    if not highs_20.empty:
+        ctx["rolling_high_20"] = float(highs_20.max())
+    if not lows_20.empty:
+        ctx["rolling_low_20"] = float(lows_20.min())
+
+    # Optional: benchmark-relative context.
+    if benchmark_bars_by_ticker and benchmark_tickers:
+        bmarks: dict[str, dict[str, float]] = {}
+        for b in benchmark_tickers:
+            bt = str(b).strip().upper()
+            bdf = benchmark_bars_by_ticker.get(bt)
+            if bdf is None or bdf.empty:
+                continue
+            b_sorted = bdf.reset_index(drop=True) if assume_sorted else bdf.sort_values("timestamp").reset_index(drop=True)
+            b_idx = _prior_bar_index(b_sorted, event_ts)
+            if b_idx is None:
+                continue
+            b_entry = float(b_sorted.iloc[b_idx]["close"])
+            bmarks[bt] = {"entry_price": float(b_entry)}
+
+            for minutes in (1440, 10080, 43200):
+                past_ts = _to_utc(event_ts - timedelta(minutes=int(minutes)))
+                p = _prior_bar_index(b_sorted, past_ts)
+                if p is None:
+                    continue
+                past_price = float(b_sorted.iloc[p]["close"])
+                r = (b_entry - past_price) / past_price if past_price else 0.0
+                if minutes == 1440:
+                    bmarks[bt]["return_1d"] = float(r)
+                elif minutes == 10080:
+                    bmarks[bt]["return_7d"] = float(r)
+                elif minutes == 43200:
+                    bmarks[bt]["return_30d"] = float(r)
+
+        if bmarks:
+            ctx["benchmarks"] = bmarks  # type: ignore[assignment]
+            for bt, bctx in bmarks.items():
+                for h in ("1d", "7d", "30d"):
+                    tk = f"return_{h}"
+                    if tk in ctx and tk in bctx:
+                        ctx[f"rel_return_{h}_vs_{bt}"] = float(ctx[tk]) - float(bctx[tk])  # type: ignore[index]
+
     return dict(ctx)
 
 
@@ -235,6 +295,8 @@ def build_price_context_for_event_with_resolution(
     event_ts: datetime,
     timeframe: str,
     horizons_minutes: Iterable[int] = (1, 5, 15, 60, 240, 1440),
+    benchmark_bars_by_ticker: dict[str, pd.DataFrame] | None = None,
+    benchmark_tickers: Iterable[str] | None = None,
 ) -> dict:
     """
     Build a price context from bars that may be 1m, 1h, or 1d.
@@ -255,6 +317,8 @@ def build_price_context_for_event_with_resolution(
             ticker_bars=ticker_bars,
             event_ts=event_ts,
             horizons_minutes=horizons_minutes,
+            benchmark_bars_by_ticker=benchmark_bars_by_ticker,
+            benchmark_tickers=benchmark_tickers,
             assume_sorted=False,
         )
         if out:
@@ -367,6 +431,56 @@ def build_price_context_for_event_with_resolution(
     ctx["zscore_20"] = (entry_price - mean_20) / std_20 if std_20 else 0.0
     ctx["rsi_14"] = _rsi(lookback_14["close"].astype(float), period=14) if not lookback_14.empty else 50.0
 
+    # Rolling range for breakout/structure strategies (prior window, exclude event bar).
+    prior_20 = lookback_20.iloc[:-1] if len(lookback_20) > 1 else lookback_20
+    highs_20 = prior_20["high"].astype(float) if "high" in prior_20.columns else pd.Series([], dtype=float)
+    lows_20 = prior_20["low"].astype(float) if "low" in prior_20.columns else pd.Series([], dtype=float)
+    if not highs_20.empty:
+        ctx["rolling_high_20"] = float(highs_20.max())
+    if not lows_20.empty:
+        ctx["rolling_low_20"] = float(lows_20.min())
+
+    # Optional: benchmark-relative context.
+    if benchmark_bars_by_ticker and benchmark_tickers:
+        bmarks: dict[str, dict[str, float]] = {}
+        for b in benchmark_tickers:
+            bt = str(b).strip().upper()
+            bdf = benchmark_bars_by_ticker.get(bt)
+            if bdf is None or bdf.empty:
+                continue
+            b_sorted = bdf.sort_values("timestamp").reset_index(drop=True)
+            # Use last bar at/before event timestamp (no lookahead).
+            b_idx = _prior_bar_index(b_sorted, event_ts)
+            if b_idx is None:
+                continue
+            b_row = b_sorted.iloc[b_idx]
+            b_entry = float(b_row["close"])
+            bmarks[bt] = {"entry_price": float(b_entry)}
+
+            for minutes in (1440, 10080, 43200):
+                past_ts = _to_utc(event_ts - timedelta(minutes=int(minutes)))
+                p = _prior_bar_index(b_sorted, past_ts)
+                if p is None:
+                    continue
+                past_price = float(b_sorted.iloc[p]["close"])
+                r = (b_entry - past_price) / past_price if past_price else 0.0
+                if minutes == 1440:
+                    bmarks[bt]["return_1d"] = float(r)
+                elif minutes == 10080:
+                    bmarks[bt]["return_7d"] = float(r)
+                elif minutes == 43200:
+                    bmarks[bt]["return_30d"] = float(r)
+
+        if bmarks:
+            # Put full benchmark payload in case strategies want more than one benchmark.
+            ctx["benchmarks"] = bmarks  # type: ignore[assignment]
+            # Convenience relative return keys (most common comparisons).
+            for bt, bctx in bmarks.items():
+                for h in ("1d", "7d", "30d"):
+                    tk = f"return_{h}"
+                    if tk in ctx and tk in bctx:
+                        ctx[f"rel_return_{h}_vs_{bt}"] = float(ctx[tk]) - float(bctx[tk])  # type: ignore[index]
+
     return dict(ctx)
 
 
@@ -375,6 +489,7 @@ def build_price_contexts_from_bars_multi(
     raw_events: list[RawEvent],
     bars_by_timeframe: dict[str, pd.DataFrame],
     horizons_minutes: Iterable[int] = (1, 5, 15, 60),
+    benchmark_tickers: Iterable[str] | None = None,
 ) -> dict[str, dict]:
     """
     Build price contexts from multi-timeframe bars.
@@ -413,11 +528,15 @@ def build_price_contexts_from_bars_multi(
                 break
         if chosen_tf is None or chosen_bars is None:
             continue
+        # Build benchmark mapping for this timeframe (if available).
+        bm_map = grouped.get(str(chosen_tf).strip().lower(), {})
         ctx = build_price_context_for_event_with_resolution(
             ticker_bars=chosen_bars,
             event_ts=_to_utc(evt.timestamp),
             timeframe=chosen_tf,
             horizons_minutes=horizons_minutes,
+            benchmark_bars_by_ticker=bm_map if benchmark_tickers else None,
+            benchmark_tickers=benchmark_tickers,
         )
         if ctx:
             ctxs[evt.id] = ctx
@@ -430,6 +549,7 @@ def build_price_contexts_from_bars(
     bars: pd.DataFrame,
     horizons_minutes: Iterable[int] = (1, 5, 15, 60),
     bars_already_utc: bool = False,
+    benchmark_tickers: Iterable[str] | None = None,
 ) -> dict[str, dict]:
     """
     Builds a price_context dict keyed by raw_event.id from a multi-ticker bars DataFrame.
@@ -458,6 +578,8 @@ def build_price_contexts_from_bars(
             ticker_bars=ticker_bars,
             event_ts=_to_utc(evt.timestamp),
             horizons_minutes=horizons_minutes,
+            benchmark_bars_by_ticker={k.upper(): v for k, v in bars_by_ticker.items()} if benchmark_tickers else None,
+            benchmark_tickers=benchmark_tickers,
             assume_sorted=True,
         )
     return ctxs

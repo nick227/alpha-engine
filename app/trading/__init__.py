@@ -14,7 +14,7 @@ from .paper_trader import (
     QualificationLayer,
     SignalQualityFilter,
     RiskEngineLayer,
-    LLMValidationLayer
+    LLMAnalysisLayer
 )
 
 from .position_sizing import (

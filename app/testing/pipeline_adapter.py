@@ -364,8 +364,8 @@ class PipelineAdapter:
         
         # Simulate learning - strategy A wins, B loses
         # Calculate weights based on performance
-        a_wins = sum(1 for e in events if 'FAKE_A' in e.tickers)
-        b_wins = sum(1 for e in events if 'FAKE_B' in e.tickers)
+        a_wins = sum(1 for e in events if any(x in (e.tickers[0] if e.tickers else '') for x in ['FAKE_A', 'WINNER_A', 'WINNER', 'A']))
+        b_wins = sum(1 for e in events if any(x in (e.tickers[0] if e.tickers else '') for x in ['FAKE_B', 'LOSER_B', 'LOSER', 'B']))
         
         # A has positive returns (+10%), B has negative (-5%)
         # Weight A should be higher than B

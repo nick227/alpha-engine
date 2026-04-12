@@ -163,6 +163,108 @@ class LoopHealthSummary:
     heartbeats: list[LoopHealthRow]
 
 
+@dataclass(frozen=True)
+class TradeRow:
+    id: str
+    tenant_id: str
+    ticker: str
+    direction: str
+    quantity: float
+    entry_price: float
+    exit_price: float | None
+    pnl: float | None
+    status: str
+    mode: str
+    strategy_id: str | None
+    timestamp: str
+    analysis: str | None = None
+    llm_prediction: str | None = None
+    engine_decision: str | None = None
+    llm_status: str | None = None
+    llm_agrees: int | None = None
+
+
+@dataclass(frozen=True)
+class PositionRow:
+    ticker: str
+    tenant_id: str
+    direction: str
+    quantity: float
+    average_entry_price: float
+    mode: str
+
+
+@dataclass(frozen=True)
+class IngestRunSummaryRow:
+    source_id: str
+    windows: int
+    complete_windows: int
+    running_windows: int
+    failed_windows: int
+    empty_windows: int
+    retries_total: int
+    fetched_rows: int
+    emitted_rows: int
+    skipped_windows: int
+
+
+@dataclass(frozen=True)
+class IngestRunRow:
+    source_id: str
+    start_ts: str
+    end_ts: str
+    spec_hash: str
+    provider: str
+    status: str
+    ok: int
+    retry_count: int
+    fetched_count: int
+    emitted_count: int
+    empty_count: int
+    oldest_event_ts: str | None
+    newest_event_ts: str | None
+    last_error: str | None
+    started_at: str
+    completed_at: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class BackfillHorizonRow:
+    source_id: str
+    spec_hash: str
+    backfilled_until_ts: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class MLTickerReadinessRow:
+    symbol: str
+    horizon: str
+    train_rows_total: int
+    train_rows_labeled: int
+    label_null_rate: float
+    coverage_p10: float | None
+    coverage_median: float | None
+    pct_coverage_ge_min: float | None
+    n_features_est: int | None
+    min_rows_required: int | None
+    ready: bool
+    top_blocker: str
+    suggested_action: str
+    suggested_action_kind: str
+
+
+@dataclass(frozen=True)
+class MLCoverageWindow:
+    symbol: str
+    horizon: str
+    min_bad_date: str | None
+    max_bad_date: str | None
+    bad_rows: int
+    total_rows: int
+
+
 def _infer_track(strategy_type: str) -> str:
     st = str(strategy_type).strip().lower()
     if st.startswith("text_") or st.startswith("sentiment"):
@@ -408,6 +510,171 @@ class EngineReadStore:
         except Exception:
             pass
 
+        # Trades / positions are written by AlphaRepository (paper trading + sims).
+        # Ensure tables exist so the UI can query them even on fresh DBs.
+        try:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS trades (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
+                    ticker TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL,
+                    pnl REAL,
+                    status TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    strategy_id TEXT,
+                    timestamp TEXT NOT NULL,
+                    analysis TEXT,
+                    llm_prediction TEXT,
+                    engine_decision TEXT,
+                    llm_status TEXT,
+                    llm_agrees INTEGER
+                );
+                """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS positions (
+                    ticker TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
+                    direction TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    average_entry_price REAL NOT NULL,
+                    mode TEXT NOT NULL,
+                    PRIMARY KEY (ticker, tenant_id, mode)
+                );
+                """
+            )
+
+            cols = {str(r["name"]) for r in self.conn.execute("PRAGMA table_info(trades)").fetchall()}
+            for col, ddl in (
+                ("analysis", "ALTER TABLE trades ADD COLUMN analysis TEXT;"),
+                ("llm_prediction", "ALTER TABLE trades ADD COLUMN llm_prediction TEXT;"),
+                ("engine_decision", "ALTER TABLE trades ADD COLUMN engine_decision TEXT;"),
+                ("llm_status", "ALTER TABLE trades ADD COLUMN llm_status TEXT;"),
+                ("llm_agrees", "ALTER TABLE trades ADD COLUMN llm_agrees INTEGER;"),
+            ):
+                if cols and col not in cols:
+                    self.conn.execute(ddl)
+        except Exception:
+            pass
+
+        # Ingestion tables are created by EventStore; ensure they exist for monitoring UIs.
+        # This is safe and keeps the UI robust when alpha.db is newly created.
+        try:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ingest_runs (
+                    source_id TEXT NOT NULL,
+                    start_ts TEXT NOT NULL,
+                    end_ts TEXT NOT NULL,
+                    spec_hash TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    ok INTEGER NOT NULL,
+                    retry_count INTEGER NOT NULL,
+                    fetched_count INTEGER NOT NULL,
+                    emitted_count INTEGER NOT NULL,
+                    empty_count INTEGER NOT NULL,
+                    oldest_event_ts TEXT,
+                    newest_event_ts TEXT,
+                    last_error TEXT,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (source_id, start_ts, end_ts, spec_hash)
+                );
+                """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ingest_run_stats (
+                    source_id TEXT NOT NULL,
+                    start_ts TEXT NOT NULL,
+                    end_ts TEXT NOT NULL,
+                    spec_hash TEXT NOT NULL,
+                    request_hash TEXT,
+                    request_cache_hit INTEGER NOT NULL,
+                    response_fingerprint TEXT,
+                    fetch_time_s REAL,
+                    total_time_s REAL,
+                    raw_rows_count INTEGER NOT NULL,
+                    normalized_count INTEGER NOT NULL,
+                    valid_count INTEGER NOT NULL,
+                    bounded_count INTEGER NOT NULL,
+                    dropped_empty_text INTEGER NOT NULL,
+                    dropped_bad_timestamp INTEGER NOT NULL,
+                    dropped_invalid_shape INTEGER NOT NULL,
+                    dropped_out_of_bounds INTEGER NOT NULL,
+                    dropped_duplicate INTEGER NOT NULL,
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (source_id, start_ts, end_ts, spec_hash)
+                );
+                """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS backfill_horizons (
+                    source_id TEXT NOT NULL,
+                    spec_hash TEXT NOT NULL,
+                    backfilled_until_ts TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (source_id, spec_hash)
+                );
+                """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    ticker TEXT,
+                    text TEXT,
+                    tags TEXT,
+                    weight REAL,
+                    numeric_json TEXT,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_runs_source_range ON ingest_runs(source_id, start_ts, end_ts);")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);")
+        except Exception:
+            pass
+
+        # ML tables are created by AlphaRepository. Ensure the learning rows table exists so Ops can
+        # report ML readiness even before any training run has been executed.
+        try:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ml_learning_rows (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    horizon TEXT NOT NULL,
+                    features_json TEXT NOT NULL,
+                    future_return REAL,
+                    coverage_ratio REAL NOT NULL,
+                    split TEXT NOT NULL DEFAULT 'train',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ml_rows_symbol_ts ON ml_learning_rows(tenant_id, symbol, horizon, timestamp);"
+            )
+        except Exception:
+            pass
+
     def close(self) -> None:
         try:
             self.conn.close()
@@ -415,7 +682,7 @@ class EngineReadStore:
             pass
 
     def list_tenants(self) -> list[str]:
-        for table in ("predictions", "strategies", "loop_heartbeats", "regime_performance"):
+        for table in ("predictions", "strategies", "loop_heartbeats", "regime_performance", "trades", "positions"):
             try:
                 rows = self.conn.execute(f"SELECT DISTINCT tenant_id FROM {table} ORDER BY tenant_id").fetchall()
                 tenants = [str(r["tenant_id"]) for r in rows if str(r["tenant_id"]).strip()]
@@ -431,9 +698,772 @@ class EngineReadStore:
                 "SELECT DISTINCT ticker FROM predictions WHERE tenant_id = ? ORDER BY ticker",
                 (tenant_id,),
             ).fetchall()
-            return [str(r["ticker"]) for r in rows if str(r["ticker"]).strip()]
+            tickers = [str(r["ticker"]) for r in rows if str(r["ticker"]).strip()]
+            if tickers:
+                return tickers
+        except Exception:
+            pass
+
+        for table in ("trades", "positions"):
+            try:
+                rows = self.conn.execute(
+                    f"SELECT DISTINCT ticker FROM {table} WHERE tenant_id = ? ORDER BY ticker",
+                    (tenant_id,),
+                ).fetchall()
+                tickers = [str(r["ticker"]) for r in rows if str(r["ticker"]).strip()]
+                if tickers:
+                    return tickers
+            except Exception:
+                continue
+        return []
+
+    def list_positions(
+        self,
+        *,
+        tenant_id: str = "default",
+        mode: str | None = "paper",
+        ticker: str | None = None,
+    ) -> list[PositionRow]:
+        where: list[str] = ["tenant_id = ?"]
+        params: list[Any] = [tenant_id]
+        if mode:
+            where.append("mode = ?")
+            params.append(mode)
+        if ticker:
+            where.append("ticker = ?")
+            params.append(ticker)
+
+        sql = (
+            "SELECT ticker, tenant_id, direction, quantity, average_entry_price, mode "
+            "FROM positions "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY ticker"
+        )
+        try:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            return [
+                PositionRow(
+                    ticker=str(r["ticker"]),
+                    tenant_id=str(r["tenant_id"]),
+                    direction=str(r["direction"]),
+                    quantity=float(r["quantity"]),
+                    average_entry_price=float(r["average_entry_price"]),
+                    mode=str(r["mode"]),
+                )
+                for r in rows
+            ]
         except Exception:
             return []
+
+    def list_trades(
+        self,
+        *,
+        tenant_id: str = "default",
+        mode: str | None = "paper",
+        ticker: str | None = None,
+        strategy_id: str | None = None,
+        status: str | None = None,
+        since_iso: str | None = None,
+        limit: int = 250,
+    ) -> list[TradeRow]:
+        where: list[str] = ["tenant_id = ?"]
+        params: list[Any] = [tenant_id]
+        if mode:
+            where.append("mode = ?")
+            params.append(mode)
+        if ticker:
+            where.append("ticker = ?")
+            params.append(ticker)
+        if strategy_id:
+            where.append("strategy_id = ?")
+            params.append(strategy_id)
+        if status:
+            where.append("status = ?")
+            params.append(status)
+        if since_iso:
+            where.append("timestamp >= ?")
+            params.append(since_iso)
+
+        sql = (
+            "SELECT id, tenant_id, ticker, direction, quantity, entry_price, exit_price, pnl, "
+            "status, mode, strategy_id, timestamp, analysis, llm_prediction, engine_decision, "
+            "llm_status, llm_agrees "
+            "FROM trades "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY timestamp DESC "
+            "LIMIT ?"
+        )
+        params.append(int(limit))
+        try:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            out: list[TradeRow] = []
+            for r in rows:
+                out.append(
+                    TradeRow(
+                        id=str(r["id"]),
+                        tenant_id=str(r["tenant_id"]),
+                        ticker=str(r["ticker"]),
+                        direction=str(r["direction"]),
+                        quantity=float(r["quantity"]),
+                        entry_price=float(r["entry_price"]),
+                        exit_price=(float(r["exit_price"]) if r["exit_price"] is not None else None),
+                        pnl=(float(r["pnl"]) if r["pnl"] is not None else None),
+                        status=str(r["status"]),
+                        mode=str(r["mode"]),
+                        strategy_id=(str(r["strategy_id"]) if r["strategy_id"] is not None else None),
+                        timestamp=str(r["timestamp"]),
+                        analysis=(str(r["analysis"]) if r["analysis"] is not None else None),
+                        llm_prediction=(str(r["llm_prediction"]) if r["llm_prediction"] is not None else None),
+                        engine_decision=(str(r["engine_decision"]) if r["engine_decision"] is not None else None),
+                        llm_status=(str(r["llm_status"]) if r["llm_status"] is not None else None),
+                        llm_agrees=(int(r["llm_agrees"]) if r["llm_agrees"] is not None else None),
+                    )
+                )
+            return out
+        except Exception:
+            return []
+
+    def get_latest_close_prices(
+        self,
+        *,
+        tickers: list[str],
+        tenant_id: str = "default",
+        timeframe: str = "1d",
+    ) -> dict[str, float]:
+        if not tickers:
+            return {}
+        # sqlite doesn't support array binding; build placeholders safely.
+        placeholders = ",".join(["?"] * len(tickers))
+        params: list[Any] = [tenant_id, timeframe, *tickers]
+        sql = f"""
+        SELECT b.ticker as ticker, b.close as close
+        FROM price_bars b
+        JOIN (
+          SELECT ticker, MAX(timestamp) as max_ts
+          FROM price_bars
+          WHERE tenant_id = ? AND timeframe = ? AND ticker IN ({placeholders})
+          GROUP BY ticker
+        ) m
+        ON b.ticker = m.ticker AND b.timestamp = m.max_ts AND b.tenant_id = ? AND b.timeframe = ?
+        """
+        # Duplicate tenant/timeframe for the JOIN predicate params
+        params2: list[Any] = [tenant_id, timeframe, *tickers, tenant_id, timeframe]
+        try:
+            rows = self.conn.execute(sql, tuple(params2)).fetchall()
+            return {str(r["ticker"]): float(r["close"]) for r in rows if r["ticker"] is not None and r["close"] is not None}
+        except Exception:
+            return {}
+
+    def summarize_ingest_runs(
+        self,
+        *,
+        start_ts: str | None = None,
+        end_ts: str | None = None,
+        source_id: str | None = None,
+    ) -> list[IngestRunSummaryRow]:
+        where: list[str] = []
+        params: list[Any] = []
+        if source_id:
+            where.append("source_id = ?")
+            params.append(str(source_id))
+        if start_ts:
+            where.append("end_ts > ?")
+            params.append(str(start_ts))
+        if end_ts:
+            where.append("start_ts < ?")
+            params.append(str(end_ts))
+
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        sql = f"""
+        SELECT
+          source_id,
+          COUNT(*) as windows,
+          SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) as complete_windows,
+          SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running_windows,
+          SUM(CASE WHEN status LIKE 'failed%' THEN 1 ELSE 0 END) as failed_windows,
+          SUM(empty_count) as empty_windows,
+          SUM(retry_count) as retries_total,
+          SUM(fetched_count) as fetched_rows,
+          SUM(emitted_count) as emitted_rows,
+          SUM(CASE WHEN status = 'complete' AND fetched_count = 0 AND last_error IS NOT NULL THEN 1 ELSE 0 END) as skipped_windows
+        FROM ingest_runs
+        {where_sql}
+        GROUP BY source_id
+        ORDER BY windows DESC, source_id ASC
+        """
+        try:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            out: list[IngestRunSummaryRow] = []
+            for r in rows:
+                out.append(
+                    IngestRunSummaryRow(
+                        source_id=str(r["source_id"]),
+                        windows=int(r["windows"] or 0),
+                        complete_windows=int(r["complete_windows"] or 0),
+                        running_windows=int(r["running_windows"] or 0),
+                        failed_windows=int(r["failed_windows"] or 0),
+                        empty_windows=int(r["empty_windows"] or 0),
+                        retries_total=int(r["retries_total"] or 0),
+                        fetched_rows=int(r["fetched_rows"] or 0),
+                        emitted_rows=int(r["emitted_rows"] or 0),
+                        skipped_windows=int(r["skipped_windows"] or 0),
+                    )
+                )
+            return out
+        except Exception:
+            return []
+
+    def list_recent_ingest_runs(
+        self,
+        *,
+        start_ts: str | None = None,
+        end_ts: str | None = None,
+        source_id: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[IngestRunRow]:
+        where: list[str] = []
+        params: list[Any] = []
+        if source_id:
+            where.append("source_id = ?")
+            params.append(str(source_id))
+        if status:
+            where.append("status = ?")
+            params.append(str(status))
+        if start_ts:
+            where.append("end_ts > ?")
+            params.append(str(start_ts))
+        if end_ts:
+            where.append("start_ts < ?")
+            params.append(str(end_ts))
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        sql = f"""
+        SELECT
+          source_id, start_ts, end_ts, spec_hash, provider, status, ok,
+          retry_count, fetched_count, emitted_count, empty_count,
+          oldest_event_ts, newest_event_ts, last_error,
+          started_at, completed_at, updated_at
+        FROM ingest_runs
+        {where_sql}
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """
+        params.append(int(limit))
+        try:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            return [
+                IngestRunRow(
+                    source_id=str(r["source_id"]),
+                    start_ts=str(r["start_ts"]),
+                    end_ts=str(r["end_ts"]),
+                    spec_hash=str(r["spec_hash"]),
+                    provider=str(r["provider"]),
+                    status=str(r["status"]),
+                    ok=int(r["ok"] or 0),
+                    retry_count=int(r["retry_count"] or 0),
+                    fetched_count=int(r["fetched_count"] or 0),
+                    emitted_count=int(r["emitted_count"] or 0),
+                    empty_count=int(r["empty_count"] or 0),
+                    oldest_event_ts=(str(r["oldest_event_ts"]) if r["oldest_event_ts"] is not None else None),
+                    newest_event_ts=(str(r["newest_event_ts"]) if r["newest_event_ts"] is not None else None),
+                    last_error=(str(r["last_error"]) if r["last_error"] is not None else None),
+                    started_at=str(r["started_at"]),
+                    completed_at=(str(r["completed_at"]) if r["completed_at"] is not None else None),
+                    updated_at=str(r["updated_at"]),
+                )
+                for r in rows
+            ]
+        except Exception:
+            return []
+
+    def list_backfill_horizons(self, *, limit: int = 200) -> list[BackfillHorizonRow]:
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT source_id, spec_hash, backfilled_until_ts, updated_at
+                FROM backfill_horizons
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+            return [
+                BackfillHorizonRow(
+                    source_id=str(r["source_id"]),
+                    spec_hash=str(r["spec_hash"]),
+                    backfilled_until_ts=str(r["backfilled_until_ts"]),
+                    updated_at=str(r["updated_at"]),
+                )
+                for r in rows
+            ]
+        except Exception:
+            return []
+
+    def summarize_events_freshness(
+        self,
+        *,
+        start_ts: str | None = None,
+        end_ts: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        where: list[str] = []
+        params: list[Any] = []
+        if start_ts:
+            where.append("timestamp >= ?")
+            params.append(str(start_ts))
+        if end_ts:
+            where.append("timestamp < ?")
+            params.append(str(end_ts))
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        sql = f"""
+        SELECT
+          source as source_id,
+          COUNT(*) as rows_count,
+          MIN(timestamp) as min_ts,
+          MAX(timestamp) as max_ts
+        FROM events
+        {where_sql}
+        GROUP BY source
+        ORDER BY max_ts DESC, rows_count DESC
+        LIMIT ?
+        """
+        params.append(int(limit))
+        try:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            return [
+                {
+                    "source_id": str(r["source_id"]),
+                    "rows": int(r["rows_count"] or 0),
+                    "min_ts": (str(r["min_ts"]) if r["min_ts"] is not None else None),
+                    "max_ts": (str(r["max_ts"]) if r["max_ts"] is not None else None),
+                }
+                for r in rows
+            ]
+        except Exception:
+            return []
+
+    def monthly_counts_price_bars(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str | None = None,
+        timeframe: str = "1d",
+        start_ym: str,
+        end_ym: str,
+    ) -> dict[str, int]:
+        where: list[str] = ["tenant_id = ?", "timeframe = ?"]
+        params: list[Any] = [tenant_id, str(timeframe)]
+        if ticker:
+            where.append("ticker = ?")
+            params.append(str(ticker))
+
+        # YYYY-MM extracted from ISO strings (fast + works for Z/offset variants).
+        where.append("substr(timestamp, 1, 7) >= ?")
+        params.append(str(start_ym))
+        where.append("substr(timestamp, 1, 7) <= ?")
+        params.append(str(end_ym))
+
+        sql = f"""
+        SELECT substr(timestamp, 1, 7) as ym, COUNT(*) as n
+        FROM price_bars
+        WHERE {' AND '.join(where)}
+        GROUP BY ym
+        ORDER BY ym
+        """
+        try:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            return {str(r["ym"]): int(r["n"] or 0) for r in rows if r["ym"] is not None}
+        except Exception:
+            return {}
+
+    def monthly_counts_events(
+        self,
+        *,
+        source_id: str | None = None,
+        start_ym: str,
+        end_ym: str,
+    ) -> dict[str, int]:
+        where: list[str] = []
+        params: list[Any] = []
+        if source_id:
+            where.append("source = ?")
+            params.append(str(source_id))
+        where.append("substr(timestamp, 1, 7) >= ?")
+        params.append(str(start_ym))
+        where.append("substr(timestamp, 1, 7) <= ?")
+        params.append(str(end_ym))
+
+        sql = f"""
+        SELECT substr(timestamp, 1, 7) as ym, COUNT(*) as n
+        FROM events
+        WHERE {' AND '.join(where)}
+        GROUP BY ym
+        ORDER BY ym
+        """
+        try:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            return {str(r["ym"]): int(r["n"] or 0) for r in rows if r["ym"] is not None}
+        except Exception:
+            return {}
+
+    def monthly_counts_ingest_runs(
+        self,
+        *,
+        source_id: str | None = None,
+        status: str | None = "complete",
+        start_ym: str,
+        end_ym: str,
+    ) -> dict[str, int]:
+        where: list[str] = []
+        params: list[Any] = []
+        if source_id:
+            where.append("source_id = ?")
+            params.append(str(source_id))
+        if status:
+            where.append("status = ?")
+            params.append(str(status))
+        where.append("substr(start_ts, 1, 7) >= ?")
+        params.append(str(start_ym))
+        where.append("substr(start_ts, 1, 7) <= ?")
+        params.append(str(end_ym))
+
+        sql = f"""
+        SELECT substr(start_ts, 1, 7) as ym, COUNT(*) as n
+        FROM ingest_runs
+        WHERE {' AND '.join(where)}
+        GROUP BY ym
+        ORDER BY ym
+        """
+        try:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            return {str(r["ym"]): int(r["n"] or 0) for r in rows if r["ym"] is not None}
+        except Exception:
+            return {}
+
+    def list_ml_symbols(
+        self,
+        *,
+        tenant_id: str = "default",
+        horizon: str = "7d",
+        limit: int = 400,
+    ) -> list[str]:
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT symbol, COUNT(*) as n
+                FROM ml_learning_rows
+                WHERE tenant_id = ? AND horizon = ? AND split = 'train'
+                GROUP BY symbol
+                ORDER BY n DESC, symbol ASC
+                LIMIT ?
+                """,
+                (tenant_id, str(horizon), int(limit)),
+            ).fetchall()
+            return [str(r["symbol"]) for r in rows if r["symbol"]]
+        except Exception:
+            return []
+
+    def summarize_ml_readiness_per_ticker(
+        self,
+        *,
+        tenant_id: str = "default",
+        horizon: str = "7d",
+        start_date: str,
+        end_date: str,
+        min_feature_coverage: float = 0.8,
+        sample_rows_for_feature_union: int = 1500,
+        limit_symbols: int = 80,
+        symbol_filter: str | None = None,
+    ) -> list[MLTickerReadinessRow]:
+        """
+        ML readiness summary designed for Ops UI.
+
+        This is "per-ticker readiness" even if current training is pooled.
+        It answers: do we have enough labeled + covered rows to train a per-ticker model?
+        """
+        where = ["tenant_id = ?", "horizon = ?", "split = 'train'", "DATE(timestamp) >= ?", "DATE(timestamp) <= ?"]
+        params: list[Any] = [tenant_id, str(horizon), str(start_date), str(end_date)]
+        if symbol_filter:
+            where.append("symbol = ?")
+            params.append(str(symbol_filter))
+            limit_symbols = 1
+
+        # Aggregate counts + coverage stats.
+        sql = f"""
+        SELECT
+          symbol,
+          COUNT(*) as total_rows,
+          SUM(CASE WHEN future_return IS NOT NULL THEN 1 ELSE 0 END) as labeled_rows,
+          AVG(coverage_ratio) as avg_cov,
+          MIN(coverage_ratio) as min_cov,
+          MAX(coverage_ratio) as max_cov,
+          SUM(CASE WHEN coverage_ratio >= ? THEN 1 ELSE 0 END) as cov_ge_min
+        FROM ml_learning_rows
+        WHERE {' AND '.join(where)}
+        GROUP BY symbol
+        ORDER BY total_rows DESC, symbol ASC
+        LIMIT ?
+        """
+        params_cov = [*params, float(min_feature_coverage), int(limit_symbols)]
+        try:
+            rows = self.conn.execute(sql, tuple(params_cov)).fetchall()
+        except Exception:
+            return []
+
+        out: list[MLTickerReadinessRow] = []
+        for r in rows:
+            symbol = str(r["symbol"])
+            total_rows = int(r["total_rows"] or 0)
+            labeled_rows = int(r["labeled_rows"] or 0)
+            cov_ge_min = int(r["cov_ge_min"] or 0)
+
+            label_null_rate = 0.0
+            if total_rows > 0:
+                label_null_rate = float(1.0 - (labeled_rows / total_rows))
+
+            # Coverage quantiles (p10/median) for interpretability.
+            cov_p10 = None
+            cov_med = None
+            pct_cov_ge_min = None
+            try:
+                cov_rows = self.conn.execute(
+                    """
+                    SELECT coverage_ratio
+                    FROM ml_learning_rows
+                    WHERE tenant_id = ? AND symbol = ? AND horizon = ? AND split = 'train'
+                      AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+                    ORDER BY coverage_ratio ASC
+                    """,
+                    (tenant_id, symbol, str(horizon), str(start_date), str(end_date)),
+                ).fetchall()
+                cov_vals = [float(x["coverage_ratio"]) for x in cov_rows if x["coverage_ratio"] is not None]
+                if cov_vals:
+                    cov_vals.sort()
+                    cov_p10 = float(cov_vals[int(0.10 * (len(cov_vals) - 1))])
+                    cov_med = float(cov_vals[int(0.50 * (len(cov_vals) - 1))])
+                    pct_cov_ge_min = float(cov_ge_min / len(cov_vals))
+            except Exception:
+                pass
+
+            # Estimate feature dimensionality by union of keys in recent feature snapshots.
+            n_features_est: int | None = None
+            min_rows_required: int | None = None
+            try:
+                feat_rows = self.conn.execute(
+                    """
+                    SELECT features_json
+                    FROM ml_learning_rows
+                    WHERE tenant_id = ? AND symbol = ? AND horizon = ? AND split = 'train'
+                      AND future_return IS NOT NULL
+                      AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (
+                        tenant_id,
+                        symbol,
+                        str(horizon),
+                        str(start_date),
+                        str(end_date),
+                        int(sample_rows_for_feature_union),
+                    ),
+                ).fetchall()
+                import json as _json
+
+                keys: set[str] = set()
+                for fr in feat_rows:
+                    try:
+                        payload = _json.loads(fr["features_json"])
+                        if isinstance(payload, dict):
+                            keys.update([str(k) for k in payload.keys()])
+                    except Exception:
+                        continue
+                n_features_est = int(len(keys))
+                if n_features_est > 0:
+                    min_rows_required = int(max(50, n_features_est * 10))
+            except Exception:
+                pass
+
+            # Determine readiness + top blocker (simple, actionable).
+            blocker = ""
+            ready = True
+            suggested_action = "OK"
+            suggested_kind = "none"
+
+            if labeled_rows <= 0:
+                ready = False
+                blocker = "labels_missing (need price_bars for symbol+SPY entry/exit)"
+                if total_rows > 0:
+                    suggested_action = "Backfill missing price/bars data, then rebuild ML dataset"
+                    suggested_kind = "backfill_missing_data"
+                else:
+                    suggested_action = "Build ML dataset (compute labels/features)"
+                    suggested_kind = "build_ml_dataset"
+            elif pct_cov_ge_min is not None and pct_cov_ge_min < 0.80:
+                ready = False
+                blocker = "low_feature_coverage (missing factor inputs)"
+                suggested_action = "Backfill missing data (then rebuild ML dataset)"
+                suggested_kind = "backfill_missing_data"
+            elif min_rows_required is not None and labeled_rows < min_rows_required:
+                ready = False
+                blocker = f"insufficient_rows (need {min_rows_required}, have {labeled_rows})"
+                suggested_action = "Extend history (older backfill), then rebuild ML dataset"
+                suggested_kind = "extend_history"
+
+            if not blocker:
+                blocker = "ok"
+
+            out.append(
+                MLTickerReadinessRow(
+                    symbol=symbol,
+                    horizon=str(horizon),
+                    train_rows_total=total_rows,
+                    train_rows_labeled=labeled_rows,
+                    label_null_rate=float(label_null_rate),
+                    coverage_p10=cov_p10,
+                    coverage_median=cov_med,
+                    pct_coverage_ge_min=pct_cov_ge_min,
+                    n_features_est=n_features_est,
+                    min_rows_required=min_rows_required,
+                    ready=bool(ready),
+                    top_blocker=str(blocker),
+                    suggested_action=str(suggested_action),
+                    suggested_action_kind=str(suggested_kind),
+                )
+            )
+
+        return out
+
+    def monthly_counts_ml_learning_rows(
+        self,
+        *,
+        tenant_id: str = "default",
+        symbol: str | None = None,
+        horizon: str = "7d",
+        labeled_only: bool = True,
+        start_ym: str,
+        end_ym: str,
+    ) -> dict[str, int]:
+        where: list[str] = ["tenant_id = ?", "horizon = ?", "split = 'train'"]
+        params: list[Any] = [tenant_id, str(horizon)]
+        if symbol:
+            where.append("symbol = ?")
+            params.append(str(symbol))
+        if labeled_only:
+            where.append("future_return IS NOT NULL")
+        where.append("substr(timestamp, 1, 7) >= ?")
+        params.append(str(start_ym))
+        where.append("substr(timestamp, 1, 7) <= ?")
+        params.append(str(end_ym))
+
+        sql = f"""
+        SELECT substr(timestamp, 1, 7) as ym, COUNT(*) as n
+        FROM ml_learning_rows
+        WHERE {' AND '.join(where)}
+        GROUP BY ym
+        ORDER BY ym
+        """
+        try:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            return {str(r["ym"]): int(r["n"] or 0) for r in rows if r["ym"] is not None}
+        except Exception:
+            return {}
+
+    def ml_dataset_state(
+        self,
+        *,
+        tenant_id: str = "backfill",
+        horizon: str = "7d",
+        start_date: str,
+        end_date: str,
+        symbol: str | None = None,
+    ) -> dict[str, int]:
+        where = ["tenant_id = ?", "horizon = ?", "split = 'train'", "DATE(timestamp) >= ?", "DATE(timestamp) <= ?"]
+        params: list[Any] = [tenant_id, str(horizon), str(start_date), str(end_date)]
+        if symbol:
+            where.append("symbol = ?")
+            params.append(str(symbol))
+        sql = f"""
+        SELECT
+          COUNT(*) as total_rows,
+          SUM(CASE WHEN future_return IS NOT NULL THEN 1 ELSE 0 END) as labeled_rows
+        FROM ml_learning_rows
+        WHERE {' AND '.join(where)}
+        """
+        try:
+            r = self.conn.execute(sql, tuple(params)).fetchone()
+            if not r:
+                return {"total_rows": 0, "labeled_rows": 0}
+            return {"total_rows": int(r["total_rows"] or 0), "labeled_rows": int(r["labeled_rows"] or 0)}
+        except Exception:
+            return {"total_rows": 0, "labeled_rows": 0}
+
+    def ml_low_coverage_window(
+        self,
+        *,
+        tenant_id: str = "backfill",
+        symbol: str,
+        horizon: str = "7d",
+        start_date: str,
+        end_date: str,
+        min_feature_coverage: float = 0.8,
+    ) -> MLCoverageWindow:
+        """
+        Identify the date window where coverage is below threshold.
+
+        This is used to propose a targeted backfill-range fix.
+        """
+        try:
+            r = self.conn.execute(
+                """
+                SELECT
+                  MIN(DATE(timestamp)) as min_bad,
+                  MAX(DATE(timestamp)) as max_bad,
+                  COUNT(*) as bad_rows
+                FROM ml_learning_rows
+                WHERE tenant_id = ? AND symbol = ? AND horizon = ? AND split = 'train'
+                  AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+                  AND coverage_ratio < ?
+                """,
+                (
+                    str(tenant_id),
+                    str(symbol),
+                    str(horizon),
+                    str(start_date),
+                    str(end_date),
+                    float(min_feature_coverage),
+                ),
+            ).fetchone()
+            t = self.conn.execute(
+                """
+                SELECT COUNT(*) as total_rows
+                FROM ml_learning_rows
+                WHERE tenant_id = ? AND symbol = ? AND horizon = ? AND split = 'train'
+                  AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+                """,
+                (str(tenant_id), str(symbol), str(horizon), str(start_date), str(end_date)),
+            ).fetchone()
+            min_bad = (str(r["min_bad"]) if r and r["min_bad"] is not None else None)
+            max_bad = (str(r["max_bad"]) if r and r["max_bad"] is not None else None)
+            bad_rows = int(r["bad_rows"] or 0) if r else 0
+            total_rows = int(t["total_rows"] or 0) if t else 0
+            return MLCoverageWindow(
+                symbol=str(symbol),
+                horizon=str(horizon),
+                min_bad_date=min_bad,
+                max_bad_date=max_bad,
+                bad_rows=bad_rows,
+                total_rows=total_rows,
+            )
+        except Exception:
+            return MLCoverageWindow(
+                symbol=str(symbol),
+                horizon=str(horizon),
+                min_bad_date=None,
+                max_bad_date=None,
+                bad_rows=0,
+                total_rows=0,
+            )
 
     def _strategy_metrics(self, *, tenant_id: str) -> list[ChampionRow]:
         """

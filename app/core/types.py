@@ -75,6 +75,8 @@ class Prediction:
     horizon: str
     entry_price: float
     mode: str
+    regime: str | None = None
+    trend_strength: str | None = None
     feature_snapshot: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -110,4 +112,3 @@ class TargetRanking:
     regime: str
     timestamp: datetime
     tenant_id: str = "default"
-

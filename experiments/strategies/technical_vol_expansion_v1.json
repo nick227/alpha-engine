@@ -1,0 +1,19 @@
+{
+  "id": "technical-vol-expansion-v1",
+  "name": "technical_vol_expansion_v1",
+  "version": "v1",
+  "strategy_type": "technical_vol_expansion_continuation",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "min_vol_z": 1.0,
+    "min_range_expansion": 1.2,
+    "min_abs_slope": 0.0015,
+    "horizon": "1d",
+    "regime_gating": {
+      "deny_trend_strength": ["WEAK"],
+      "reason": "prefer trend or normal conditions for continuation"
+    }
+  }
+}
+
