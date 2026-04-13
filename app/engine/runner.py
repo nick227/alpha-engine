@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+import os
 import hashlib
 import json
 
@@ -253,29 +254,37 @@ def run_pipeline(
     configs = strategy_configs if strategy_configs is not None else load_strategy_configs()
     active_configs = [c for c in configs if c.active]
 
-    # Expand strategy configs across UI horizons so the engine emits 1d/7d/30d predictions.
-    # This enables per-horizon consensus rows in the UI.
-    desired_horizons = ["1d", "7d", "30d"]
-    expanded_configs: list[StrategyConfig] = []
-    for cfg in active_configs:
-        if str(cfg.strategy_type).strip().lower() == "consensus":
-            continue
-        for h in desired_horizons:
-            try:
-                expanded_configs.append(
-                    StrategyConfig(
-                        id=f"{cfg.id}-{h}",
-                        name=f"{cfg.name} ({h})",
-                        version=str(cfg.version),
-                        strategy_type=str(cfg.strategy_type),
-                        mode=str(cfg.mode),
-                        config={**dict(cfg.config or {}), "horizon": h},
-                        active=bool(cfg.active),
-                    )
-                )
-            except Exception:
+    # Optional: expand configs across longer UI horizons to emit 1d/7d/30d predictions.
+    #
+    # Default off to preserve stable strategy ids/horizons for unit tests and retry idempotency.
+    # Enable explicitly via env var when desired for UI experiments.
+    expand_ui_horizons = str(os.getenv("RUNNER_EXPAND_UI_HORIZONS", "false")).lower() == "true"
+    if expand_ui_horizons and strategy_configs is None:
+        desired_horizons = ["1d", "7d", "30d"]
+        expanded_configs: list[StrategyConfig] = []
+        for cfg in active_configs:
+            if str(cfg.strategy_type).strip().lower() == "consensus":
                 continue
-    active_configs = expanded_configs
+            # If the strategy already declares a horizon, keep it as-is.
+            if isinstance(getattr(cfg, "config", None), dict) and "horizon" in (cfg.config or {}):
+                expanded_configs.append(cfg)
+                continue
+            for h in desired_horizons:
+                try:
+                    expanded_configs.append(
+                        StrategyConfig(
+                            id=f"{cfg.id}-{h}",
+                            name=f"{cfg.name} ({h})",
+                            version=str(cfg.version),
+                            strategy_type=str(cfg.strategy_type),
+                            mode=str(cfg.mode),
+                            config={**dict(cfg.config or {}), "horizon": h},
+                            active=bool(cfg.active),
+                        )
+                    )
+                except Exception:
+                    continue
+        active_configs = expanded_configs
 
     strategies: list[tuple[StrategyConfig, Any]] = []
     for cfg in active_configs:
@@ -318,6 +327,9 @@ def run_pipeline(
         for raw in raw_events:
             features_ctx, _ = _split_context(price_contexts.get(raw.id, {}))
             price_context = features_ctx
+            # Inject source-specific metadata so strategies can gate on event type
+            if raw.metadata:
+                price_context = {**price_context, **raw.metadata}
             if repo is not None:
                 repo.persist_raw_event(raw, tenant_id=str(tenant_id))
 
@@ -416,6 +428,11 @@ def run_pipeline(
                 pred.feature_snapshot.setdefault("regime", vol_regime)
                 pred.feature_snapshot.setdefault("trend_strength", str(regime_snapshot.trend_strength))
                 pred.feature_snapshot.setdefault("regime_snapshot", regime_payload)
+                # Fear-regime audit trail — always record so the reason for any
+                # confidence adjustment is traceable in prediction logs.
+                pred.feature_snapshot.setdefault("fear_regime", regime_ctx.fear_regime)
+                if regime_ctx.vix_term is not None:
+                    pred.feature_snapshot.setdefault("vix_term", regime_ctx.vix_term)
                 if gate.confidence_multiplier != 1.0:
                     pred.confidence = float(pred.confidence) * float(gate.confidence_multiplier)
                     pred.feature_snapshot.setdefault("regime_gate_conf_mult", float(gate.confidence_multiplier))

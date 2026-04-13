@@ -389,6 +389,155 @@ class AlphaRepository:
 
         CREATE INDEX IF NOT EXISTS idx_ml_models_horizon_date
           ON ml_models(horizon, passed_gate, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS fundamentals_snapshot (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            ticker TEXT NOT NULL,
+            as_of_date TEXT NOT NULL,
+            revenue_ttm REAL,
+            revenue_growth REAL,
+            shares_outstanding REAL,
+            shares_growth REAL,
+            sector TEXT,
+            industry TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, ticker, as_of_date)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_fundamentals_latest
+          ON fundamentals_snapshot(tenant_id, ticker, as_of_date DESC);
+
+        CREATE TABLE IF NOT EXISTS discovery_candidates (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            as_of_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            strategy_type TEXT NOT NULL,
+            score REAL NOT NULL,
+            reason TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, as_of_date, symbol, strategy_type)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_discovery_by_strategy
+          ON discovery_candidates(tenant_id, as_of_date, strategy_type, score DESC);
+
+        CREATE TABLE IF NOT EXISTS discovery_watchlist (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            as_of_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            overlap_count INTEGER NOT NULL,
+            days_seen INTEGER NOT NULL,
+            avg_score REAL NOT NULL,
+            playbook_id TEXT NOT NULL DEFAULT '',
+            prediction_plan_json TEXT NOT NULL DEFAULT '{}',
+            strategies_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, as_of_date, symbol)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_discovery_watchlist_rank
+          ON discovery_watchlist(tenant_id, as_of_date, overlap_count DESC, days_seen DESC, avg_score DESC);
+
+        CREATE TABLE IF NOT EXISTS prediction_queue (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            as_of_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'discovery',
+            priority INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, as_of_date, symbol, source)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_prediction_queue_pending
+          ON prediction_queue(tenant_id, status, priority DESC, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS discovery_outcomes (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            watchlist_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            horizon_days INTEGER NOT NULL,
+            entry_date TEXT NOT NULL,
+            exit_date TEXT,
+            entry_close REAL NOT NULL,
+            exit_close REAL,
+            return_pct REAL,
+            overlap_count INTEGER,
+            days_seen INTEGER,
+            strategies_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, watchlist_date, symbol, horizon_days)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_discovery_outcomes_lookup
+          ON discovery_outcomes(tenant_id, watchlist_date, horizon_days, return_pct);
+
+        CREATE TABLE IF NOT EXISTS discovery_candidate_outcomes (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            as_of_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            strategy_type TEXT NOT NULL,
+            horizon_days INTEGER NOT NULL,
+            entry_date TEXT NOT NULL,
+            exit_date TEXT,
+            entry_close REAL NOT NULL,
+            exit_close REAL,
+            return_pct REAL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, as_of_date, symbol, strategy_type, horizon_days)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_discovery_candidate_outcomes_lookup
+          ON discovery_candidate_outcomes(tenant_id, as_of_date, horizon_days, strategy_type, return_pct);
+
+        CREATE TABLE IF NOT EXISTS discovery_stats (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            computed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            end_date TEXT NOT NULL,
+            window_days INTEGER NOT NULL,
+            horizon_days INTEGER NOT NULL,
+            group_type TEXT NOT NULL,
+            group_value TEXT NOT NULL,
+            n INTEGER NOT NULL,
+            avg_return REAL NOT NULL,
+            win_rate REAL NOT NULL,
+            lift REAL NOT NULL DEFAULT 0.0,
+            status TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (tenant_id, computed_at, end_date, window_days, horizon_days, group_type, group_value)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_discovery_stats_recent
+          ON discovery_stats(tenant_id, computed_at DESC, group_type);
+
+        CREATE TABLE IF NOT EXISTS discovery_jobs (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            id TEXT PRIMARY KEY,
+            job_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            message TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_discovery_jobs_type
+          ON discovery_jobs(tenant_id, job_type, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS prediction_jobs (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            id TEXT PRIMARY KEY,
+            job_type TEXT NOT NULL,
+            as_of_date TEXT,
+            run_id TEXT,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            message TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_prediction_jobs_recent
+          ON prediction_jobs(tenant_id, started_at DESC);
         """
         self.conn.executescript(schema)
         self._ensure_additive_schema()
@@ -429,6 +578,51 @@ class AlphaRepository:
                 self.conn.execute("ALTER TABLE ml_models ADD COLUMN group_weights_json TEXT NOT NULL DEFAULT '{}';")
             except Exception:
                 pass
+
+        # discovery_watchlist additions
+        wl_cols = cols("discovery_watchlist")
+        if wl_cols and "playbook_id" not in wl_cols:
+            try:
+                self.conn.execute("ALTER TABLE discovery_watchlist ADD COLUMN playbook_id TEXT NOT NULL DEFAULT '';")
+            except Exception:
+                pass
+        if wl_cols and "prediction_plan_json" not in wl_cols:
+            try:
+                self.conn.execute("ALTER TABLE discovery_watchlist ADD COLUMN prediction_plan_json TEXT NOT NULL DEFAULT '{}';")
+            except Exception:
+                pass
+
+        # discovery_stats additions
+        ds_cols = cols("discovery_stats")
+        if ds_cols and "lift" not in ds_cols:
+            try:
+                self.conn.execute("ALTER TABLE discovery_stats ADD COLUMN lift REAL NOT NULL DEFAULT 0.0;")
+            except Exception:
+                pass
+        if ds_cols and "status" not in ds_cols:
+            try:
+                self.conn.execute("ALTER TABLE discovery_stats ADD COLUMN status TEXT NOT NULL DEFAULT '';")
+            except Exception:
+                pass
+
+        # discovery_jobs additions (table is new; safe if missing)
+        try:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS discovery_jobs (
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
+                    id TEXT PRIMARY KEY,
+                    job_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    message TEXT
+                );
+                """
+            )
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_jobs_type ON discovery_jobs(tenant_id, job_type, started_at DESC);")
+        except Exception:
+            pass
         if ps_cols and "attribution_json" not in ps_cols:
             try:
                 self.conn.execute("ALTER TABLE prediction_scores ADD COLUMN attribution_json TEXT NOT NULL DEFAULT '{}';")
@@ -1507,6 +1701,449 @@ class AlphaRepository:
             (tenant_id, ticker, timeframe, timestamp, open, high, low, close, volume)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, rows)
+        self.conn.commit()
+
+    def upsert_fundamentals_snapshot(self, row: Dict[str, Any], tenant_id: str = "default") -> None:
+        """
+        Upsert a fundamentals snapshot for (tenant, ticker, as_of_date).
+
+        Expected keys:
+          ticker, as_of_date, revenue_ttm, revenue_growth, shares_outstanding, shares_growth, sector, industry
+        """
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO fundamentals_snapshot
+              (tenant_id, ticker, as_of_date, revenue_ttm, revenue_growth, shares_outstanding, shares_growth, sector, industry)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tenant_id,
+                str(row["ticker"]).upper(),
+                str(row["as_of_date"]),
+                row.get("revenue_ttm"),
+                row.get("revenue_growth"),
+                row.get("shares_outstanding"),
+                row.get("shares_growth"),
+                row.get("sector"),
+                row.get("industry"),
+            ),
+        )
+        self.conn.commit()
+
+    def upsert_discovery_candidates(
+        self, as_of_date: str, candidates: List[Dict[str, Any]], tenant_id: str = "default"
+    ) -> None:
+        """
+        Upsert discovery candidates for a given as_of_date.
+
+        Each row must include: symbol, strategy_type, score, reason, metadata_json
+        """
+        if not candidates:
+            return
+        rows = []
+        for c in candidates:
+            rows.append(
+                (
+                    tenant_id,
+                    str(as_of_date),
+                    str(c["symbol"]).upper(),
+                    str(c["strategy_type"]),
+                    float(c["score"]),
+                    str(c.get("reason") or ""),
+                    str(c.get("metadata_json") or "{}"),
+                )
+            )
+        self.conn.executemany(
+            """
+            INSERT OR REPLACE INTO discovery_candidates
+              (tenant_id, as_of_date, symbol, strategy_type, score, reason, metadata_json)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def upsert_discovery_watchlist(
+        self, as_of_date: str, rows_in: List[Dict[str, Any]], tenant_id: str = "default"
+    ) -> None:
+        if not rows_in:
+            return
+        rows = []
+        for r in rows_in:
+            rows.append(
+                (
+                    tenant_id,
+                    str(as_of_date),
+                    str(r["symbol"]).upper(),
+                    int(r["overlap_count"]),
+                    int(r["days_seen"]),
+                    float(r["avg_score"]),
+                    str(r.get("playbook_id") or ""),
+                    str(r.get("prediction_plan_json") or "{}"),
+                    str(r.get("strategies_json") or "[]"),
+                )
+            )
+        self.conn.executemany(
+            """
+            INSERT OR REPLACE INTO discovery_watchlist
+              (tenant_id, as_of_date, symbol, overlap_count, days_seen, avg_score, playbook_id, prediction_plan_json, strategies_json)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def upsert_prediction_queue(
+        self, as_of_date: str, rows_in: List[Dict[str, Any]], tenant_id: str = "default"
+    ) -> None:
+        if not rows_in:
+            return
+        rows = []
+        for r in rows_in:
+            rows.append(
+                (
+                    tenant_id,
+                    str(as_of_date),
+                    str(r["symbol"]).upper(),
+                    str(r.get("source") or "discovery"),
+                    int(r.get("priority") or 0),
+                    str(r.get("status") or "pending"),
+                    str(r.get("metadata_json") or "{}"),
+                )
+            )
+        self.conn.executemany(
+            """
+            INSERT OR REPLACE INTO prediction_queue
+              (tenant_id, as_of_date, symbol, source, priority, status, metadata_json)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def list_prediction_queue(
+        self,
+        *,
+        as_of_date: str | None = None,
+        status: str = "pending",
+        limit: int = 200,
+        tenant_id: str = "default",
+    ) -> list[dict[str, Any]]:
+        where = ["tenant_id = ?", "status = ?"]
+        params: list[Any] = [str(tenant_id), str(status)]
+        if as_of_date is not None:
+            where.append("as_of_date = ?")
+            params.append(str(as_of_date))
+        where_sql = " AND ".join(where)
+        rows = self.conn.execute(
+            f"""
+            SELECT tenant_id, as_of_date, symbol, source, priority, status, metadata_json, created_at
+            FROM prediction_queue
+            WHERE {where_sql}
+            ORDER BY priority DESC, created_at DESC, symbol ASC
+            LIMIT ?
+            """,
+            tuple(params + [int(limit)]),
+        ).fetchall()
+        return [dict(r) for r in (rows or [])]
+
+    def set_prediction_queue_status(
+        self,
+        *,
+        as_of_date: str,
+        symbol: str,
+        source: str = "discovery",
+        status: str,
+        metadata_json: str | None = None,
+        tenant_id: str = "default",
+    ) -> None:
+        if metadata_json is None:
+            self.conn.execute(
+                """
+                UPDATE prediction_queue
+                SET status = ?
+                WHERE tenant_id = ? AND as_of_date = ? AND symbol = ? AND source = ?
+                """,
+                (str(status), str(tenant_id), str(as_of_date), str(symbol).upper(), str(source)),
+            )
+        else:
+            self.conn.execute(
+                """
+                UPDATE prediction_queue
+                SET status = ?, metadata_json = ?
+                WHERE tenant_id = ? AND as_of_date = ? AND symbol = ? AND source = ?
+                """,
+                (str(status), str(metadata_json), str(tenant_id), str(as_of_date), str(symbol).upper(), str(source)),
+            )
+        self.conn.commit()
+
+    def set_prediction_queue_status_many(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        tenant_id: str = "default",
+    ) -> None:
+        """
+        Bulk status updates for prediction_queue.
+
+        Each row must include: as_of_date, symbol, source, status.
+        Optional: metadata_json.
+        """
+        if not rows:
+            return
+        has_meta = any(("metadata_json" in r and r.get("metadata_json") is not None) for r in rows)
+        if has_meta:
+            payload = []
+            for r in rows:
+                payload.append(
+                    (
+                        str(r.get("status")),
+                        str(r.get("metadata_json") or "{}"),
+                        str(tenant_id),
+                        str(r.get("as_of_date")),
+                        str(r.get("symbol") or "").upper(),
+                        str(r.get("source") or "discovery"),
+                    )
+                )
+            self.conn.executemany(
+                """
+                UPDATE prediction_queue
+                SET status = ?, metadata_json = ?
+                WHERE tenant_id = ? AND as_of_date = ? AND symbol = ? AND source = ?
+                """,
+                payload,
+            )
+        else:
+            payload = []
+            for r in rows:
+                payload.append(
+                    (
+                        str(r.get("status")),
+                        str(tenant_id),
+                        str(r.get("as_of_date")),
+                        str(r.get("symbol") or "").upper(),
+                        str(r.get("source") or "discovery"),
+                    )
+                )
+            self.conn.executemany(
+                """
+                UPDATE prediction_queue
+                SET status = ?
+                WHERE tenant_id = ? AND as_of_date = ? AND symbol = ? AND source = ?
+                """,
+                payload,
+            )
+        self.conn.commit()
+
+    def prediction_queue_status_counts(
+        self,
+        *,
+        as_of_date: str | None = None,
+        tenant_id: str = "default",
+    ) -> dict[str, int]:
+        where = ["tenant_id = ?"]
+        params: list[Any] = [str(tenant_id)]
+        if as_of_date is not None:
+            where.append("as_of_date = ?")
+            params.append(str(as_of_date))
+        where_sql = " AND ".join(where)
+        rows = self.conn.execute(
+            f"""
+            SELECT status, COUNT(*) as n
+            FROM prediction_queue
+            WHERE {where_sql}
+            GROUP BY status
+            """,
+            tuple(params),
+        ).fetchall()
+        out: dict[str, int] = {}
+        for r in rows or []:
+            out[str(r["status"])] = int(r["n"] or 0)
+        return out
+
+    def start_prediction_job(
+        self,
+        *,
+        job_type: str,
+        as_of_date: str | None = None,
+        run_id: str | None = None,
+        tenant_id: str = "default",
+    ) -> str:
+        job_id = str(uuid4())
+        started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        self.conn.execute(
+            """
+            INSERT INTO prediction_jobs (tenant_id, id, job_type, as_of_date, run_id, status, started_at, completed_at, message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+            """,
+            (str(tenant_id), job_id, str(job_type), (str(as_of_date) if as_of_date else None), (str(run_id) if run_id else None), "running", started_at),
+        )
+        self.conn.commit()
+        return job_id
+
+    def finish_prediction_job(
+        self,
+        *,
+        job_id: str,
+        status: str,
+        message: str | None = None,
+        tenant_id: str = "default",
+    ) -> None:
+        completed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        self.conn.execute(
+            """
+            UPDATE prediction_jobs
+            SET status = ?, completed_at = ?, message = ?
+            WHERE tenant_id = ? AND id = ?
+            """,
+            (str(status), completed_at, (str(message) if message else None), str(tenant_id), str(job_id)),
+        )
+        self.conn.commit()
+
+    def latest_prediction_job(self, *, tenant_id: str = "default") -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT tenant_id, id, job_type, as_of_date, run_id, status, started_at, completed_at, message
+            FROM prediction_jobs
+            WHERE tenant_id = ?
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (str(tenant_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_discovery_outcomes(
+        self, watchlist_date: str, rows_in: List[Dict[str, Any]], tenant_id: str = "default"
+    ) -> None:
+        if not rows_in:
+            return
+        rows = []
+        for r in rows_in:
+            rows.append(
+                (
+                    tenant_id,
+                    str(watchlist_date),
+                    str(r["symbol"]).upper(),
+                    int(r["horizon_days"]),
+                    str(r["entry_date"]),
+                    r.get("exit_date"),
+                    float(r["entry_close"]),
+                    r.get("exit_close"),
+                    r.get("return_pct"),
+                    r.get("overlap_count"),
+                    r.get("days_seen"),
+                    str(r.get("strategies_json") or "[]"),
+                )
+            )
+        self.conn.executemany(
+            """
+            INSERT OR REPLACE INTO discovery_outcomes
+              (tenant_id, watchlist_date, symbol, horizon_days, entry_date, exit_date, entry_close, exit_close, return_pct, overlap_count, days_seen, strategies_json)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def upsert_discovery_candidate_outcomes(
+        self, as_of_date: str, rows_in: List[Dict[str, Any]], tenant_id: str = "default"
+    ) -> None:
+        if not rows_in:
+            return
+        rows = []
+        for r in rows_in:
+            rows.append(
+                (
+                    tenant_id,
+                    str(as_of_date),
+                    str(r["symbol"]).upper(),
+                    str(r["strategy_type"]),
+                    int(r["horizon_days"]),
+                    str(r["entry_date"]),
+                    r.get("exit_date"),
+                    float(r["entry_close"]),
+                    r.get("exit_close"),
+                    r.get("return_pct"),
+                )
+            )
+        self.conn.executemany(
+            """
+            INSERT OR REPLACE INTO discovery_candidate_outcomes
+              (tenant_id, as_of_date, symbol, strategy_type, horizon_days, entry_date, exit_date, entry_close, exit_close, return_pct)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def insert_discovery_stats(self, rows_in: List[Dict[str, Any]], tenant_id: str = "default") -> None:
+        if not rows_in:
+            return
+        rows = []
+        for r in rows_in:
+            rows.append(
+                (
+                    tenant_id,
+                    str(r["end_date"]),
+                    int(r["window_days"]),
+                    int(r["horizon_days"]),
+                    str(r["group_type"]),
+                    str(r["group_value"]),
+                    int(r["n"]),
+                    float(r["avg_return"]),
+                    float(r["win_rate"]),
+                    float(r.get("lift") or 0.0),
+                    str(r.get("status") or ""),
+                )
+            )
+        self.conn.executemany(
+            """
+            INSERT INTO discovery_stats
+              (tenant_id, end_date, window_days, horizon_days, group_type, group_value, n, avg_return, win_rate, lift, status)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def start_discovery_job(self, *, job_type: str, tenant_id: str = "default") -> str:
+        job_id = str(uuid4())
+        started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        self.conn.execute(
+            """
+            INSERT INTO discovery_jobs (tenant_id, id, job_type, status, started_at, completed_at, message)
+            VALUES (?, ?, ?, ?, ?, NULL, NULL)
+            """,
+            (str(tenant_id), job_id, str(job_type), "running", started_at),
+        )
+        self.conn.commit()
+        return job_id
+
+    def finish_discovery_job(
+        self,
+        *,
+        job_id: str,
+        status: str,
+        message: str | None = None,
+        tenant_id: str = "default",
+    ) -> None:
+        completed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        self.conn.execute(
+            """
+            UPDATE discovery_jobs
+            SET status = ?, completed_at = ?, message = ?
+            WHERE tenant_id = ? AND id = ?
+            """,
+            (str(status), completed_at, (str(message) if message else None), str(tenant_id), str(job_id)),
+        )
         self.conn.commit()
 
     def close(self) -> None:

@@ -195,10 +195,16 @@ class LiveLoopService:
             }
             from app.core.price_context import build_price_contexts_from_bars_multi
 
+            # Fetch VIX/VIX3M daily bars for fear-regime gate.
+            _vix_daily = bars_cache.fetch_bars_df(timeframe="1d", tickers=["^VIX"], start=window.start, end=window.end)
+            _vix3m_daily = bars_cache.fetch_bars_df(timeframe="1d", tickers=["^VIX3M"], start=window.start, end=window.end)
+
             price_contexts = build_price_contexts_from_bars_multi(
                 raw_events=raw_events,
                 bars_by_timeframe=bars_by_tf,
                 benchmark_tickers=default_benchmark_tickers(),
+                vix_bars=_vix_daily if not _vix_daily.empty else None,
+                vix3m_bars=_vix3m_daily if not _vix3m_daily.empty else None,
             )
 
         strategies = load_active_champion_configs(repo, tenant_id=self.tenant_id)

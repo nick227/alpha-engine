@@ -81,102 +81,67 @@ def intelligence_hub_main(
     dto = service.get_intelligence_state(state)
     
     if show_page_header:
-        st.markdown("""
-        <div style="
-            background: linear-gradient(135deg, #1565C0 0%, #0D47A1 100%);
-            color: white;
-            padding: 40px;
-            border-radius: 16px;
-            margin-bottom: 32px;
-            text-align: center;
-        ">
-            <h1 style="margin: 0; font-size: 36px; font-weight: 700; margin-bottom: 8px;">
-                Intelligence Hub
-            </h1>
-            <p style="margin: 0; font-size: 18px; opacity: 0.9;">
-                Strategy performance explorer across time periods
-            </p>
-            <p style="margin: 8px 0 0; font-size: 14px; opacity: 0.7;">
-                Analyze prediction accuracy, identify regime changes, and understand market context
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+        _render_hero_section(dto)
 
     if show_local_controls:
         render_controls(state, dto.tickers, dto.runs)
     
-    # Asset info bar
+    # Asset header
     st.markdown(f"""
-    <div style="display: flex; align-items: baseline; gap: 16px; margin-bottom: 1rem;">
+    <div style="display: flex; align-items: baseline; gap: 16px; margin-bottom: 1.5rem;">
         <span style="font-size: 28px; font-weight: 500; color: var(--color-text-primary);">{state.ticker}</span>
-        <span style="font-size: 18px; color: var(--color-text-secondary);">
-            Real data from database
-        </span>
         <span style="font-size: 13px; color: var(--color-text-tertiary);">
-            Showing {state.timeframe}
+            {state.timeframe}
         </span>
     </div>
     """, unsafe_allow_html=True)
+
+    # Top 3 strategies section
+    _render_top_strategies(dto)
     
-    # Help section
-    with st.expander("How to use Intelligence Hub", expanded=False):
-        st.markdown("""
-        **Strategy Performance Explorer**
+    # Explore deeper section - nested expanders for organization
+    with st.expander("Explore deeper", expanded=False):
+        # Performance Matrix
+        with st.expander("Performance Matrix"):
+            if dto.matrix_rows:
+                render_champion_matrix(dto.matrix_rows, dto.champions)
+            else:
+                st.info("No matrix data available.")
         
-        This tool helps you understand how different strategies perform across time periods and identify regime changes.
+        # Charts & Overlays
+        with st.expander("Charts & Overlays"):
+            if dto.overlay_series:
+                render_strategy_overlays(dto.overlay_series, dto.strategy_rankings)
+            else:
+                st.info("No overlay data available.")
+            
+            if dto.timeline:
+                render_strategy_timeline(dto.timeline)
         
-        **Key Metrics:**
-        - **Alpha**: Direction reliability (correlation between predicted and actual price changes)
-        - **MAE**: Magnitude reliability (average absolute error in percentage)
-        - **Win Rate**: Percentage of correct direction predictions
+        # Consensus
+        with st.expander("Market Consensus"):
+            if dto.consensus:
+                render_consensus(dto.consensus)
+            else:
+                st.info("No consensus data available.")
         
-        **Visualization:**
-        - Blue dots: When predictions were made
-        - Dashed lines: Projected price paths
-        - X markers: Horizon targets
-        - Gray line: Actual price movement
+        # Rankings
+        with st.expander("Strategy Rankings"):
+            if dto.strategy_rankings:
+                render_strategy_rankings(dto.strategy_rankings)
+            else:
+                st.info("No rankings available.")
         
-        **Filters:**
-        - Use "Correct only" to see successful predictions
-        - Use "Incorrect only" to identify failure patterns
-        - "All predictions" shows complete picture
-        
-        **Champions**: Best performing strategy per (asset + horizon) combination
-        """)
-    
-    # Strategy performance charts
-    st.markdown("### Strategy predictions vs actual")
-    st.markdown("""<div style="font-size: 12px; color: var(--color-text-tertiary); margin-bottom: 1rem;">
-    Each strategy shows performance across the selected time window. Champions are highlighted per horizon.
-    Filter predictions to identify patterns in strategy success/failure.
-</div>""", unsafe_allow_html=True)
-    
-    # Render real strategy matrix data
-    if dto.matrix_rows:
-        st.markdown("### Strategy Performance Matrix")
-        render_champion_matrix(dto.matrix_rows, dto.champions)
-    else:
-        st.info("No strategy data available. Run prediction analysis to populate the database.")
-    
-    # Render strategy rankings if available
-    if dto.strategy_rankings:
-        st.markdown("### Strategy Efficiency Rankings")
-        render_strategy_rankings(dto.strategy_rankings)
-    
-    # Render overlays if available
-    if dto.overlay_series:
-        st.markdown("### Strategy Overlays")
-        render_strategy_overlays(dto.overlay_series, dto.strategy_rankings)
-    
-    # Render timeline if available
-    if dto.timeline:
-        st.markdown("### Strategy Timeline")
-        render_strategy_timeline(dto.timeline)
-    
-    # Render consensus if available
-    if dto.consensus:
-        st.markdown("### Market Consensus")
-        render_consensus(dto.consensus)
+        # Help
+        with st.expander("How to use"):
+            st.markdown("""
+            **Intelligence Hub**
+            
+            - **Alpha**: Direction reliability (correlation between predicted and actual)
+            - **Win Rate**: Percentage of correct direction predictions
+            
+            **Champions**: Best strategy per (asset + horizon)
+            """)
     
     if show_page_header:
         st.markdown("---")
@@ -190,6 +155,221 @@ def intelligence_hub_main(
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+
+def _render_hero_section(dto):
+    """Render the hero section showing the current edge"""
+    champions = dto.champions or []
+    
+    if champions:
+        best = champions[0]
+        strategy_name = best.get('strategy_id', 'N/A')
+        horizon = best.get('horizon', 0)
+        alpha = best.get('alpha', 0)
+        win_rate = best.get('direction_accuracy', 0) if isinstance(best, dict) else 0
+        
+        # Relative ranking: compare #1 to #2
+        if len(champions) > 1:
+            second_alpha = champions[1].get('alpha', 0)
+            edge = alpha - second_alpha
+            if edge > 0.15:
+                status_text = "Strong Edge"
+                status_emoji = "🔥"
+            elif edge > 0.05:
+                status_text = "Working"
+                status_emoji = "↑"
+            else:
+                status_text = "Marginal"
+                status_emoji = "→"
+        else:
+            status_text = "Only Option"
+            status_emoji = "?"
+        
+        # Generate "why this works" based on metrics
+        why_text = _generate_why_text(alpha, win_rate)
+        
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #1E3A5F 0%, #0D2137 100%);
+            color: white;
+            padding: 24px 32px;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+        ">
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; opacity: 0.7; margin-bottom: 8px;">
+                Current Edge
+            </div>
+            <div style="font-size: 28px; font-weight: 600; margin-bottom: 12px;">
+                {strategy_name} ({horizon}d) {status_emoji}
+            </div>
+            <div style="display: flex; gap: 24px; font-size: 14px; margin-bottom: 12px;">
+                <div>
+                    <span style="opacity: 0.7;">Alpha:</span>
+                    <strong> {alpha:.2f}</strong>
+                </div>
+                <div>
+                    <span style="opacity: 0.7;">Win Rate:</span>
+                    <strong> {win_rate:.0%}</strong>
+                </div>
+                <div>
+                    <span style="opacity: 0.7;">Status:</span>
+                    <strong> {status_text}</strong>
+                </div>
+            </div>
+            <div style="font-size: 12px; opacity: 0.8; font-style: italic;">
+                {why_text}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #1E3A5F 0%, #0D2137 100%);
+            color: white;
+            padding: 24px 32px;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+        "">
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; opacity: 0.7; margin-bottom: 8px;">
+                Current Edge
+            </div>
+            <div style="font-size: 20px; opacity: 0.7;">
+                No strategy data available
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def _render_top_strategies(dto):
+    """Render top 3 strategies section with selection flow"""
+    champions = dto.champions or []
+    
+    if not champions:
+        return
+    
+    st.markdown("### Top Strategies")
+    
+    # Make #1 larger and highlighted
+    cols = st.columns([1.5, 1, 1])
+    
+    # #1 - larger card
+    with cols[0]:
+        champ = champions[0]
+        strategy_name = champ.get('strategy_id', 'N/A')
+        horizon = champ.get('horizon', 0)
+        alpha = champ.get('alpha', 0)
+        win_rate = champ.get('direction_accuracy', 0) if isinstance(champ, dict) else 0
+        
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
+            border: 2px solid #4CAF50;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        ">
+            <div style="font-size: 11px; color: #2E7D32; font-weight: 600; margin-bottom: 4px;">
+                #1 BEST
+            </div>
+            <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px; color: #1B5E20;">
+                {strategy_name} ({horizon}d)
+            </div>
+            <div style="font-size: 13px; color: #388E3C;">
+                α: <strong>{alpha:.2f}</strong> | WR: <strong>{win_rate:.0%}</strong>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # #2 and #3 - smaller cards
+    for i, champ in enumerate(champions[1:3], start=2):
+        with cols[i-1]:
+            strategy_name = champ.get('strategy_id', 'N/A')
+            horizon = champ.get('horizon', 0)
+            alpha = champ.get('alpha', 0)
+            win_rate = champ.get('direction_accuracy', 0) if isinstance(champ, dict) else 0
+            
+            st.markdown(f"""
+            <div style="
+                background: var(--color-background-primary);
+                border: 1px solid var(--color-border);
+                border-radius: 8px;
+                padding: 14px;
+                text-align: center;
+            ">
+                <div style="font-size: 11px; color: var(--color-text-tertiary); margin-bottom: 4px;">
+                    #{i}
+                </div>
+                <div style="font-size: 14px; font-weight: 500; margin-bottom: 6px;">
+                    {strategy_name} ({horizon}d)
+                </div>
+                <div style="font-size: 12px; color: var(--color-text-secondary);">
+                    α: <strong>{alpha:.2f}</strong>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Selection dropdown for detail view
+    st.markdown("<div style='margin: 16px 0;'></div>", unsafe_allow_html=True)
+    strategy_options = [f"{c.get('strategy_id', 'N/A')} ({c.get('horizon', 0)}d)" for c in champions[:5]]
+    selected = st.selectbox("Select strategy for details", strategy_options, key="ih_strategy_select")
+    
+    # Find selected strategy data
+    selected_idx = strategy_options.index(selected)
+    if selected_idx < len(champions):
+        selected_champ = champions[selected_idx]
+        _render_strategy_detail(selected_champ)
+
+
+def _generate_why_text(alpha: float, win_rate: float) -> str:
+    """Generate 'why this works' explanation based on metrics"""
+    reasons = []
+    
+    if alpha >= 0.5:
+        reasons.append("Strong directional signal")
+    elif alpha >= 0.3:
+        reasons.append("Reliable price direction prediction")
+    elif alpha >= 0.1:
+        reasons.append("Moderate predictive power")
+    else:
+        reasons.append("Weak signal - use caution")
+    
+    if win_rate >= 0.65:
+        reasons.append("high win rate")
+    elif win_rate >= 0.55:
+        reasons.append("positive win rate bias")
+    
+    if alpha >= 0.3 and win_rate >= 0.55:
+        return "Works because: " + ", ".join(reasons) + "."
+    elif alpha >= 0.2:
+        return "Works because: " + reasons[0] + "."
+    else:
+        return "Needs monitoring: " + reasons[-1].lower()
+
+
+def _render_strategy_detail(champ: dict):
+    """Render detailed view for selected strategy"""
+    strategy_name = champ.get('strategy_id', 'N/A')
+    horizon = champ.get('horizon', 0)
+    alpha = champ.get('alpha', 0)
+    win_rate = champ.get('direction_accuracy', 0) if isinstance(champ, dict) else 0
+    samples = champ.get('samples', 0)
+    mae = champ.get('mae_pct', 0)
+    
+    st.markdown(f"#### {strategy_name} ({horizon}d) Detail")
+    
+    # Simplified metrics row
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Alpha", f"{alpha:.2f}")
+    with col2:
+        st.metric("Win Rate", f"{win_rate:.0%}")
+    with col3:
+        st.metric("Samples", f"{samples}")
+    with col4:
+        st.metric("MAE", f"{mae:.1f}%")
+    
+    # Placeholder for chart - would need to get chart data from dto
+    st.info(f"Chart for {strategy_name} would appear here. Configure strategy_charts in DTO to enable.")
 
 
 def render_strategy_card(strategy: dict):
@@ -478,47 +658,43 @@ def render_consensus(consensus):
 def render_controls(state: IntelligenceHubState, tickers: list[str], runs: list):
     """Render control panel with state management"""
     
-    # Asset selector
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col1:
-        st.markdown("**Asset**")
         ticker = st.selectbox(
-            "Select asset", 
+            "Asset", 
             options=tickers, 
             index=tickers.index(state.ticker) if state.ticker in tickers else 0,
-            key="ih_ticker"
+            key="ih_ticker",
+            label_visibility="collapsed"
         )
         
-        # Emit state change event
         if ticker != state.ticker:
             st.session_state.asset_change = ticker
     
     with col2:
-        st.markdown("**Time Window**")
         timeframes = ['1M', '3M', '6M', '1Y']
         timeframe = st.selectbox(
-            "Select window", 
+            "Time Window", 
             options=timeframes,
             index=timeframes.index(state.timeframe) if state.timeframe in timeframes else 1,
-            key="ih_timeframe"
+            key="ih_timeframe",
+            label_visibility="collapsed"
         )
         
-        # Emit state change event
         if timeframe != state.timeframe:
             st.session_state.timeframe_change = timeframe
     
     with col3:
-        st.markdown("**Filter**")
         filter_options = ['All predictions', 'Correct only', 'Incorrect only']
         selected_filter = st.selectbox(
-            "Show predictions", 
+            "Filter", 
             options=filter_options,
             index=filter_options.index(state.filter_mode) if state.filter_mode in filter_options else 0,
-            key="ih_filter"
+            key="ih_filter",
+            label_visibility="collapsed"
         )
         
-        # Emit state change event
         if selected_filter != state.filter_mode:
             st.session_state.filter_change = selected_filter
 

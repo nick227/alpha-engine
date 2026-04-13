@@ -15,7 +15,16 @@ class RuntimeScheduler:
         ticks = 0
         while True:
             result = self.runtime.tick()
-            print("tick:", result["timestamp"], "live:", result.get("live", {}).get("status"), "replay:", result.get("replay", {}).get("status"), "optimizer:", result.get("optimizer", {}).get("status"))
+            print(
+                "tick:",
+                result["timestamp"],
+                "live:",
+                (result.get("live") or {}).get("status"),
+                "replay:",
+                (result.get("replay") or {}).get("status"),
+                "optimizer:",
+                (result.get("optimizer") or {}).get("status"),
+            )
             ticks += 1
             if max_ticks is not None and ticks >= max_ticks:
                 return

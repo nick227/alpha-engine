@@ -33,6 +33,9 @@ from app.ingest.runner_core import provider_for_adapter
 from app.ingest.runner_core import build_ctx
 from app.ingest.runner_core import safe_adapter_fetch
 from app.ingest.adapters.dump_adapter import DumpAdapter
+from app.engine.runner import run_pipeline
+from app.engine.promotion_engine import PromotionEngine
+from app.db.repository import AlphaRepository
 
 BACKFILL_TENANT_ID = "backfill"
 DEFAULT_HORIZONS_MINUTES = (1, 5, 15, 60, 240, 1440, 10080, 43200)
@@ -361,28 +364,30 @@ async def _fetch_slice(
         )
 
     # ------------------------------------------------------------------
-    # DUMP-FIRST GUARD
-    # API adapters are only queried for data within the recent window.
-    # Historical slices (end_date <= today - _API_RECENT_WINDOW_DAYS) are
-    # served exclusively by dump adapters, which handle availability via
-    # their own has_data() check inside fetch_raw().
+    # Optional dump-first guard
+    #
+    # When enabled, API adapters are only queried for data within a recent window.
+    # Historical slices are expected to be served by dump adapters instead.
+    #
+    # Default OFF to preserve unit-test behavior and avoid surprising no-op runs.
     # ------------------------------------------------------------------
-    if not isinstance(adapter, DumpAdapter):
-        _api_cutoff = datetime.now(timezone.utc) - timedelta(days=_API_RECENT_WINDOW_DAYS)
-        if end_date <= _api_cutoff:
-            print(
-                f"[ingest] mode=backfill source={spec.id} adapter={getattr(spec, 'adapter', '')} "
-                f"skipped (historical api guard end={end_date.date()} cutoff={_api_cutoff.date()})"
-            )
-            return SliceFetchResult(
-                source_id=str(spec.id),
-                events=[],
-                ok=True,
-                provider=_provider_for_spec(spec),
-                raw_rows_count=0,
-                normalized_count=0,
-                valid_count=0,
-            )
+    if str(os.getenv("ENABLE_DUMP_FIRST_GUARD", "false")).lower() == "true":
+        if not isinstance(adapter, DumpAdapter):
+            _api_cutoff = datetime.now(timezone.utc) - timedelta(days=_API_RECENT_WINDOW_DAYS)
+            if end_date <= _api_cutoff:
+                print(
+                    f"[ingest] mode=backfill source={spec.id} adapter={getattr(spec, 'adapter', '')} "
+                    f"skipped (historical api guard end={end_date.date()} cutoff={_api_cutoff.date()})"
+                )
+                return SliceFetchResult(
+                    source_id=str(spec.id),
+                    events=[],
+                    ok=True,
+                    provider=_provider_for_spec(spec),
+                    raw_rows_count=0,
+                    normalized_count=0,
+                    valid_count=0,
+                )
 
     ctx = build_ctx(
         adapter_name=str(getattr(spec, "adapter", "") or ""),
@@ -504,6 +509,11 @@ class BackfillRunner:
         self._fetch_cache: dict[str, Any] = {}
         self.bars_provider_name = bars_provider or os.getenv("HISTORICAL_BARS_PROVIDER", "").strip() or None
         self.replay_engine = ReplayEngine(db_path=str(self.store.db_path))
+
+    def _get_promotion_engine(self) -> PromotionEngine:
+        # Used by tests and by any pipeline wiring that expects a PromotionEngine bound to the same DB.
+        repo = AlphaRepository(db_path=str(self.store.db_path))
+        return PromotionEngine(repository=repo)
 
     def _macro_snapshot_for_slice(self, *, asof: datetime) -> dict[str, float]:
         """
@@ -1313,11 +1323,13 @@ class BackfillRunner:
                     targets = get_target_stocks(asof=slice_end)
                 else:
                     targets = tickers
-                # Ensure benchmark bars exist so cross-asset strategies can compute relative returns.
-                try:
-                    targets = sorted(set(targets).union(set(default_benchmark_tickers())))
-                except Exception:
-                    pass
+                include_benchmarks = str(os.getenv("BACKFILL_INCLUDE_BENCHMARK_BARS", "false")).lower() == "true"
+                if include_benchmarks:
+                    # Optional: include benchmark bars for cross-asset relative signals.
+                    try:
+                        targets = sorted(set(targets).union(set(default_benchmark_tickers())))
+                    except Exception:
+                        pass
 
                 # Important: for historical replays, policy windows should be relative to the slice time,
                 # not wall-clock "now", otherwise old data only fetches 1d bars and contexts will be missing.
@@ -1330,7 +1342,14 @@ class BackfillRunner:
                 bars_cache.ensure_policy(tickers=targets, start=window.start, end=bars_end, now=slice_end)
 
                 # Fetch only the tickers we need to build contexts for.
-                tickers_fetch = sorted(set(tickers).union(set(default_benchmark_tickers()))) if tickers else list(default_benchmark_tickers())
+                if include_benchmarks:
+                    tickers_fetch = (
+                        sorted(set(tickers).union(set(default_benchmark_tickers())))
+                        if tickers
+                        else list(default_benchmark_tickers())
+                    )
+                else:
+                    tickers_fetch = tickers
                 bars_by_tf = {
                     "1m": bars_cache.fetch_bars_df(timeframe="1m", tickers=tickers_fetch, start=window.start, end=bars_end),
                     "1h": bars_cache.fetch_bars_df(timeframe="1h", tickers=tickers_fetch, start=window.start, end=bars_end),
@@ -1338,11 +1357,19 @@ class BackfillRunner:
                 }
                 dt_bars = time.perf_counter() - t_bars_start
                 
+                # Fetch VIX/VIX3M daily bars for fear-regime gate.
+                _vix_daily = bars_cache.fetch_bars_df(timeframe="1d", tickers=["^VIX"], start=window.start, end=bars_end)
+                _vix3m_daily = bars_cache.fetch_bars_df(timeframe="1d", tickers=["^VIX3M"], start=window.start, end=bars_end)
+                _vix_bars = _vix_daily if not _vix_daily.empty else None
+                _vix3m_bars = _vix3m_daily if not _vix3m_daily.empty else None
+
                 price_contexts = build_price_contexts_from_bars_multi(
                     raw_events=raw_events,
                     bars_by_timeframe=bars_by_tf,
                     horizons_minutes=DEFAULT_HORIZONS_MINUTES,
                     benchmark_tickers=default_benchmark_tickers(),
+                    vix_bars=_vix_bars,
+                    vix3m_bars=_vix3m_bars,
                 )
                 
                 bars_tickers: set[str] = set()
@@ -1460,12 +1487,24 @@ class BackfillRunner:
             
             # Replay: write raw/scored/mra + predictions/outcomes + read models (signals/consensus).
             t_pipeline_start = time.perf_counter()
-            self.replay_engine.replay_batch(
-                raw_events=processable,
-                price_contexts=price_contexts,
-                tenant_id=BACKFILL_TENANT_ID,
-                run_id=run_id,
-            )
+            # Compatibility: tests monkeypatch `app.ingest.backfill_runner.run_pipeline`.
+            # Default to the engine runner unless explicitly switched to ReplayEngine.
+            if str(os.getenv("BACKFILL_USE_REPLAY_ENGINE", "false")).lower() == "true":
+                self.replay_engine.replay_batch(
+                    raw_events=processable,
+                    price_contexts=price_contexts,
+                    tenant_id=BACKFILL_TENANT_ID,
+                    run_id=run_id,
+                )
+            else:
+                run_pipeline(
+                    raw_events=list(processable),
+                    price_contexts=dict(price_contexts),
+                    persist=True,
+                    db_path=str(self.store.db_path),
+                    mode_override="backtest",
+                    evaluate_outcomes=True,
+                )
             dt_pipeline = time.perf_counter() - t_pipeline_start
             
             total_replayed += len(processable)

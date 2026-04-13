@@ -374,6 +374,7 @@ class EngineReadStore:
                     id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
                     run_id TEXT NOT NULL,
+                    alpha_version TEXT NOT NULL DEFAULT 'canonical_v1',
                     strategy_id TEXT NOT NULL,
                     strategy_version TEXT,
                     ticker TEXT NOT NULL,
@@ -451,6 +452,7 @@ class EngineReadStore:
             cols = {str(r["name"]) for r in self.conn.execute("PRAGMA table_info(prediction_scores)").fetchall()}
             for col, ddl in (
                 ("regime", "ALTER TABLE prediction_scores ADD COLUMN regime TEXT;"),
+                ("alpha_version", "ALTER TABLE prediction_scores ADD COLUMN alpha_version TEXT NOT NULL DEFAULT 'canonical_v1';"),
                 ("attribution_json", "ALTER TABLE prediction_scores ADD COLUMN attribution_json TEXT NOT NULL DEFAULT '{}';"),
             ):
                 if cols and col not in cols:
@@ -680,6 +682,448 @@ class EngineReadStore:
             self.conn.close()
         except Exception:
             pass
+
+    def list_discovery_dates(self, *, tenant_id: str = "default", limit: int = 120) -> list[str]:
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT DISTINCT as_of_date
+                FROM discovery_candidates
+                WHERE tenant_id = ?
+                ORDER BY as_of_date DESC
+                LIMIT ?
+                """,
+                (str(tenant_id), int(limit)),
+            ).fetchall()
+            return [str(r["as_of_date"]) for r in rows if r and r["as_of_date"] is not None]
+        except Exception:
+            return []
+
+    def list_discovery_strategy_types(self, *, tenant_id: str = "default") -> list[str]:
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT DISTINCT strategy_type
+                FROM discovery_candidates
+                WHERE tenant_id = ?
+                ORDER BY strategy_type ASC
+                """,
+                (str(tenant_id),),
+            ).fetchall()
+            return [str(r["strategy_type"]) for r in rows if r and r["strategy_type"] is not None]
+        except Exception:
+            return []
+
+    def list_discovery_candidates(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str,
+        strategy_type: str | None = None,
+        price_bucket: str | None = None,
+        min_score: float = 0.0,
+        symbol: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        try:
+            where = ["tenant_id = ?", "as_of_date = ?", "score >= ?"]
+            params: list[Any] = [str(tenant_id), str(as_of_date), float(min_score)]
+            if strategy_type:
+                where.append("strategy_type = ?")
+                params.append(str(strategy_type))
+            if symbol:
+                where.append("symbol = ?")
+                params.append(str(symbol).upper())
+            sql = (
+                "SELECT as_of_date, symbol, strategy_type, score, reason, metadata_json "
+                "FROM discovery_candidates "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY score DESC "
+                "LIMIT ?"
+            )
+            params.append(int(limit))
+            rows = self.conn.execute(sql, params).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                md_raw = str(r["metadata_json"] or "{}")
+                md: dict[str, Any] = {}
+                try:
+                    md0 = json.loads(md_raw)
+                    md = md0 if isinstance(md0, dict) else {}
+                except Exception:
+                    md = {}
+                row = {
+                    "as_of_date": str(r["as_of_date"]),
+                    "symbol": str(r["symbol"]),
+                    "strategy_type": str(r["strategy_type"]),
+                    "score": float(r["score"]),
+                    "reason": str(r["reason"]),
+                    "metadata_json": md_raw,
+                    # Common metadata fields for easy table rendering
+                    "close": md.get("close"),
+                    "price_bucket": md.get("price_bucket"),
+                    "avg_dollar_volume_20d": md.get("avg_dollar_volume_20d"),
+                    "sector": md.get("sector"),
+                    "industry": md.get("industry"),
+                    "raw_score": md.get("raw_score"),
+                }
+                out.append(row)
+
+            if price_bucket:
+                pb = str(price_bucket)
+                out = [x for x in out if str(x.get("price_bucket") or "") == pb]
+            return out
+        except Exception:
+            return []
+
+    def list_discovery_overlap(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str,
+        min_strategies: int = 2,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """
+        Symbols that appear in multiple discovery strategies on the same as_of_date.
+        """
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT
+                  symbol,
+                  COUNT(*) as strategy_count,
+                  group_concat(strategy_type, ',') as strategies,
+                  MAX(score) as max_score,
+                  AVG(score) as avg_score
+                FROM discovery_candidates
+                WHERE tenant_id = ? AND as_of_date = ?
+                GROUP BY symbol
+                HAVING COUNT(*) >= ?
+                ORDER BY strategy_count DESC, max_score DESC
+                LIMIT ?
+                """,
+                (str(tenant_id), str(as_of_date), int(min_strategies), int(limit)),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append(
+                    {
+                        "as_of_date": str(as_of_date),
+                        "symbol": str(r["symbol"]),
+                        "strategy_count": int(r["strategy_count"]),
+                        "strategies": str(r["strategies"] or ""),
+                        "max_score": float(r["max_score"] or 0.0),
+                        "avg_score": float(r["avg_score"] or 0.0),
+                    }
+                )
+            return out
+        except Exception:
+            return []
+
+    def list_discovery_momentum(
+        self,
+        *,
+        tenant_id: str = "default",
+        end_date: str,
+        window_days: int = 10,
+        strategy_type: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """
+        Candidate lifecycle stats over a trailing window ending at end_date.
+        """
+        try:
+            end_d = str(end_date)
+            rows = self.conn.execute(
+                """
+                SELECT
+                  symbol,
+                  COUNT(*) as appearances,
+                  COUNT(DISTINCT as_of_date) as days_seen,
+                  COUNT(DISTINCT strategy_type) as strategies_seen,
+                  MIN(as_of_date) as first_seen,
+                  MAX(as_of_date) as last_seen,
+                  MAX(score) as max_score,
+                  AVG(score) as avg_score
+                FROM discovery_candidates
+                WHERE tenant_id = ?
+                  AND as_of_date <= ?
+                  AND as_of_date >= date(?, '-' || (? - 1) || ' day')
+                  AND (? IS NULL OR strategy_type = ?)
+                GROUP BY symbol
+                ORDER BY appearances DESC, max_score DESC
+                LIMIT ?
+                """,
+                (
+                    str(tenant_id),
+                    end_d,
+                    end_d,
+                    int(window_days),
+                    strategy_type,
+                    strategy_type,
+                    int(limit),
+                ),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append(
+                    {
+                        "end_date": end_d,
+                        "symbol": str(r["symbol"]),
+                        "appearances": int(r["appearances"]),
+                        "days_seen": int(r["days_seen"]),
+                        "strategies_seen": int(r["strategies_seen"]),
+                        "first_seen": str(r["first_seen"]),
+                        "last_seen": str(r["last_seen"]),
+                        "max_score": float(r["max_score"] or 0.0),
+                        "avg_score": float(r["avg_score"] or 0.0),
+                    }
+                )
+            return out
+        except Exception:
+            return []
+
+    def list_watchlist_dates(self, *, tenant_id: str = "default", limit: int = 120) -> list[str]:
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT DISTINCT as_of_date
+                FROM discovery_watchlist
+                WHERE tenant_id = ?
+                ORDER BY as_of_date DESC
+                LIMIT ?
+                """,
+                (str(tenant_id), int(limit)),
+            ).fetchall()
+            return [str(r["as_of_date"]) for r in rows if r and r["as_of_date"] is not None]
+        except Exception:
+            return []
+
+    def list_watchlist(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT as_of_date, symbol, overlap_count, days_seen, avg_score, playbook_id, prediction_plan_json, strategies_json, created_at
+                FROM discovery_watchlist
+                WHERE tenant_id = ? AND as_of_date = ?
+                ORDER BY overlap_count DESC, days_seen DESC, avg_score DESC
+                LIMIT ?
+                """,
+                (str(tenant_id), str(as_of_date), int(limit)),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append({k: r[k] for k in r.keys()})
+            return out
+        except Exception:
+            return []
+
+    def list_daily_top_picks(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str,
+        limit: int = 15,
+    ) -> list[dict[str, Any]]:
+        """
+        Human-consumable daily top picks derived from discovery_watchlist + discovery_candidates metadata.
+        """
+        try:
+            wl = self.conn.execute(
+                """
+                SELECT symbol, overlap_count, days_seen, avg_score, playbook_id, prediction_plan_json, strategies_json
+                FROM discovery_watchlist
+                WHERE tenant_id = ? AND as_of_date = ?
+                ORDER BY overlap_count DESC, days_seen DESC, avg_score DESC
+                LIMIT ?
+                """,
+                (str(tenant_id), str(as_of_date), int(limit)),
+            ).fetchall()
+            if not wl:
+                return []
+
+            out: list[dict[str, Any]] = []
+            for r in wl:
+                symbol = str(r["symbol"]).upper()
+                overlap_count = int(r["overlap_count"])
+                days_seen = int(r["days_seen"])
+                avg_score = float(r["avg_score"])
+                playbook_id = str(r["playbook_id"] or "")
+
+                strategies: list[str] = []
+                try:
+                    payload = json.loads(str(r["strategies_json"] or "[]"))
+                    if isinstance(payload, list):
+                        strategies = [str(x) for x in payload if str(x).strip()]
+                except Exception:
+                    strategies = []
+
+                # Pull candidate rows for drivers/explanations.
+                cand = self.conn.execute(
+                    """
+                    SELECT strategy_type, score, reason, metadata_json
+                    FROM discovery_candidates
+                    WHERE tenant_id = ? AND as_of_date = ? AND symbol = ?
+                    ORDER BY score DESC
+                    """,
+                    (str(tenant_id), str(as_of_date), symbol),
+                ).fetchall()
+
+                driver_pool: list[str] = []
+                reasons: list[str] = []
+                for c in cand:
+                    reasons.append(str(c["reason"] or ""))
+                    try:
+                        md = json.loads(str(c["metadata_json"] or "{}"))
+                        if isinstance(md, dict):
+                            drivers = md.get("drivers")
+                            if isinstance(drivers, list):
+                                for d in drivers:
+                                    ds = str(d).strip()
+                                    if ds:
+                                        driver_pool.append(ds)
+                    except Exception:
+                        continue
+
+                # Unique drivers, keep order.
+                seen: set[str] = set()
+                drivers_unique: list[str] = []
+                for d in driver_pool:
+                    if d in seen:
+                        continue
+                    seen.add(d)
+                    drivers_unique.append(d)
+                drivers = drivers_unique[:3]
+
+                # Conviction buckets (simple, transparent).
+                if overlap_count >= 3 and days_seen >= 3 and avg_score >= 0.90:
+                    conviction = "HIGH"
+                elif overlap_count >= 2 and days_seen >= 2:
+                    conviction = "MEDIUM"
+                else:
+                    conviction = "LOW"
+
+                # Action heuristic (keep simple; refine later).
+                if playbook_id in {"distressed_repricer", "silent_compounder_trend_adoption", "narrative_lag_catchup"}:
+                    side = "LONG"
+                elif playbook_id in {"early_accumulation_breakout"}:
+                    side = "WATCH"
+                else:
+                    side = "WATCH"
+
+                why = " | ".join(drivers) if drivers else (reasons[0] if reasons and reasons[0] else "")
+                out.append(
+                    {
+                        "as_of_date": str(as_of_date),
+                        "symbol": symbol,
+                        "side": side,
+                        "conviction": conviction,
+                        "playbook_id": playbook_id,
+                        "overlap_count": overlap_count,
+                        "days_seen": days_seen,
+                        "avg_score": avg_score,
+                        "strategies": ", ".join(strategies),
+                        "why": why,
+                    }
+                )
+
+            return out
+        except Exception:
+            return []
+
+    def get_last_discovery_job(
+        self,
+        *,
+        tenant_id: str = "default",
+        job_type: str,
+    ) -> dict[str, Any] | None:
+        try:
+            r = self.conn.execute(
+                """
+                SELECT id, job_type, status, started_at, completed_at, message
+                FROM discovery_jobs
+                WHERE tenant_id = ? AND job_type = ?
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (str(tenant_id), str(job_type)),
+            ).fetchone()
+            return dict(r) if r else None
+        except Exception:
+            return None
+
+    def list_watchlist_outcomes(
+        self,
+        *,
+        tenant_id: str = "default",
+        watchlist_date: str,
+        horizon_days: int = 5,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT watchlist_date, symbol, horizon_days, entry_date, exit_date, entry_close, exit_close, return_pct,
+                       overlap_count, days_seen, strategies_json, created_at
+                FROM discovery_outcomes
+                WHERE tenant_id = ? AND watchlist_date = ? AND horizon_days = ?
+                ORDER BY return_pct DESC
+                LIMIT ?
+                """,
+                (str(tenant_id), str(watchlist_date), int(horizon_days), int(limit)),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append({k: r[k] for k in r.keys()})
+            return out
+        except Exception:
+            return []
+
+    def list_discovery_stats(
+        self,
+        *,
+        tenant_id: str = "default",
+        end_date: str,
+        window_days: int = 30,
+        horizon_days: int = 5,
+        group_type: str | None = None,
+        latest_only: bool = True,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        try:
+            where = ["tenant_id = ?", "end_date = ?", "window_days = ?", "horizon_days = ?"]
+            params: list[Any] = [str(tenant_id), str(end_date), int(window_days), int(horizon_days)]
+            if group_type:
+                where.append("group_type = ?")
+                params.append(str(group_type))
+            if latest_only:
+                where.append(
+                    "computed_at = (SELECT MAX(computed_at) FROM discovery_stats WHERE tenant_id = ? AND end_date = ? AND window_days = ? AND horizon_days = ?)"
+                )
+                params.extend([str(tenant_id), str(end_date), int(window_days), int(horizon_days)])
+            rows = self.conn.execute(
+                f"""
+                SELECT computed_at, end_date, window_days, horizon_days, group_type, group_value, n, avg_return, win_rate, lift, status
+                FROM discovery_stats
+                WHERE {' AND '.join(where)}
+                ORDER BY computed_at DESC, group_type ASC, group_value ASC
+                LIMIT ?
+                """,
+                (*params, int(limit)),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append({k: r[k] for k in r.keys()})
+            return out
+        except Exception:
+            return []
 
     def list_tenants(self) -> list[str]:
         for table in ("predictions", "strategies", "loop_heartbeats", "regime_performance", "trades", "positions"):

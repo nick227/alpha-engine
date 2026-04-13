@@ -5,7 +5,7 @@
   "scripts": {
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "dashboard": "streamlit run app/ui/dashboard.py"
+    "dashboard": ".\\\\.venv\\\\Scripts\\\\python.exe -m streamlit run app/ui/dashboard.py"
   },
   "devDependencies": {
     "prisma": "^6.19.2"

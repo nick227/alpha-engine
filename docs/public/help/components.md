@@ -90,8 +90,8 @@ Defines where evidence lives and how to interpret it (CSV exports vs SQLite tabl
 Renders dashboard, intelligence, and audit views against `data/alpha.db`.
 
 ### Entry points
-- Unified shell: `app/ui/app.py` → `streamlit run app/ui/app.py`
-- Audit page: `app/ui/audit.py` → `streamlit run app/ui/audit.py`
+- Unified shell: `app/ui/app.py` → `python -m streamlit run app/ui/app.py`
+- Audit page: `app/ui/audit.py` → `python -m streamlit run app/ui/audit.py`
 
 ### Key knobs (safe)
 - `ALPHA_DB_PATH` (defaults to `data/alpha.db`)
@@ -101,4 +101,3 @@ Renders dashboard, intelligence, and audit views against `data/alpha.db`.
 
 ### Where to read next
 - Ops triage: `docs/internal/ops/incident-triage.md`
-

@@ -19,6 +19,7 @@ Explain Alpha Engine’s value and how to **use and evaluate** its research outp
 - One-pager: `docs/public/marketing/one-pager.md`
 - Investor FAQ: `docs/public/marketing/investor-faq.md`
 - How predictions work: `docs/public/help/how-predictions-work.md`
+- How discovery + playbooks work: `docs/public/help/how-discovery-and-playbooks-work.md`
 - How to use (evaluate/backtest/troubleshoot): `docs/public/kb/how-to-use-and-evaluate.md`
 - Disclaimer: `docs/public/legal/disclaimer.md`
 

@@ -55,8 +55,8 @@ Goal: score predicted series vs actual bars for a defined prediction window and 
 
 ### 5) Streamlit UI (dashboard + intelligence + audit)
 Goal: evaluate results visually and inspect DB health.
-- Run: `streamlit run app/ui/app.py`
-- Audit view: `streamlit run app/ui/audit.py`
+- Run: `python -m streamlit run app/ui/app.py`
+- Audit view: `python -m streamlit run app/ui/audit.py`
 - DB location: `ALPHA_DB_PATH` (default `data/alpha.db`)
 
 ## Persistence model (what goes where)
@@ -69,4 +69,3 @@ Goal: evaluate results visually and inspect DB health.
   - `app/db/repository.py` (engine tables like `predictions`, `prediction_outcomes`, `strategies`, etc.)
   - `app/ingest/replay_engine.py` (replay tables and idempotency keys)
 - `prisma/schema.prisma` exists for optional tooling, but the runtime schema is created by Python code.
-

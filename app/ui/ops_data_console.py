@@ -8,11 +8,17 @@ from typing import Any
 import math
 import pandas as pd
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+try:
+    # Optional dependency; the UI should still import without it (unit tests, CI).
+    from streamlit_autorefresh import st_autorefresh  # type: ignore
+except Exception:  # pragma: no cover
+    def st_autorefresh(*args, **kwargs):  # type: ignore[no-redef]
+        return None
 
 from app.ui.middle.dashboard_service import DashboardService
 from app.ui.middle.job_runner import python_module_argv, python_script_argv, run_subprocess_job_in_thread
 from app.ui.middle.ops_job_store import OpsJobStore
+from app.db.repository import AlphaRepository
 
 
 def _arrow_safe_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -137,7 +143,7 @@ def ops_data_console_main(
     ops_store = _ops_job_store()
     repo_root = Path(__file__).resolve().parents[2]
 
-    tab_status, tab_coverage, tab_jobs = st.tabs(["Status", "Coverage", "Run Jobs"])
+    tab_status, tab_coverage, tab_jobs, tab_factors = st.tabs(["Status", "Coverage", "Run Jobs", "Factor Importance"])
 
     with tab_status:
         with st.expander("How this supports profitable trades (read this first)", expanded=True):
@@ -168,6 +174,58 @@ Bars providers (Alpaca/Polygon/YFinance) populate `price_bars`. Prediction runs 
 - ML readiness moving from "blocked" → "trainable" for the symbols you care about.
                 """.strip()
             )
+
+        st.subheader("Prediction Queue (system flow)")
+        pq1, pq2, pq3, pq4 = st.columns([2, 2, 2, 2])
+        with pq1:
+            pq_date = st.date_input("Queue date", value=date.today(), key="predq_status_date")
+        with pq2:
+            pq_db = st.text_input("DB", value="data/alpha.db", key="predq_status_db")
+        with pq3:
+            pq_tenant = st.text_input("Tenant", value=str(tenant_id), key="predq_status_tenant")
+        with pq4:
+            show_processing = st.toggle("Show processing", value=True, key="predq_status_show_processing")
+
+        def _fmt_hhmm(iso: str | None) -> str:
+            if not iso:
+                return "—"
+            try:
+                dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+                return dt.astimezone().strftime("%H:%M")
+            except Exception:
+                return str(iso)
+
+        counts: dict[str, int] = {}
+        last_job: dict[str, Any] | None = None
+        try:
+            repo = AlphaRepository(db_path=str(pq_db))
+            try:
+                counts = repo.prediction_queue_status_counts(as_of_date=pq_date.isoformat(), tenant_id=str(pq_tenant))
+                last_job = repo.latest_prediction_job(tenant_id=str(pq_tenant))
+            finally:
+                repo.close()
+        except Exception as e:
+            st.error(f"Prediction queue status unavailable: {type(e).__name__}: {e}")
+
+        pending_n = int(counts.get("pending", 0) or 0)
+        processed_n = int(counts.get("processed", 0) or 0)
+        failed_n = int(counts.get("failed", 0) or 0)
+        processing_n = int(counts.get("processing", 0) or 0)
+
+        m1, m2, m3, m4 = st.columns([1, 1, 1, 2])
+        with m1:
+            st.metric("pending", pending_n)
+        with m2:
+            st.metric("processed", processed_n)
+        with m3:
+            st.metric("failed", failed_n)
+        with m4:
+            last_run = _fmt_hhmm((last_job or {}).get("completed_at") or (last_job or {}).get("started_at"))
+            last_status = str((last_job or {}).get("status") or "—")
+            st.metric("last run", f"{last_run} ({last_status})")
+
+        if show_processing:
+            st.caption(f"processing: {processing_n}")
 
         # Backfill / ingestion health (last 30 days default)
         st.subheader("Backfill health (ingestion windows)")
@@ -833,6 +891,281 @@ Safety rules:
         if running_jobs:
             st_autorefresh(interval=1500, key="ops_jobs_autorefresh")
 
+        st.subheader("Discovery controls")
+        with st.expander("Discovery (selection layer)", expanded=False):
+            st.caption("Runs discovery CLIs as background jobs; logs appear below in Recent jobs.")
+
+            dc1, dc2 = st.columns([2, 3])
+            with dc1:
+                disc_db = st.text_input("DB path", value=st.session_state.get("ops_job_db_path", "data/alpha.db"), key="disc_db_path")
+            with dc2:
+                disc_symbols = st.text_input("Symbols (comma-separated, optional)", value="", key="disc_symbols").strip()
+
+            st.markdown("**Sync fundamentals (FMP → fundamentals_snapshot)**")
+            st.caption("Requires `FMP_API_KEY` in environment. If Symbols is blank, nothing runs.")
+            if st.button("Sync fundamentals", disabled=not bool(disc_symbols), use_container_width=True):
+                argv = python_module_argv(
+                    "app.discovery.discovery_cli",
+                    [
+                        "sync-fundamentals",
+                        "--symbols",
+                        disc_symbols,
+                        "--db",
+                        disc_db,
+                        "--tenant-id",
+                        tenant_id,
+                    ],
+                )
+                job_id = run_subprocess_job_in_thread(
+                    store=ops_store, argv=argv, cwd=str(repo_root), title="discovery sync-fundamentals (FMP)"
+                )
+                st.session_state.ops_selected_job_id = job_id
+                st.success(f"Started job {job_id[:8]}")
+                st.rerun()
+
+            st.divider()
+            st.markdown("**Run discovery (writes discovery_candidates)**")
+            r1, r2, r3, r4 = st.columns([2, 2, 2, 2])
+            with r1:
+                disc_date = st.date_input("As-of date", value=date.today(), key="disc_asof_date")
+            with r2:
+                disc_top = st.number_input("Top N", min_value=1, max_value=500, value=50, step=5, key="disc_top_n")
+            with r3:
+                disc_min_adv = st.number_input("Min ADV (20d)", min_value=0.0, value=2_000_000.0, step=500_000.0, key="disc_min_adv")
+            with r4:
+                disc_use_target = st.checkbox("Use Target Stocks universe", value=True, key="disc_use_target")
+
+            disc_run_symbols = st.text_input(
+                "Override symbols for run (optional, comma-separated; disables target universe)",
+                value="",
+                key="disc_run_symbols",
+            ).strip()
+
+            run_args = [
+                "run",
+                "--date",
+                disc_date.isoformat(),
+                "--db",
+                disc_db,
+                "--tenant-id",
+                tenant_id,
+                "--top",
+                str(int(disc_top)),
+                "--min-adv",
+                str(float(disc_min_adv)),
+            ]
+            if disc_run_symbols:
+                run_args.extend(["--no-use-target-universe", "--symbols", disc_run_symbols])
+            elif not disc_use_target:
+                run_args.append("--no-use-target-universe")
+
+            if st.button("Run discovery job", type="primary", use_container_width=True):
+                argv = python_module_argv("app.discovery.discovery_cli", run_args)
+                job_id = run_subprocess_job_in_thread(store=ops_store, argv=argv, cwd=str(repo_root), title="discovery run")
+                st.session_state.ops_selected_job_id = job_id
+                st.success(f"Started job {job_id[:8]}")
+                st.rerun()
+
+            st.divider()
+            st.markdown("**Nightly pipeline (one job)**")
+            st.caption("Runs: discovery → promote → outcomes → stats. Use this for scheduling.")
+
+            n1, n2, n3, n4 = st.columns([2, 2, 2, 2])
+            with n1:
+                nightly_date = st.date_input("Nightly date (optional)", value=date.today(), key="nightly_date")
+                nightly_use_date = st.checkbox("Use explicit date", value=False, key="nightly_use_date")
+            with n2:
+                nightly_out_scope = st.selectbox("Outcomes scope", options=["both", "watchlist", "candidates"], index=0, key="nightly_scope")
+            with n3:
+                nightly_stats_window = int(st.number_input("Stats window (days)", min_value=7, max_value=180, value=30, step=7, key="nightly_stats_window"))
+            with n4:
+                nightly_min_adv = float(st.number_input("Min ADV (20d)", min_value=0.0, value=2_000_000.0, step=500_000.0, key="nightly_min_adv"))
+
+            nightly_args = [
+                "nightly",
+                "--db",
+                disc_db,
+                "--tenant-id",
+                tenant_id,
+                "--min-adv",
+                str(float(nightly_min_adv)),
+                "--outcomes-scope",
+                str(nightly_out_scope),
+                "--stats-window",
+                str(int(nightly_stats_window)),
+            ]
+            if nightly_use_date:
+                nightly_args.extend(["--date", nightly_date.isoformat()])
+
+            st.markdown("**Command preview**")
+            st.code(" ".join([str(x) for x in python_module_argv("app.discovery.discovery_cli", nightly_args)]), language="bash")
+
+            if st.button("Run nightly pipeline now", type="primary", use_container_width=True):
+                argv = python_module_argv("app.discovery.discovery_cli", nightly_args)
+                job_id = run_subprocess_job_in_thread(store=ops_store, argv=argv, cwd=str(repo_root), title="discovery nightly")
+                st.session_state.ops_selected_job_id = job_id
+                st.success(f"Started job {job_id[:8]}")
+                st.rerun()
+
+            st.markdown("**Quick controls**")
+            run_date = nightly_date.isoformat() if nightly_use_date else date.today().isoformat()
+            include_paper = st.toggle("Include paper trading", value=False, key="daily_runner_include_paper")
+
+            predq_argv = python_module_argv(
+                "app.engine.prediction_cli",
+                ["run-queue", "--as-of", run_date, "--db", disc_db, "--tenant-id", tenant_id],
+            )
+            daily_args = ["--date", run_date, "--db", disc_db, "--tenant-id", tenant_id]
+            if include_paper:
+                daily_args.append("--paper-trade")
+            daily_argv = python_module_argv("app.jobs.daily_runner", daily_args)
+
+            qc1, qc2, qc3 = st.columns([2, 2, 2])
+            with qc1:
+                if st.button("Run Discovery", use_container_width=True, key="qc_run_discovery"):
+                    argv = python_module_argv("app.discovery.discovery_cli", run_args)
+                    job_id = run_subprocess_job_in_thread(store=ops_store, argv=argv, cwd=str(repo_root), title="discovery run")
+                    st.session_state.ops_selected_job_id = job_id
+                    st.success(f"Started job {job_id[:8]}")
+                    st.rerun()
+            with qc2:
+                if st.button("Run Prediction Queue", use_container_width=True, key="qc_run_pred_queue"):
+                    job_id = run_subprocess_job_in_thread(store=ops_store, argv=predq_argv, cwd=str(repo_root), title="prediction queue")
+                    st.session_state.ops_selected_job_id = job_id
+                    st.success(f"Started job {job_id[:8]}")
+                    st.rerun()
+            with qc3:
+                if st.button("Run Full Daily Pipeline", type="primary", use_container_width=True, key="qc_run_full_daily"):
+                    job_id = run_subprocess_job_in_thread(store=ops_store, argv=daily_argv, cwd=str(repo_root), title="daily runner")
+                    st.session_state.ops_selected_job_id = job_id
+                    st.success(f"Started job {job_id[:8]}")
+                    st.rerun()
+
+            with st.expander("Command previews", expanded=False):
+                st.code(" ".join([str(x) for x in predq_argv]), language="bash")
+                st.code(" ".join([str(x) for x in daily_argv]), language="bash")
+
+            st.divider()
+            st.markdown("**Scheduling (Windows Task Scheduler)**")
+            st.caption("Use this if you want the machine to run the nightly pipeline automatically.")
+            task_name = st.text_input("Task name", value="AlphaEngine_DiscoveryNightly", key="nightly_task_name")
+            task_time = st.text_input("Start time (HH:MM, 24h)", value="21:30", key="nightly_task_time")
+            st.caption("Tip: choose a time after market close so today's bars exist (e.g. 21:30 local).")
+
+            # Schedule should not pass a fixed --date; nightly defaults to today's date.
+            sched_args = [
+                "nightly",
+                "--db",
+                disc_db,
+                "--tenant-id",
+                tenant_id,
+                "--min-adv",
+                str(float(nightly_min_adv)),
+                "--outcomes-scope",
+                str(nightly_out_scope),
+                "--stats-window",
+                str(int(nightly_stats_window)),
+            ]
+            sched_cmd = " ".join([str(x) for x in python_module_argv("app.discovery.discovery_cli", sched_args)])
+            st.text_area("Suggested scheduled command", value=sched_cmd, height=80)
+
+            create_cmd = f'schtasks /Create /F /SC DAILY /ST {task_time} /TN "{task_name}" /TR "{sched_cmd}"'
+            st.text_area("schtasks create", value=create_cmd, height=80)
+
+            confirm_sched = st.checkbox("I understand this creates/overwrites a scheduled task on this machine", value=False, key="nightly_sched_confirm")
+            if st.button("Create scheduled task", disabled=not confirm_sched, use_container_width=True):
+                argv = ["schtasks", "/Create", "/F", "/SC", "DAILY", "/ST", str(task_time), "/TN", str(task_name), "/TR", str(sched_cmd)]
+                job_id = run_subprocess_job_in_thread(store=ops_store, argv=argv, cwd=str(repo_root), title="create scheduled task (discovery nightly)")
+                st.session_state.ops_selected_job_id = job_id
+                st.success(f"Started job {job_id[:8]}")
+                st.rerun()
+
+            st.divider()
+            st.markdown("**Promote → Watchlist + Prediction Queue**")
+            p1, p2, p3, p4, p5 = st.columns([2, 2, 2, 2, 2])
+            with p1:
+                prom_date = st.date_input("Promote date", value=date.today(), key="promote_date")
+            with p2:
+                prom_top = int(st.number_input("Top K", min_value=1, max_value=200, value=20, step=5, key="promote_top"))
+            with p3:
+                prom_window = int(st.number_input("Window days", min_value=2, max_value=30, value=5, step=1, key="promote_window"))
+            with p4:
+                prom_min_overlap = int(st.number_input("Min overlap", min_value=1, max_value=5, value=2, step=1, key="promote_min_overlap"))
+            with p5:
+                prom_min_days = int(st.number_input("Min days seen", min_value=1, max_value=30, value=3, step=1, key="promote_min_days"))
+            prom_min_score = float(st.slider("Min avg score", min_value=0.0, max_value=1.0, value=0.85, step=0.01, key="promote_min_score"))
+
+            if st.button("Promote watchlist", use_container_width=True):
+                argv = python_module_argv(
+                    "app.discovery.discovery_cli",
+                    [
+                        "promote",
+                        "--date",
+                        prom_date.isoformat(),
+                        "--db",
+                        disc_db,
+                        "--tenant-id",
+                        tenant_id,
+                        "--top",
+                        str(prom_top),
+                        "--window-days",
+                        str(prom_window),
+                        "--min-overlap",
+                        str(prom_min_overlap),
+                        "--min-days-seen",
+                        str(prom_min_days),
+                        "--min-score",
+                        str(prom_min_score),
+                    ],
+                )
+                job_id = run_subprocess_job_in_thread(store=ops_store, argv=argv, cwd=str(repo_root), title="discovery promote")
+                st.session_state.ops_selected_job_id = job_id
+                st.success(f"Started job {job_id[:8]}")
+                st.rerun()
+
+            st.divider()
+            st.markdown("**Outcomes + Stats (feedback loop)**")
+            oc1, oc2, oc3 = st.columns([2, 2, 2])
+            with oc1:
+                out_date = st.date_input("Outcomes date", value=date.today(), key="outcomes_date")
+            with oc2:
+                out_h = st.multiselect("Horizons", options=[1, 5, 20], default=[1, 5, 20], key="outcomes_horizons")
+            with oc3:
+                stats_window = int(st.number_input("Stats window (days)", min_value=7, max_value=180, value=30, step=7, key="stats_window_days"))
+
+            if st.button("Compute outcomes", use_container_width=True):
+                hs = ",".join([str(int(x)) for x in (out_h or [1, 5, 20])])
+                argv = python_module_argv(
+                    "app.discovery.discovery_cli",
+                    ["outcomes", "--date", out_date.isoformat(), "--db", disc_db, "--tenant-id", tenant_id, "--horizons", hs],
+                )
+                job_id = run_subprocess_job_in_thread(store=ops_store, argv=argv, cwd=str(repo_root), title="discovery outcomes")
+                st.session_state.ops_selected_job_id = job_id
+                st.success(f"Started job {job_id[:8]}")
+                st.rerun()
+
+            if st.button("Compute stats (5d)", use_container_width=True):
+                argv = python_module_argv(
+                    "app.discovery.discovery_cli",
+                    [
+                        "stats",
+                        "--end-date",
+                        out_date.isoformat(),
+                        "--db",
+                        disc_db,
+                        "--tenant-id",
+                        tenant_id,
+                        "--window",
+                        str(stats_window),
+                        "--horizons",
+                        "5,20",
+                    ],
+                )
+                job_id = run_subprocess_job_in_thread(store=ops_store, argv=argv, cwd=str(repo_root), title="discovery stats")
+                st.session_state.ops_selected_job_id = job_id
+                st.success(f"Started job {job_id[:8]}")
+                st.rerun()
+
         st.subheader("Launch a job")
         action = st.selectbox(
             "Action",
@@ -1065,3 +1398,145 @@ Safety rules:
                 st.caption("No logs recorded yet.")
         else:
             st.caption("No jobs recorded yet.")
+
+    # ── Tab 4: Factor Importance ──────────────────────────────────────────────
+    with tab_factors:
+        import json as _json
+        import pandas as _pd
+
+        st.subheader("ML Factor Importance")
+
+        # Controls row
+        fc1, fc2, fc3 = st.columns([2, 2, 2])
+        with fc1:
+            fi_horizon = st.selectbox("Horizon", options=["7d", "1d", "30d"], index=0, key="fi_horizon")
+        with fc2:
+            fi_top_n = st.slider("Top N factors", min_value=5, max_value=30, value=15, key="fi_top_n")
+        with fc3:
+            fi_view = st.selectbox("View", options=["Aggregated (mean |coef|)", "Time series", "Per-model detail"], index=0, key="fi_view")
+
+        # Load models
+        try:
+            fi_rows = conn.execute(
+                """
+                SELECT model_id, horizon, train_start, train_end,
+                       model_accuracy, ic_score, win_rate, train_rows,
+                       feature_importance_json, passed_gate
+                FROM ml_models
+                WHERE passed_gate = 1 AND horizon = ?
+                ORDER BY train_start ASC
+                """,
+                (fi_horizon,),
+            ).fetchall()
+        except Exception as _e:
+            fi_rows = []
+            st.error(f"DB error: {_e}")
+
+        if not fi_rows:
+            st.warning(f"No passed-gate models found for horizon={fi_horizon}. Run training first.")
+        else:
+            # Parse factor importance into a DataFrame
+            fi_records = []
+            for r in fi_rows:
+                try:
+                    fi_dict = _json.loads(r["feature_importance_json"])
+                except Exception:
+                    continue
+                fi_records.append({
+                    "model_id": r["model_id"][:8],
+                    "train_start": r["train_start"],
+                    "train_end": r["train_end"],
+                    "accuracy": r["model_accuracy"],
+                    "ic_score": r["ic_score"],
+                    "win_rate": r["win_rate"],
+                    "train_rows": r["train_rows"],
+                    **{f: abs(float(v)) for f, v in fi_dict.items()},
+                })
+
+            fi_df = _pd.DataFrame(fi_records)
+            meta_cols = ["model_id", "train_start", "train_end", "accuracy", "ic_score", "win_rate", "train_rows"]
+            factor_cols = [c for c in fi_df.columns if c not in meta_cols]
+
+            # ── View: Aggregated ─────────────────────────────────────────────
+            if fi_view == "Aggregated (mean |coef|)":
+                agg = fi_df[factor_cols].mean().sort_values(ascending=False)
+                top_factors = agg.head(fi_top_n)
+
+                st.caption(f"{len(fi_rows)} models  |  {len(factor_cols)} factors  |  sorted by mean |coef| across all windows")
+
+                # Bar chart
+                chart_df = top_factors.reset_index()
+                chart_df.columns = ["Factor", "Mean |coef|"]
+                st.bar_chart(chart_df.set_index("Factor"), height=400)
+
+                # Table with presence rate
+                presence = (fi_df[factor_cols] > 0.001).mean()
+                summary = _pd.DataFrame({
+                    "Mean |coef|": agg,
+                    "Max |coef|": fi_df[factor_cols].max(),
+                    "Presence %": (presence * 100).round(1),
+                }).head(fi_top_n).reset_index()
+                summary.columns = ["Factor", "Mean |coef|", "Max |coef|", "Present in % of models"]
+                summary["Mean |coef|"] = summary["Mean |coef|"].map("{:.4f}".format)
+                summary["Max |coef|"] = summary["Max |coef|"].map("{:.4f}".format)
+                summary["Present in % of models"] = summary["Present in % of models"].map("{:.0f}%".format)
+                st.dataframe(summary, use_container_width=True, hide_index=True)
+
+            # ── View: Time series ────────────────────────────────────────────
+            elif fi_view == "Time series":
+                agg = fi_df[factor_cols].mean().sort_values(ascending=False)
+                top_factors = list(agg.head(fi_top_n).index)
+
+                st.caption(f"How top {fi_top_n} factor weights evolve across {len(fi_rows)} training windows")
+
+                ts_df = fi_df[["train_start"] + top_factors].copy()
+                ts_df["train_start"] = _pd.to_datetime(ts_df["train_start"])
+                ts_df = ts_df.set_index("train_start").sort_index()
+
+                st.line_chart(ts_df[top_factors], height=450)
+
+                with st.expander("Raw time-series table", expanded=False):
+                    display = ts_df[top_factors].copy()
+                    for c in display.columns:
+                        display[c] = display[c].map("{:.4f}".format)
+                    st.dataframe(display, use_container_width=True)
+
+            # ── View: Per-model detail ────────────────────────────────────────
+            else:
+                model_options = [
+                    f"{r['train_start'][:10]} -> {r['train_end'][:10]}  acc={r['model_accuracy']:.3f}  ic={r['ic_score']:.3f}"
+                    for r in fi_rows
+                ]
+                selected_idx = st.selectbox("Select model window", options=range(len(model_options)),
+                                            format_func=lambda i: model_options[i],
+                                            index=len(model_options) - 1, key="fi_model_sel")
+                r = fi_rows[selected_idx]
+                try:
+                    fi_dict = _json.loads(r["feature_importance_json"])
+                except Exception:
+                    fi_dict = {}
+
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                mc1.metric("Accuracy", f"{r['model_accuracy']:.1%}")
+                mc2.metric("IC Score", f"{r['ic_score']:.3f}")
+                mc3.metric("Win Rate", f"{r['win_rate']:.1%}")
+                mc4.metric("Train Rows", f"{r['train_rows']:,}")
+
+                sorted_fi = sorted(fi_dict.items(), key=lambda x: abs(x[1]), reverse=True)[:fi_top_n]
+                detail_df = _pd.DataFrame(sorted_fi, columns=["Factor", "|Coef|"])
+                detail_df["|Coef|"] = detail_df["|Coef|"].map("{:.4f}".format)
+                st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+                bar_df = _pd.DataFrame(sorted_fi, columns=["Factor", "Coef"])
+                bar_df["Coef"] = bar_df["Coef"].abs()
+                st.bar_chart(bar_df.set_index("Factor"), height=350)
+
+            # ── Model quality table ───────────────────────────────────────────
+            with st.expander("Model quality across windows", expanded=False):
+                qual_df = fi_df[["train_start", "train_end", "accuracy", "ic_score", "win_rate", "train_rows"]].copy()
+                qual_df.columns = ["Train Start", "Train End", "Accuracy", "IC Score", "Win Rate", "Rows"]
+                for c in ["Accuracy", "Win Rate"]:
+                    qual_df[c] = qual_df[c].map("{:.1%}".format)
+                qual_df["IC Score"] = qual_df["IC Score"].map("{:.3f}".format)
+                qual_df["Rows"] = qual_df["Rows"].map("{:,}".format)
+                st.dataframe(qual_df, use_container_width=True, hide_index=True)

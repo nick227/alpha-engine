@@ -20,6 +20,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+try:
+    # Prefer the real source configuration if available.
+    from app.ingest.validator import validate_sources_yaml  # type: ignore
+except Exception:  # pragma: no cover
+    validate_sources_yaml = None  # type: ignore[assignment]
+
 # ── constants ─────────────────────────────────────────────────────────────────
 
 DB_PATH = Path("data/alpha.db")
@@ -266,7 +272,29 @@ def audit_main(
             evt_counts_df = pd.DataFrame()
 
         # ── merge with known adapter list ────────────────────────────────────────
-        known = pd.DataFrame({"adapter": ALL_ADAPTERS})
+        # Prefer config/sources.yaml when available. Fall back to ALL_ADAPTERS (legacy expectation list).
+        specs_path = Path("config/sources.yaml")
+        if validate_sources_yaml is not None and specs_path.exists():
+            try:
+                specs = validate_sources_yaml(str(specs_path))
+                known = pd.DataFrame(
+                    [
+                        {
+                            "adapter": str(s.id),
+                            "adapter_kind": str(getattr(s, "adapter", "") or ""),
+                            "source_type": str(getattr(s, "type", "") or ""),
+                            "enabled": bool(getattr(s, "enabled", True)),
+                            "priority": int(getattr(s, "priority", 0) or 0),
+                            "poll": (str(getattr(s, "poll", "") or "") or None),
+                        }
+                        for s in specs
+                    ]
+                )
+            except Exception as exc:
+                st.warning(f"Failed to load config/sources.yaml: {exc}")
+                known = pd.DataFrame({"adapter": ALL_ADAPTERS})
+        else:
+            known = pd.DataFrame({"adapter": ALL_ADAPTERS})
         null_cols = ["total_runs", "ok_runs", "skipped_windows", "empty_windows",
                      "events_fetched", "events_emitted", "total_retries",
                      "coverage_from", "coverage_to", "last_ok_at", "last_error"]
@@ -332,53 +360,64 @@ def audit_main(
             ) if r.get("coverage_from") else None,
             axis=1,
         )
-        merged["status"] = merged.apply(
-            lambda r: "✅ active" if (r.get("ok_runs") or 0) > 0
-            else ("❌ errors" if (r.get("total_runs") or 0) > 0 else "⬜ never run"),
-            axis=1,
-        )
+        def _status_row(r: pd.Series) -> str:
+            if "enabled" in r and (r.get("enabled") is False):
+                return "disabled"
+            total_runs = int(r.get("total_runs") or 0)
+            ok_runs = int(r.get("ok_runs") or 0)
+            if total_runs <= 0:
+                return "never run"
+            if ok_runs <= 0:
+                return "error"
+            last_ok = _parse_ts(r.get("last_ok_at"))
+            if last_ok is None:
+                return "ok (unknown)"
+            age_h = (datetime.now(timezone.utc) - last_ok).total_seconds() / 3600.0
+            return "ok" if age_h <= float(stale_hours) else "stale"
+
+        merged["status"] = merged.apply(_status_row, axis=1)
 
         # ── summary metrics ───────────────────────────────────────────────────────
-        active  = (merged["status"] == "✅ active").sum()
-        errored = (merged["status"] == "❌ errors").sum()
-        never   = (merged["status"] == "⬜ never run").sum()
+        configured = len(merged)
+        enabled = int(merged["enabled"].sum()) if "enabled" in merged.columns else configured
+        ok_recent = int((merged["status"] == "ok").sum())
+        stale = int((merged["status"] == "stale").sum())
+        errored = int((merged["status"] == "error").sum())
+        never = int((merged["status"] == "never run").sum())
+        disabled = int((merged["status"] == "disabled").sum())
         total_fetched  = int(merged["events_fetched"].fillna(0).sum())
         total_emitted  = int(merged["events_emitted"].fillna(0).sum())
         overall_drop   = round((total_fetched - total_emitted) / total_fetched, 3) if total_fetched else 0
 
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Total Adapters", len(ALL_ADAPTERS))
-        m2.metric("Active", int(active))
-        m3.metric("Errored", int(errored))
-        m4.metric("Never run", int(never))
-        m5.metric("Overall drop rate", f"{overall_drop:.1%}")
+        m1.metric("Configured", int(configured))
+        m2.metric("Enabled", int(enabled))
+        m3.metric(f"OK (<={int(stale_hours)}h)", int(ok_recent))
+        m4.metric("Stale", int(stale))
+        m5.metric("Error", int(errored))
+        st.caption(f"Disabled: {disabled} | Never run: {never} | Overall drop rate: {overall_drop:.1%}")
 
         st.divider()
 
         display_cols = [
-            "adapter", "status",
-            "events_per_day", "emitted_per_day",
-            "total_runs", "ok_runs", "skipped_windows", "empty_windows",
-            "events_fetched", "events_emitted", "events_in_store",
-            "cache_hit_rate", "drop_rate", "total_retries",
-            "last_ok_at", "last_error",
+            "adapter",
+            "adapter_kind",
+            "source_type",
+            "enabled",
+            "status",
+            "last_ok_at",
+            "events_emitted",
+            "emitted_per_day",
+            "events_in_store",
+            "last_error",
         ]
         show = merged[[c for c in display_cols if c in merged.columns]].copy()
         show = _arrow_safe_display_df(
             show,
             numeric_cols=[
-                "events_per_day",
-                "emitted_per_day",
-                "total_runs",
-                "ok_runs",
-                "skipped_windows",
-                "empty_windows",
-                "events_fetched",
                 "events_emitted",
+                "emitted_per_day",
                 "events_in_store",
-                "cache_hit_rate",
-                "drop_rate",
-                "total_retries",
             ],
         )
         st.dataframe(show, use_container_width=True, hide_index=True)
@@ -388,6 +427,46 @@ def audit_main(
             with st.expander("Error details", expanded=False):
                 for _, row in errors.iterrows():
                     st.markdown(f"**{row['adapter']}**: `{row['last_error']}`")
+
+        with st.expander("Advanced columns", expanded=False):
+            advanced_cols = [
+                "adapter",
+                "total_runs",
+                "ok_runs",
+                "skipped_windows",
+                "empty_windows",
+                "events_fetched",
+                "events_emitted",
+                "events_in_store",
+                "events_per_day",
+                "emitted_per_day",
+                "cache_hit_rate",
+                "drop_rate",
+                "total_retries",
+                "coverage_from",
+                "coverage_to",
+                "last_ok_at",
+                "last_error",
+            ]
+            adv = merged[[c for c in advanced_cols if c in merged.columns]].copy()
+            adv = _arrow_safe_display_df(
+                adv,
+                numeric_cols=[
+                    "total_runs",
+                    "ok_runs",
+                    "skipped_windows",
+                    "empty_windows",
+                    "events_fetched",
+                    "events_emitted",
+                    "events_in_store",
+                    "events_per_day",
+                    "emitted_per_day",
+                    "cache_hit_rate",
+                    "drop_rate",
+                    "total_retries",
+                ],
+            )
+            st.dataframe(adv, use_container_width=True, hide_index=True)
 
 
     # ═════════════════════════════════════════════════════════════════════════════

@@ -17,7 +17,7 @@ Explain how to develop, test, and evolve the Alpha Engine codebase.
 ## Local setup (baseline)
 - Follow `README.md` quick start.
 - Use `python start.py` for interactive runs.
-- Use `streamlit run app/ui/app.py` for full UI.
+- Use `python -m streamlit run app/ui/app.py` for full UI.
 
 ## Common workflows (current repo)
 

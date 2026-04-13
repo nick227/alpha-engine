@@ -17,6 +17,7 @@ Provide lightweight “how it works” and component-level guides without sensit
 ## Pages
 - Glossary (below)
 - How predictions work: `docs/public/help/how-predictions-work.md`
+- How discovery + playbooks work: `docs/public/help/how-discovery-and-playbooks-work.md`
 - Data sources at a glance: `docs/public/help/data-sources-at-a-glance.md`
 - Component cards: `docs/public/help/components.md`
 

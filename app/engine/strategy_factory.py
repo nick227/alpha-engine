@@ -11,6 +11,7 @@ from app.strategies.technical.range_breakout_continuation import RangeBreakoutCo
 from app.strategies.cross_asset.relative_strength import RelativeStrengthVsBenchmarkStrategy
 from app.ml.predict import MLPredictor
 from app.strategies.text_mra import TextMRAStrategy
+from app.strategies.earnings_drift import EarningsDriftStrategy
 
 
 def build_strategy_instance(config: StrategyConfig):
@@ -30,6 +31,7 @@ def build_strategy_instance(config: StrategyConfig):
         "technical_range_breakout_continuation": RangeBreakoutContinuationStrategy,
         "cross_asset_relative_strength": RelativeStrengthVsBenchmarkStrategy,
         "ml_factor": MLPredictor,
+        "earnings_drift": EarningsDriftStrategy,
     }
     cls = mapping.get(config.strategy_type)
     if cls is None:

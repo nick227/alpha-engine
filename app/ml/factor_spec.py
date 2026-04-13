@@ -25,6 +25,12 @@ Transform = Literal[
     "rsi", "stochastic", "ma_distance", "drawdown",
     "trend_slope", "volume_surge", "dollar_volume_trend",
     "relative_return", "beta",
+    # Sentiment/positioning transforms
+    "volume_zscore", "dollar_volume_zscore",
+    "gap_open", "gap_follow_through",
+    "level_diff",
+    # Intraday confirmation transforms
+    "candle_body", "intraday_trend",
 ]
 
 Source = Literal["price", "fred", "price_relative"]

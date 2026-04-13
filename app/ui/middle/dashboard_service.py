@@ -231,6 +231,130 @@ class DashboardService:
             # Fallback to store-based ticker listing
             return self.store.list_tickers(tenant_id=tenant_id)
 
+    def list_discovery_dates(self, *, tenant_id: str = "default", limit: int = 120) -> list[str]:
+        return self.store.list_discovery_dates(tenant_id=tenant_id, limit=limit)
+
+    def list_discovery_strategy_types(self, *, tenant_id: str = "default") -> list[str]:
+        return self.store.list_discovery_strategy_types(tenant_id=tenant_id)
+
+    def list_discovery_candidates(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str,
+        strategy_type: str | None = None,
+        price_bucket: str | None = None,
+        min_score: float = 0.0,
+        symbol: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_discovery_candidates(
+            tenant_id=tenant_id,
+            as_of_date=as_of_date,
+            strategy_type=strategy_type,
+            price_bucket=price_bucket,
+            min_score=min_score,
+            symbol=symbol,
+            limit=limit,
+        )
+
+    def list_discovery_overlap(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str,
+        min_strategies: int = 2,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_discovery_overlap(
+            tenant_id=tenant_id,
+            as_of_date=as_of_date,
+            min_strategies=min_strategies,
+            limit=limit,
+        )
+
+    def list_discovery_momentum(
+        self,
+        *,
+        tenant_id: str = "default",
+        end_date: str,
+        window_days: int = 10,
+        strategy_type: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_discovery_momentum(
+            tenant_id=tenant_id,
+            end_date=end_date,
+            window_days=window_days,
+            strategy_type=strategy_type,
+            limit=limit,
+        )
+
+    def list_watchlist_dates(self, *, tenant_id: str = "default", limit: int = 120) -> list[str]:
+        return self.store.list_watchlist_dates(tenant_id=tenant_id, limit=limit)
+
+    def list_watchlist(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_watchlist(tenant_id=tenant_id, as_of_date=as_of_date, limit=limit)
+
+    def list_daily_top_picks(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str,
+        limit: int = 15,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_daily_top_picks(tenant_id=tenant_id, as_of_date=as_of_date, limit=limit)
+
+    def get_last_discovery_job(
+        self,
+        *,
+        tenant_id: str = "default",
+        job_type: str,
+    ) -> dict[str, Any] | None:
+        return self.store.get_last_discovery_job(tenant_id=tenant_id, job_type=job_type)
+
+    def list_watchlist_outcomes(
+        self,
+        *,
+        tenant_id: str = "default",
+        watchlist_date: str,
+        horizon_days: int = 5,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_watchlist_outcomes(
+            tenant_id=tenant_id,
+            watchlist_date=watchlist_date,
+            horizon_days=horizon_days,
+            limit=limit,
+        )
+
+    def list_discovery_stats(
+        self,
+        *,
+        tenant_id: str = "default",
+        end_date: str,
+        window_days: int = 30,
+        horizon_days: int = 5,
+        group_type: str | None = None,
+        latest_only: bool = True,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_discovery_stats(
+            tenant_id=tenant_id,
+            end_date=end_date,
+            window_days=window_days,
+            horizon_days=horizon_days,
+            group_type=group_type,
+            latest_only=latest_only,
+            limit=limit,
+        )
+
     def list_paper_trades(
         self,
         *,
@@ -672,7 +796,7 @@ class DashboardService:
 
     def get_top_ten_signals(self, *, tenant_id: str = "default", limit: int = 10) -> list[dict]:
         """
-        Get top ten signals with ranking, direction, expected move, alpha, and strategy.
+        Get top ten signals with ranking, direction, expected move, alpha, strategy, and attribution.
         Returns a list of dictionaries formatted for the top ten signals display.
         """
         # Get latest rankings for top signals
@@ -717,7 +841,14 @@ class DashboardService:
                     strategy = signal.strategy
                     break
             
-            # Format the signal
+            # Determine forecast horizon based on strategy or default to 7d
+            forecast_horizon = "7d"  # Default
+            if "1d" in strategy.lower() or "intraday" in strategy.lower():
+                forecast_horizon = "1d"
+            elif "30d" in strategy.lower() or "monthly" in strategy.lower():
+                forecast_horizon = "30d"
+            
+            # Format the signal with enhanced data
             signal_data = {
                 'rank': i + 1,
                 'direction': direction,
@@ -729,13 +860,16 @@ class DashboardService:
                 'score': ranking.score,
                 'conviction': ranking.conviction,
                 'regime': ranking.regime,
-                'timestamp': ranking.timestamp
+                'timestamp': ranking.timestamp,
+                'forecast_horizon': forecast_horizon,
+                'attribution': ranking.attribution if hasattr(ranking, 'attribution') else {},
+                'participating_strategies': consensus_info.get('participating_strategies', 1)
             }
             
             top_signals.append(signal_data)
         
-        # Sort by alpha (score) and return top 10
-        top_signals.sort(key=lambda x: x['alpha'], reverse=True)
+        # Sort by confidence instead of alpha as requested
+        top_signals.sort(key=lambda x: x['confidence'], reverse=True)
         return top_signals[:10]
 
     def _efficiency_view(self, r: StrategyEfficiencyRow) -> StrategyEfficiencyView:

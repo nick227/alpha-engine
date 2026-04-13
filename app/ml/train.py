@@ -145,10 +145,17 @@ def train_model(
             y_corr = np.array([
                 abs(float(np.corrcoef(X_clipped[:, j], y)[0, 1])) for j in range(n_features)
             ])
+            # Positioning / expectations features are intentionally redundant with each other at times.
+            # Do not drop them via correlation pruning; let Ridge regularization handle it.
+            _exempt_prefixes = ("opt_", "short_", "earn_", "breadth_")
             to_drop: set[int] = set()
             for i in range(n_features):
                 for j in range(i + 1, n_features):
                     if i in to_drop or j in to_drop:
+                        continue
+                    ki = all_keys[i]
+                    kj = all_keys[j]
+                    if ki.startswith(_exempt_prefixes) or kj.startswith(_exempt_prefixes):
                         continue
                     if abs(corr_mat[i, j]) > meta.max_corr:
                         drop_idx = i if y_corr[i] < y_corr[j] else j

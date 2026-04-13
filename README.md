@@ -103,13 +103,13 @@ This generates comprehensive analysis in `outputs/`:
  
 ```bash 
 # Start the full UI (Dashboard + Intelligence Hub + Audit + Chatbot)
-streamlit run app/ui/app.py
+python -m streamlit run app/ui/app.py
 
 # Direct entrypoints (optional)
-streamlit run app/ui/dashboard.py
-streamlit run app/ui/intelligence_hub.py
-streamlit run app/ui/audit.py
-streamlit run app/ui/chatbot.py
+python -m streamlit run app/ui/dashboard.py
+python -m streamlit run app/ui/intelligence_hub.py
+python -m streamlit run app/ui/audit.py
+python -m streamlit run app/ui/chatbot.py
 ``` 
 
 ## 🏗️ Architecture

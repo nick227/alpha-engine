@@ -34,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--dumps-root", default="data/raw_dumps", help="Dump root (default: data/raw_dumps)")
     b.add_argument("--factors-path", default="config/factors.yaml", help="Factor config (default: config/factors.yaml)")
     b.add_argument("--split", default="train", help="Split label (default: train)")
+    b.add_argument("--force", action="store_true", help="Delete and rebuild rows for the requested scope")
 
     return p
 
@@ -58,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
             tenant_id=str(args.tenant_id),
             split=str(args.split),
             factors_path=str(args.factors_path),
+            force_rebuild=bool(args.force),
         )
         print(f"Inserted rows: {inserted}")
         return 0
@@ -68,4 +70,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

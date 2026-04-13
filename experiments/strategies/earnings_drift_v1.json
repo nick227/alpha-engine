@@ -1,0 +1,14 @@
+{
+  "id": "earnings-drift-v1",
+  "name": "earnings_drift_v1",
+  "version": "v1",
+  "strategy_type": "earnings_drift",
+  "mode": "backtest",
+  "active": true,
+  "config": {
+    "horizon": "5d",
+    "tail_threshold": 0.67,
+    "min_size_quintile": 3,
+    "require_confirmation": true
+  }
+}

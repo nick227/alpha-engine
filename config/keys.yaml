@@ -2,6 +2,9 @@ alpaca:
   key: "ENV:ALPACA_API_KEY"
   secret: "ENV:ALPACA_API_SECRET"
 
+fmp:
+  apikey: "ENV:FMP_API_KEY"
+
 polygon:
   key: "ENV:POLYGON_KEY"
 

@@ -76,10 +76,18 @@ def build_price_context_for_event(
     benchmark_bars_by_ticker: dict[str, pd.DataFrame] | None = None,
     benchmark_tickers: Iterable[str] | None = None,
     assume_sorted: bool = False,
+    vix_bars: pd.DataFrame | None = None,
+    vix3m_bars: pd.DataFrame | None = None,
 ) -> dict:
     """
     Produces a feature-rich price_context dict from 1-minute OHLCV bars.
     Designed to satisfy current strategy + MRA + evaluation expectations.
+
+    vix_bars / vix3m_bars (optional): daily ^VIX / ^VIX3M close series.
+        Must have columns [timestamp, close].  If both are supplied, `vix_term`
+        (VIX - VIX3M) is added to the context — positive = inverted term structure
+        = fear regime.  The gate in decide_strategy_gate() reads this key directly.
+        Use the prior trading-day close relative to event_ts (no lookahead).
     """
     if assume_sorted:
         bars = ticker_bars.reset_index(drop=True)
@@ -249,6 +257,26 @@ def build_price_context_for_event(
     if not lows_20.empty:
         ctx["rolling_low_20"] = float(lows_20.min())
 
+    # VIX term structure (fear-regime gate signal).
+    # Uses the prior daily close at/before event_ts — strictly no lookahead.
+    # Positive result = inverted term structure = fear.
+    if vix_bars is not None and vix3m_bars is not None:
+        try:
+            vix_s = vix_bars.copy(deep=False)
+            v3m_s = vix3m_bars.copy(deep=False)
+            vix_s["timestamp"] = pd.to_datetime(vix_s["timestamp"], utc=True)
+            v3m_s["timestamp"] = pd.to_datetime(v3m_s["timestamp"], utc=True)
+            vix_s = vix_s.sort_values("timestamp").reset_index(drop=True)
+            v3m_s = v3m_s.sort_values("timestamp").reset_index(drop=True)
+            vi = _prior_bar_index(vix_s, event_ts)
+            v3i = _prior_bar_index(v3m_s, event_ts)
+            if vi is not None and v3i is not None:
+                vix_close = float(vix_s.iloc[vi]["close"])
+                v3m_close = float(v3m_s.iloc[v3i]["close"])
+                ctx["vix_term"] = vix_close - v3m_close
+        except Exception:
+            pass  # VIX data is optional; never break the primary context build
+
     # Optional: benchmark-relative context.
     if benchmark_bars_by_ticker and benchmark_tickers:
         bmarks: dict[str, dict[str, float]] = {}
@@ -297,6 +325,8 @@ def build_price_context_for_event_with_resolution(
     horizons_minutes: Iterable[int] = (1, 5, 15, 60, 240, 1440),
     benchmark_bars_by_ticker: dict[str, pd.DataFrame] | None = None,
     benchmark_tickers: Iterable[str] | None = None,
+    vix_bars: pd.DataFrame | None = None,
+    vix3m_bars: pd.DataFrame | None = None,
 ) -> dict:
     """
     Build a price context from bars that may be 1m, 1h, or 1d.
@@ -306,6 +336,8 @@ def build_price_context_for_event_with_resolution(
     - For resolutions coarser than 1m, short-horizon keys are set to 0.0 to avoid
       implying precision the data cannot support.
     - Adds `bar_resolution_used` for debugging/observability.
+    - vix_bars / vix3m_bars: passed through to build_price_context_for_event on the
+      1m path; applied directly in the coarse path.
     """
     tf = str(timeframe).strip().lower()
     if tf not in {"1m", "1h", "1d"}:
@@ -320,6 +352,8 @@ def build_price_context_for_event_with_resolution(
             benchmark_bars_by_ticker=benchmark_bars_by_ticker,
             benchmark_tickers=benchmark_tickers,
             assume_sorted=False,
+            vix_bars=vix_bars,
+            vix3m_bars=vix3m_bars,
         )
         if out:
             out["bar_resolution_used"] = "1m"
@@ -391,6 +425,12 @@ def build_price_context_for_event_with_resolution(
         elif minutes == 1440:
             ctx["return_1d"] = past_r
             ctx["future_return_1d"] = future_r
+        elif minutes == 10080:
+            ctx["return_7d"] = past_r
+            ctx["future_return_7d"] = future_r
+        elif minutes == 43200:
+            ctx["return_30d"] = past_r
+            ctx["future_return_30d"] = future_r
 
     # Coarse default for short-trend + microstructure features.
     ctx["short_trend"] = 0.0
@@ -439,6 +479,22 @@ def build_price_context_for_event_with_resolution(
         ctx["rolling_high_20"] = float(highs_20.max())
     if not lows_20.empty:
         ctx["rolling_low_20"] = float(lows_20.min())
+
+    # VIX term structure (fear-regime gate signal) — coarse-resolution path.
+    if vix_bars is not None and vix3m_bars is not None:
+        try:
+            vix_s = vix_bars.copy(deep=False)
+            v3m_s = vix3m_bars.copy(deep=False)
+            vix_s["timestamp"] = pd.to_datetime(vix_s["timestamp"], utc=True)
+            v3m_s["timestamp"] = pd.to_datetime(v3m_s["timestamp"], utc=True)
+            vix_s = vix_s.sort_values("timestamp").reset_index(drop=True)
+            v3m_s = v3m_s.sort_values("timestamp").reset_index(drop=True)
+            vi = _prior_bar_index(vix_s, event_ts)
+            v3i = _prior_bar_index(v3m_s, event_ts)
+            if vi is not None and v3i is not None:
+                ctx["vix_term"] = float(vix_s.iloc[vi]["close"]) - float(v3m_s.iloc[v3i]["close"])
+        except Exception:
+            pass  # VIX data is optional; never break the primary context build
 
     # Optional: benchmark-relative context.
     if benchmark_bars_by_ticker and benchmark_tickers:
@@ -490,12 +546,16 @@ def build_price_contexts_from_bars_multi(
     bars_by_timeframe: dict[str, pd.DataFrame],
     horizons_minutes: Iterable[int] = (1, 5, 15, 60),
     benchmark_tickers: Iterable[str] | None = None,
+    vix_bars: pd.DataFrame | None = None,
+    vix3m_bars: pd.DataFrame | None = None,
 ) -> dict[str, dict]:
     """
     Build price contexts from multi-timeframe bars.
 
     bars_by_timeframe: mapping like {'1m': df, '1h': df, '1d': df} where each df
     contains at least [ticker, timestamp, open, high, low, close, volume].
+    vix_bars / vix3m_bars: passed through to each per-event context build so that
+    `vix_term` appears in every context when supplied.
     """
     # Pre-group by timeframe/ticker once.
     grouped: dict[str, dict[str, pd.DataFrame]] = {}
@@ -537,6 +597,8 @@ def build_price_contexts_from_bars_multi(
             horizons_minutes=horizons_minutes,
             benchmark_bars_by_ticker=bm_map if benchmark_tickers else None,
             benchmark_tickers=benchmark_tickers,
+            vix_bars=vix_bars,
+            vix3m_bars=vix3m_bars,
         )
         if ctx:
             ctxs[evt.id] = ctx
@@ -550,9 +612,13 @@ def build_price_contexts_from_bars(
     horizons_minutes: Iterable[int] = (1, 5, 15, 60),
     bars_already_utc: bool = False,
     benchmark_tickers: Iterable[str] | None = None,
+    vix_bars: pd.DataFrame | None = None,
+    vix3m_bars: pd.DataFrame | None = None,
 ) -> dict[str, dict]:
     """
     Builds a price_context dict keyed by raw_event.id from a multi-ticker bars DataFrame.
+    vix_bars / vix3m_bars: passed through to each per-event context build so that
+    `vix_term` appears in every context when supplied.
     """
     df = bars if bars_already_utc else bars.copy(deep=False)
     if not bars_already_utc:
@@ -581,5 +647,7 @@ def build_price_contexts_from_bars(
             benchmark_bars_by_ticker={k.upper(): v for k, v in bars_by_ticker.items()} if benchmark_tickers else None,
             benchmark_tickers=benchmark_tickers,
             assume_sorted=True,
+            vix_bars=vix_bars,
+            vix3m_bars=vix3m_bars,
         )
     return ctxs

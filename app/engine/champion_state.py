@@ -206,6 +206,7 @@ def refresh_active_champions_from_ranked(
     tenant_id: str = "default",
     min_predictions: int = 5,
     now: datetime | None = None,
+    fear_regime: bool = False,
 ) -> dict[str, Any]:
     """
     Compute ranked champions (from performance/stability), persist:
@@ -213,9 +214,14 @@ def refresh_active_champions_from_ranked(
       - `champions:active:{track}` for LiveLoop fast-path.
 
     Note: this intentionally only considers active strategies, so setting them as active champions is safe.
+
+    Args:
+        fear_regime: When True (VIX > VIX3M), mean-reversion and ML strategies receive
+                     a ranking bonus in the quant pool. Pass from RegimeContext.fear_regime.
     """
     now = now or datetime.now(timezone.utc)
-    champs = select_champions(repo, tenant_id=tenant_id, min_predictions=min_predictions)
+    champs = select_champions(repo, tenant_id=tenant_id, min_predictions=min_predictions,
+                               fear_regime=fear_regime)
     snap = persist_champion_snapshot(repo, champs, tenant_id=tenant_id, now=now)
 
     total_scored = _total_scored_outcomes(repo, tenant_id=tenant_id)

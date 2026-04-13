@@ -46,22 +46,47 @@ def _safe_json_dict(value: str | None) -> dict:
         return {}
 
 
+def _family_regime_bonus(strategy_type: str, fear_regime: bool) -> float:
+    """
+    Return a ranking bonus (+0.0 to +0.20) for strategies whose family is
+    validated for the current regime.
+
+    In fear regime (VIX > VIX3M):
+      mean_reversion family +0.20  — validated IC=-0.028 (2010s baseline)
+      ml family             +0.10  — trained on fear-regime factor signal
+      all others             0.00
+
+    In calm regime: no adjustments — pure merit ranking.
+    """
+    if not fear_regime:
+        return 0.0
+    from app.engine.regime_service import _strategy_family
+    family = _strategy_family(strategy_type)
+    return {"mean_reversion": 0.20, "ml": 0.10}.get(family, 0.0)
+
+
 def select_champions(
     repo: Repository,
     *,
     tenant_id: str = "default",
     min_predictions: int = 5,
+    fear_regime: bool = False,
 ) -> dict[str, ChampionPick]:
     """
     Select one champion per track ("sentiment", "quant") from active strategies.
 
     Ranking (desc):
-      1) stability_score
+      1) stability_score + regime_bonus  (regime_bonus > 0 in fear for mean_reversion/ml)
       2) avg_return
       3) accuracy
       4) prediction_count
 
     If no strategy meets `min_predictions` for a track, fall back to best available.
+
+    Args:
+        fear_regime: When True, mean-reversion and ML family strategies receive a
+                     ranking bonus in the quant pool. Derived from VIX term structure
+                     (VIX > VIX3M). Validated: IC=-0.028, 2010s baseline, n=746k obs.
     """
     rows = repo.conn.execute(
         """
@@ -130,7 +155,12 @@ def select_champions(
         ranked_pool = eligible if eligible else pool
         picks[track] = max(
             ranked_pool,
-            key=lambda c: (c.stability_score, c.avg_return, c.accuracy, c.prediction_count),
+            key=lambda c: (
+                c.stability_score + _family_regime_bonus(c.config.strategy_type, fear_regime),
+                c.avg_return,
+                c.accuracy,
+                c.prediction_count,
+            ),
         )
 
     return picks

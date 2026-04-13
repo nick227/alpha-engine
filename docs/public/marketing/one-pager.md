@@ -52,4 +52,4 @@ Concrete evidence artifacts in this repo:
 ## How to verify this in the repo (evidence-based)
 - Fast demo artifacts (no network): `python scripts/demo_run.py` → `outputs/`
 - Auditable DB trail (history): `python -m app.ingest.backfill_cli backfill-range --start YYYY-MM-DD --end YYYY-MM-DD` → `data/alpha.db`
-- UI inspection: `streamlit run app/ui/app.py` (set `ALPHA_DB_PATH` if needed)
+- UI inspection: `python -m streamlit run app/ui/app.py` (set `ALPHA_DB_PATH` if needed)

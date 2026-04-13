@@ -87,6 +87,33 @@ Next: `docs/internal/audit/data-lineage.md`
 
 Next: `docs/public/help/data-sources-at-a-glance.md`
 
+## What is “discovery” (selection) vs “prediction” (timing)?
+- Discovery strategies decide **what is worth watching** before predicting price direction.
+- Prediction strategies decide **when** a move is likely and on what horizon.
+- Discovery outputs candidates; it does not place trades.
+- Promotion filters candidates into a short daily watchlist using transparent rules.
+- Outcomes and stats validate whether selection improves results (evidence > intuition).
+
+Next: `docs/public/help/how-discovery-and-playbooks-work.md`
+
+## What is a “playbook”?
+- A playbook maps a discovery situation to a recommended prediction behavior + horizons.
+- It is the “connective tissue” between selection and timing.
+- It helps keep logic reusable: same playbook can be evaluated across windows/horizons.
+- It makes comparisons meaningful: situation × behavior × outcome.
+- Playbooks must be validated with measured outcomes, not stories.
+
+Next: `docs/public/help/how-discovery-and-playbooks-work.md`
+
+## What is “promotion lift”?
+- Promotion lift answers whether the watchlist filter adds value.
+- Definition: `watchlist_avg_return − candidates_avg_return`.
+- If lift is consistently positive, promotion is doing real work.
+- If lift is near zero, promotion is neutral.
+- If lift is consistently negative, promotion is hurting selection.
+
+Next: `docs/public/help/how-discovery-and-playbooks-work.md`
+
 ## What is a “prediction outcome”?
 - An outcome records what happened after a prediction’s horizon elapsed.
 - It includes return, direction correctness, and (optionally) runup/drawdown.

@@ -5,6 +5,7 @@ import streamlit as st
 
 ROUTES: list[tuple[str, str]] = [
     ("dashboard", "Dashboard"),
+    ("discovery", "Discovery"),
     ("paper", "Paper Trades"),
     ("ops", "Ops / Data"),
     ("ih", "Intelligence Hub"),

@@ -41,6 +41,7 @@ def build_dataset(
     tenant_id: str = "default",
     split: str = "train",
     factors_path: str = "config/factors.yaml",
+    force_rebuild: bool = False,
 ) -> int:
     """
     Build and persist training rows for every (symbol, date, horizon) combination.
@@ -53,14 +54,33 @@ def build_dataset(
     db_path = Path(db_path)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
+
+    start, end = date_range
+    if force_rebuild:
+        # Clear existing rows in-scope so factor-set changes take effect.
+        # This is bounded to the requested (symbols × horizons × date_range).
+        if symbols and horizons:
+            sym_ph = ",".join(["?"] * len(symbols))
+            hor_ph = ",".join(["?"] * len(horizons))
+            params: list[object] = [tenant_id, *symbols, *horizons, start.isoformat(), end.isoformat()]
+            conn.execute(
+                f"""
+                DELETE FROM ml_learning_rows
+                WHERE tenant_id = ?
+                  AND symbol IN ({sym_ph})
+                  AND horizon IN ({hor_ph})
+                  AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
+                """,
+                params,
+            )
+            conn.commit()
+
     fb = FeatureBuilder(
         db_path=db_path,
         dumps_root=dumps_root,
         tenant_id=tenant_id,
         factors_path=factors_path,
     )
-
-    start, end = date_range
 
     # Bulk-load price bars for all needed symbols into memory.
     # This replaces O(n_dates × n_factors) DB queries with one fetch per symbol.

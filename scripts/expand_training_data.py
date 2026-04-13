@@ -99,7 +99,8 @@ FRED_EXPANSION = {
 
 # yfinance symbols with no full_history dump
 YFINANCE_ONLY = [
-    "^VIX",      # VIX index
+    "^VIX",      # VIX index (spot)
+    "^VIX3M",    # VIX 3-month index — vix_term factor (VIX - VIX3M fear proxy)
     "BTC-USD",   # Bitcoin
     "CL=F",      # WTI crude futures
     "DX-Y.NYB",  # Dollar index
@@ -246,8 +247,29 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-train", action="store_true")
+    parser.add_argument("--train-start", default=None, help="override train start (YYYY-MM-DD)")
+    parser.add_argument("--train-end", default=None, help="override train end (YYYY-MM-DD)")
     args = parser.parse_args()
     dry = args.dry_run
+
+    def _parse_day(x: str | None) -> date | None:
+        if not x:
+            return None
+        try:
+            return date.fromisoformat(str(x))
+        except Exception:
+            return None
+
+    train_start = _parse_day(str(args.train_start)) if args.train_start else None
+    train_end = _parse_day(str(args.train_end)) if args.train_end else None
+    if (args.train_start and train_start is None) or (args.train_end and train_end is None):
+        raise SystemExit("ERROR: --train-start/--train-end must be YYYY-MM-DD")
+    if train_start is None:
+        train_start = TRAIN_START
+    if train_end is None:
+        train_end = TRAIN_END
+    if train_end < train_start:
+        raise SystemExit("ERROR: --train-end must be >= --train-start")
 
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
@@ -382,7 +404,7 @@ def main() -> None:
 
     inserted = build_dataset(
         symbols=trainable,
-        date_range=(TRAIN_START, TRAIN_END),
+        date_range=(train_start, train_end),
         horizons=TRAIN_HORIZONS,
         db_path=str(DB_PATH),
         min_feature_coverage=0.5,
@@ -401,8 +423,8 @@ def main() -> None:
     result = run_training_pipeline(
         symbols=trainable,
         horizons=TRAIN_HORIZONS,
-        data_start=TRAIN_START,
-        data_end=TRAIN_END,
+        data_start=train_start,
+        data_end=train_end,
         db_path=str(DB_PATH),
         train_days=180,
         predict_days=30,

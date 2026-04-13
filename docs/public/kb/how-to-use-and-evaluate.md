@@ -100,3 +100,31 @@ Goal: score predicted series vs actual bars in a defined prediction window and r
 - Outputs regenerate deterministically for a fixed dataset/config.
 - You can attribute changes in results to changes in inputs/regime, not randomness.
 
+---
+
+## 4) Evaluate discovery + playbooks (selection edge)
+
+### Problem statement
+“Discovery produces lots of candidates. Are our promotion rules and playbooks actually improving outcomes?”
+
+### The one truth metric: promotion lift
+Promotion tries to improve selection quality by filtering candidates into a watchlist.
+
+Definition:
+- `promotion_lift = watchlist_avg_return − candidates_avg_return`
+
+Interpretation:
+- **Lift > 0 consistently**: promotion is working.
+- **Lift ~ 0**: promotion is neutral.
+- **Lift < 0 consistently**: promotion is hurting you (filters need revision).
+
+### What to inspect first (fast)
+In Streamlit:
+- **Discovery → Stats**: compare watchlist vs candidates vs non-promoted.
+- **Discovery → Playbooks**: check which playbooks have positive 5d/20d lift and sufficient sample size.
+
+### What good looks like
+- Watchlist outperforms raw candidates over rolling windows (e.g., 30 days).
+- A small number of playbooks show stable positive lift (scalable edge).
+
+Next: `docs/public/help/how-discovery-and-playbooks-work.md`

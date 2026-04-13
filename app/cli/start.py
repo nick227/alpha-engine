@@ -488,21 +488,49 @@ def _run_demo_script() -> int:
 
 def _run_audit_ui() -> int:
     audit = _REPO_ROOT / "app" / "ui" / "audit.py"
-    _confirm_or_exit(["streamlit", "run", str(audit)])
+    _confirm_or_exit([sys.executable, "-m", "streamlit", "run", str(audit)])
     proc = subprocess.run(
-        ["streamlit", "run", str(audit)],
+        [sys.executable, "-m", "streamlit", "run", str(audit)],
         cwd=str(_REPO_ROOT),
     )
     return int(proc.returncode)
 
 
 def _run_dashboard_ui() -> int:
-    dashboard = _REPO_ROOT / "app" / "ui" / "dashboard.py"
-    _confirm_or_exit(["streamlit", "run", str(dashboard)])
+    app = _REPO_ROOT / "app" / "ui" / "app.py"
+    _confirm_or_exit([sys.executable, "-m", "streamlit", "run", str(app)])
     proc = subprocess.run(
-        ["streamlit", "run", str(dashboard)],
+        [sys.executable, "-m", "streamlit", "run", str(app)],
         cwd=str(_REPO_ROOT),
     )
+    return int(proc.returncode)
+
+def _run_daily_runner() -> int:
+    cmd = [sys.executable, "-m", "app.jobs.daily_runner"]
+    _confirm_or_exit(cmd)
+    proc = subprocess.run(cmd, cwd=str(_REPO_ROOT))
+    return int(proc.returncode)
+
+
+def _run_prediction_queue_runner() -> int:
+    # Optional as-of date; leaving blank lets the CLI pick a sensible default.
+    asof = _input_line("Queue as-of date (YYYY-MM-DD, blank = default): ").strip()
+    cmd = [sys.executable, "-m", "app.engine.prediction_cli", "run-queue"]
+    if asof:
+        cmd.extend(["--as-of", asof])
+    _confirm_or_exit(cmd)
+    proc = subprocess.run(cmd, cwd=str(_REPO_ROOT))
+    return int(proc.returncode)
+
+
+def _run_runtime_scheduler() -> int:
+    script = _REPO_ROOT / "scripts" / "run_runtime.py"
+    if not script.exists():
+        print(f"Missing script: {script}")
+        return 2
+    cmd = [sys.executable, str(script)]
+    _confirm_or_exit(cmd)
+    proc = subprocess.run(cmd, cwd=str(_REPO_ROOT))
     return int(proc.returncode)
 
 
@@ -512,6 +540,9 @@ def _print_underlying_help() -> int:
     print("---------------------------------")
     print("  python -m app.ingest.backfill_cli --help")
     print("  python -m app.engine.score_predictions_cli --help")
+    print("  python -m app.engine.prediction_cli --help")
+    print("  python -m app.jobs.daily_runner --help")
+    print("  python scripts/run_runtime.py")
     print("  python scripts/demo_run.py")
     print()
     return 0
@@ -550,6 +581,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Direct (non-interactive) entrypoints:\n"
             "  python -m app.ingest.backfill_cli --help\n"
             "  python -m app.engine.score_predictions_cli --help\n"
+            "  python -m app.engine.prediction_cli --help\n"
+            "  python -m app.jobs.daily_runner --help\n"
         ),
     )
     p.add_argument("--no-welcome", action="store_true", help="Skip welcome banner")
@@ -597,6 +630,21 @@ def _launcher_items() -> list[_LauncherItem]:
             label="Dashboard (UI)",
             description="Open main prediction dashboard",
             run=_run_dashboard_ui,
+        ),
+        _LauncherItem(
+            label="Daily Runner (Batch)",
+            description="Run daily batch: discovery -> prediction queue",
+            run=_run_daily_runner,
+        ),
+        _LauncherItem(
+            label="Prediction Queue Runner",
+            description="Consume prediction_queue and build predicted series",
+            run=_run_prediction_queue_runner,
+        ),
+        _LauncherItem(
+            label="Runtime Scheduler (Optional)",
+            description="Run live/replay/optimizer loops continuously (optional intraday)",
+            run=_run_runtime_scheduler,
         ),
         _LauncherItem(
             label="Full Pipeline Run (recommended)",

@@ -84,7 +84,10 @@ horizon_sets:
     - stock_vol5d
     - vix_level
     - vix_change
+    - vix_term
     - volume_surge
+    - volume_zscore_20
+    - dollar_volume_z20
     - zscore_5d
     - rsi_14
     - ma_distance_20
@@ -92,13 +95,10 @@ horizon_sets:
     - stock_vs_spy_r5
     - spy_r5
     - range_expansion
-    - opt_iv_rank
-    - opt_gamma
-    - opt_put_call_ratio
-    - opt_iv_term_slope
-    - opt_iv_skew
-    - short_float
-    - short_volume
+    - gap_size
+    - gap_follow_through
+    - opening_range_break
+    - intraday_trend_strength
 
   7d:
     - stock_r5
@@ -106,6 +106,7 @@ horizon_sets:
     - stock_vol10d
     - vix_level
     - vix_percentile
+    - vix_term
     - spy_trend_slope
     - spy_drawdown
     - stock_vs_spy_r5
@@ -116,14 +117,12 @@ horizon_sets:
     - small_vs_large_r5
     - qqq_r5
     - volume_surge
+    - volume_zscore_20
+    - dollar_volume_z20
     - zscore_20d
-    - opt_iv_rank
-    - opt_gamma
-    - opt_put_call_ratio
-    - opt_iv_term_slope
-    - opt_iv_skew
-    - short_float
-    - short_volume
+    - gap_size
+    - opening_range_break
+    - intraday_trend_strength
 
   30d:
     - stock_r20
@@ -138,14 +137,10 @@ horizon_sets:
     - small_vs_large_r20
     - growth_vs_value_r20
     - vix_percentile
+    - vix_term
     - unemployment
-    - opt_iv_rank
-    - opt_gamma
-    - opt_put_call_ratio
-    - opt_iv_term_slope
-    - opt_iv_skew
-    - short_float
-    - short_volume
+    - volume_zscore_20
+    - dollar_volume_z20
 
 # ── Auto-expansion blocks ─────────────────────────────────────────────────
 # Each block generates multiple factor entries from a shared template.
@@ -493,7 +488,7 @@ factors:
     window: 1
     lag: 0
     category: regime
-    enabled: true
+    enabled: false   # Polygon Starter tier returns 403 — no options entitlement
 
   - name: opt_gamma
     source: price
@@ -502,7 +497,7 @@ factors:
     window: 1
     lag: 0
     category: regime
-    enabled: true
+    enabled: false   # Polygon Starter tier returns 403 — no options entitlement
 
   - name: opt_put_call_ratio
     source: price
@@ -511,7 +506,7 @@ factors:
     window: 1
     lag: 0
     category: regime
-    enabled: true
+    enabled: false   # Polygon Starter tier returns 403 — no options entitlement
 
   - name: opt_open_interest
     source: price
@@ -538,7 +533,7 @@ factors:
     window: 1
     lag: 0
     category: regime
-    enabled: true
+    enabled: false   # Polygon Starter tier returns 403 — no options entitlement
 
   - name: opt_iv_skew
     source: price
@@ -547,7 +542,7 @@ factors:
     window: 1
     lag: 0
     category: regime
-    enabled: true
+    enabled: false   # Polygon Starter tier returns 403 — no options entitlement
 
   # Earnings / expectations
   - name: earn_eps_surprise
@@ -576,7 +571,7 @@ factors:
     window: 1
     lag: 0
     category: macro
-    enabled: true
+    enabled: false   # Polygon Starter tier returns 403 — no short interest entitlement
 
   - name: short_days_to_cover
     source: price
@@ -594,7 +589,7 @@ factors:
     window: 1
     lag: 0
     category: macro
-    enabled: true
+    enabled: false   # Polygon Starter tier returns 403 — no short interest entitlement
 
   # Market internals / breadth (market-level)
   - name: breadth_nh_nl
@@ -605,3 +600,94 @@ factors:
     lag: 0
     category: macro
     enabled: false
+
+  # ---------------------------------------------------------------------------
+  # Sentiment / positioning replacements
+  # (replace unavailable options/short-interest data with observable proxies)
+  # ---------------------------------------------------------------------------
+
+  # VIX term structure: spot VIX minus 3-month VIX — fear vs calm
+  # Positive = inverted term structure = fear; Negative = normal = calm
+  # Requires ^VIX3M in price_bars (fetch via scripts/fetch_vix3m.py)
+  - name: vix_term
+    source: price_relative
+    symbol: ^VIX
+    benchmark: ^VIX3M
+    transform: level_diff
+    window: 1
+    lag: 0
+    category: regime
+    enabled: true
+
+  # Volume z-score — normalized participation vs 20-day baseline
+  # High positive = unusual volume spike (institutional interest or news)
+  - name: volume_zscore_20
+    source: price
+    symbol: "{ticker}"
+    transform: volume_zscore
+    window: 20
+    lag: 0
+    category: volume
+    enabled: true
+
+  # Dollar-volume z-score — price × volume normalized, captures heavy institutional flow
+  - name: dollar_volume_z20
+    source: price
+    symbol: "{ticker}"
+    transform: dollar_volume_zscore
+    window: 20
+    lag: 0
+    category: volume
+    enabled: true
+
+  # Gap open — overnight price gap as fraction of prior close
+  # Captures pre-market news, earnings, macro surprises
+  - name: gap_size
+    source: price
+    symbol: "{ticker}"
+    transform: gap_open
+    window: 1
+    lag: 0
+    category: momentum
+    enabled: true
+
+  # Gap follow-through — did price continue in the gap direction after open?
+  # Positive = gap held (strong directional move); Negative = gap filled (reversal)
+  - name: gap_follow_through
+    source: price
+    symbol: "{ticker}"
+    transform: gap_follow_through
+    window: 1
+    lag: 0
+    category: momentum
+    enabled: true
+
+  # ---------------------------------------------------------------------------
+  # Intraday confirmation layer
+  # Answers: "is the predicted move actually happening today?"
+  # Built from daily OHLCV — no intraday feed required.
+  # ---------------------------------------------------------------------------
+
+  # Opening range break proxy — (close - open) / (high - low)
+  # +1 = strong bull candle (opened at low, closed at high)
+  # -1 = strong bear candle; 0 = doji (no conviction)
+  - name: opening_range_break
+    source: price
+    symbol: "{ticker}"
+    transform: candle_body
+    window: 1
+    lag: 0
+    category: momentum
+    enabled: true
+
+  # Intraday trend strength — rolling mean of candle_body over 5 days
+  # Captures whether the stock has been consistently following through intraday
+  # vs churning (doji pattern = model signal contradicted by intraday action)
+  - name: intraday_trend_strength
+    source: price
+    symbol: "{ticker}"
+    transform: intraday_trend
+    window: 5
+    lag: 0
+    category: momentum
+    enabled: true

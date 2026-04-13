@@ -116,14 +116,22 @@ class FeatureBuilder:
 
         features: dict[str, float] = {}
         present = 0
+        denom = 0  # coverage denominator (derived-series factors don't penalize coverage when missing)
 
         for spec in eligible:
+            sym = spec.resolve_symbol(ticker) if spec.source in ("price", "price_relative") else None
             value = self._compute(spec, ticker, as_of)
             if value is not None and math.isfinite(value):
                 features[spec.name] = value
                 present += 1
+                denom += 1
+            else:
+                # Derived series (OPT/SHORT/EARN/INT) are additive: don't reduce coverage when absent.
+                if sym and any(sym.startswith(pfx) for pfx in ("OPT:", "SHORT:", "EARN:", "INT:")):
+                    continue
+                denom += 1
 
-        coverage = present / len(eligible) if eligible else 0.0
+        coverage = present / denom if denom > 0 else 0.0
         return features, coverage
 
     # ── Dispatch ────────────────────────────────────────────────────────────
@@ -159,7 +167,7 @@ class FeatureBuilder:
     ) -> Optional[float]:
         n_needed = _bars_needed(window, transform)
         df = self._get_bars(symbol, as_of, n_needed, lag)
-        if df is None or len(df) < 2:
+        if df is None or len(df) < n_needed:
             return None
         return _apply_transform(df, transform, window)
 
@@ -188,6 +196,14 @@ class FeatureBuilder:
 
         if transform == "beta":
             return _compute_beta(df_sym, df_ben, window)
+
+        if transform == "level_diff":
+            # Raw level difference: sym.close - bench.close (e.g. VIX - VIX3M)
+            if len(df_sym) < 1 or len(df_ben) < 1:
+                return None
+            c_sym = float(df_sym["close"].values[-1])
+            c_ben = float(df_ben["close"].values[-1])
+            return c_sym - c_ben
 
         return None
 
@@ -303,12 +319,27 @@ class FeatureBuilder:
 
 def _bars_needed(window: int, transform: str) -> int:
     """How many bars to fetch for a given window/transform."""
-    # Most transforms need window+1 bars; some need more
+    # Most transforms need window+1 bars; some need more.
+    # Keep this tight: it drives whether derived-series "level" factors work when only a few points exist.
+    if transform == "level":
+        return 1
+    if transform == "return":
+        return window + 1
+    if transform == "diff":
+        return 2
     if transform in ("rsi", "atr_ratio", "stochastic"):
         return window + 2
     if transform in ("beta", "trend_slope", "dollar_volume_trend"):
         return window + 5
-    return window + 2
+    if transform in ("volume_zscore", "dollar_volume_zscore"):
+        return window + 1
+    if transform in ("gap_open", "gap_follow_through", "level_diff"):
+        return 2
+    if transform == "candle_body":
+        return 1
+    if transform == "intraday_trend":
+        return window
+    return window + 1
 
 
 def _apply_transform(df: pd.DataFrame, transform: str, window: int) -> Optional[float]:
@@ -458,6 +489,77 @@ def _apply_transform(df: pd.DataFrame, transform: str, window: int) -> Optional[
         # Normalize by mean dollar volume so it's scale-free
         mean_dvol = float(np.mean(dvol))
         return slope / mean_dvol if mean_dvol > 0 else None
+
+    # ── Volume z-score (participation signal) ────────────────────────────
+    if transform == "volume_zscore":
+        if n < window or "volume" not in df.columns:
+            return None
+        vols = df["volume"].values[-window:].astype(float)
+        std = float(np.std(vols))
+        if std == 0:
+            return 0.0
+        return float((vols[-1] - float(np.mean(vols))) / std)
+
+    # ── Dollar volume z-score (institutional flow proxy) ─────────────────
+    if transform == "dollar_volume_zscore":
+        if n < window or "volume" not in df.columns:
+            return None
+        dvol = np.log1p(closes[-window:] * df["volume"].values[-window:])
+        std = float(np.std(dvol))
+        if std == 0:
+            return 0.0
+        return float((dvol[-1] - float(np.mean(dvol))) / std)
+
+    # ── Gap open (overnight gap as fraction of prev close) ────────────────
+    if transform == "gap_open":
+        if n < 2 or "open" not in df.columns:
+            return None
+        open_t = float(df["open"].values[-1])
+        close_prev = float(closes[-2])
+        return (open_t - close_prev) / close_prev if close_prev > 0 else None
+
+    # ── Gap follow-through (did price continue in gap direction?) ─────────
+    if transform == "gap_follow_through":
+        if n < 2 or "open" not in df.columns:
+            return None
+        open_t = float(df["open"].values[-1])
+        close_prev = float(closes[-2])
+        close_t = float(closes[-1])
+        gap = open_t - close_prev
+        if gap == 0:
+            return 0.0
+        # Positive = price continued in gap direction; negative = gap filled
+        return (close_t - open_t) / abs(gap)
+
+    # ── Candle body position (opening range break proxy) ──────────────────
+    # (close - open) / (high - low): where close sits within the day's range
+    # +1 = opened at low, closed at high (full bull candle); -1 = full bear; 0 = doji
+    if transform == "candle_body":
+        if n < 1 or "open" not in df.columns or "high" not in df.columns:
+            return None
+        open_t  = float(df["open"].values[-1])
+        high_t  = float(df["high"].values[-1])
+        low_t   = float(df["low"].values[-1])
+        close_t = float(closes[-1])
+        rng = high_t - low_t
+        if rng == 0:
+            return 0.0
+        return (close_t - open_t) / rng
+
+    # ── Intraday trend strength (rolling candle body efficiency) ──────────
+    # Rolling mean of candle_body over window days — captures whether intraday
+    # moves have been consistently directional (trending) vs choppy (mean-reverting)
+    if transform == "intraday_trend":
+        if n < window or "open" not in df.columns or "high" not in df.columns:
+            return None
+        opens = df["open"].values[-window:]
+        highs = df["high"].values[-window:]
+        lows  = df["low"].values[-window:]
+        clss  = closes[-window:]
+        rngs  = highs - lows
+        with np.errstate(invalid="ignore", divide="ignore"):
+            bodies = np.where(rngs > 0, (clss - opens) / rngs, 0.0)
+        return float(np.mean(bodies))
 
     return None
 

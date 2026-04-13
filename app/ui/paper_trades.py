@@ -6,7 +6,12 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+try:
+    # Optional dependency; keep imports working in CI/unit tests.
+    from streamlit_autorefresh import st_autorefresh  # type: ignore
+except Exception:  # pragma: no cover
+    def st_autorefresh(*args, **kwargs):  # type: ignore[no-redef]
+        return None
 
 from app.ui.middle.dashboard_service import DashboardService
 

@@ -4,7 +4,7 @@
   "version": "v1",
   "strategy_type": "baseline_momentum",
   "mode": "backtest",
-  "active": true,
+  "active": false,
   "config": {
     "min_short_trend": 0.004,
     "horizon": "15m"
