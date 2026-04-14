@@ -14,6 +14,9 @@ from app.core.environment_v3 import bucket_env_v3
 from app.discovery.feature_snapshot import build_feature_snapshot
 from app.discovery.strategies import STRATEGIES, score_candidates, to_repo_rows
 from app.discovery.types import FeatureRow
+from app.discovery.industry_filter import get_industry_universe
+from app.discovery.adaptive_industry import get_industry_adaptive_configs
+from app.discovery.adaptive_selection import select_adaptive_config, enable_adaptive_globally
 
 
 def _parse_date(s: str | date) -> str:
@@ -167,8 +170,32 @@ def run_discovery(
         
         # Critical logging for validation
         print(f"ENV_BUCKET_V3: {env_bucket} (sector: {env.sector_regime}, industry_disp: {env.industry_dispersion:.2f})")
+        
+        # Enable adaptive mode for industry-aware selection
+        enable_adaptive_globally()
+        
         for strat in STRATEGIES.keys():
-            cands = score_candidates(features, strategy_type=strat)
+            # Build industry-specific universe for this environment
+            industry_features = get_industry_universe(features, env_bucket)
+            print(f"  {strat}: {len(industry_features)} stocks after industry filtering")
+            
+            # Get industry-aware adaptive config for this environment
+            try:
+                adaptive_config = select_adaptive_config(
+                    strategy_type=strat,
+                    env_bucket=env_bucket,
+                    db_path=db_path,
+                    enable_adaptive=True,
+                )
+                print(f"  {strat}: Selected config: {adaptive_config.get('config_name', 'default')}")
+            except Exception as e:
+                # Fallback to industry-adaptive configs
+                industry_configs = get_industry_adaptive_configs(strat, env.sector_regime)
+                adaptive_config = industry_configs[0] if industry_configs else {}
+                print(f"  {strat}: Fallback config: {adaptive_config.get('config_name', 'default')}")
+            
+            # Score candidates with industry-specific universe and adaptive config
+            cands = score_candidates(industry_features, strategy_type=strat, config=adaptive_config)
             top = cands[: int(top_n)]
             top_lt5 = [c for c in cands if (c.metadata.get("close") is not None and float(c.metadata["close"]) < 5.0)][
                 : int(top_n)
@@ -180,6 +207,9 @@ def run_discovery(
             summary["strategies"][strat] = {
                 "top": [asdict(c) for c in top],
                 "top_lt5": [asdict(c) for c in top_lt5],
+                "industry_filtered_stocks": len(industry_features),
+                "selected_config": adaptive_config.get('config_name', 'default'),
+                "sector_regime": env.sector_regime,
             }
         return summary
     finally:

@@ -301,6 +301,7 @@ def main() -> None:
     parser.add_argument("--end-date", help="End date (YYYY-MM-DD)")
     parser.add_argument("--days", type=int, help="Number of trading days")
     parser.add_argument("--report-only", action="store_true", help="Only generate report")
+    parser.add_argument("--replay", action="store_true", help="Score all expired discovery predictions")
     
     args = parser.parse_args()
     
