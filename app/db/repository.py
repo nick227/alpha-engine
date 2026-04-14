@@ -511,6 +511,21 @@ class AlphaRepository:
         CREATE INDEX IF NOT EXISTS idx_discovery_stats_recent
           ON discovery_stats(tenant_id, computed_at DESC, group_type);
 
+        CREATE TABLE IF NOT EXISTS sniper_near_misses (
+            symbol          TEXT NOT NULL,
+            as_of_date      TEXT NOT NULL,
+            score           REAL,
+            price_extreme   REAL,
+            vol_extreme     REAL,
+            spike_extreme   REAL,
+            trend_extreme   REAL,
+            fear_regime     INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (symbol, as_of_date)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sniper_near_misses_date
+          ON sniper_near_misses(as_of_date);
+
         CREATE TABLE IF NOT EXISTS discovery_jobs (
             tenant_id TEXT NOT NULL DEFAULT 'default',
             id TEXT PRIMARY KEY,

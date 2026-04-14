@@ -120,10 +120,39 @@ def run_comparison(
 
     # ------------------------------------------------------------------ #
     # 3. Recent 30-day slice — are signals degrading?
+    #    Primary source: prediction_outcomes (live paper trades)
+    #    Fallback:       discovery_candidate_outcomes (backfill)
     # ------------------------------------------------------------------ #
     print_section("Recent 30 Days — signal freshness check")
 
-    recent_rows = conn.execute("""
+    # Live paper trade outcomes (prediction_outcomes)
+    live_rows = conn.execute("""
+        SELECT
+            CASE
+                WHEN p.strategy_id LIKE 'silent_compounder%'      THEN 'silent_compounder'
+                WHEN p.strategy_id LIKE 'balance_sheet_survivor%'  THEN 'balance_sheet_survivor'
+                ELSE p.strategy_id
+            END                                                    AS strategy_type,
+            CAST(REPLACE(p.horizon, 'd', '') AS INTEGER)           AS horizon_days,
+            COUNT(*)                                               AS n,
+            SUM(CASE WHEN po.return_pct > 0 THEN 1 ELSE 0 END)    AS wins,
+            AVG(po.return_pct)                                     AS avg_ret
+        FROM predictions p
+        JOIN prediction_outcomes po
+            ON  po.prediction_id = p.id
+            AND po.tenant_id     = p.tenant_id
+        WHERE p.tenant_id  = 'default'
+          AND p.mode        = 'discovery'
+          AND po.return_pct IS NOT NULL
+          AND DATE(p.timestamp) >= date('now', '-30 days')
+          AND (p.strategy_id LIKE 'silent_compounder%'
+               OR p.strategy_id LIKE 'balance_sheet_survivor%')
+        GROUP BY strategy_type, horizon_days
+        ORDER BY strategy_type, horizon_days
+    """).fetchall()
+
+    # Backfill fallback (covers dates before live predictions existed)
+    backfill_rows = conn.execute("""
         SELECT
             c.strategy_type,
             o.horizon_days,
@@ -142,16 +171,24 @@ def run_comparison(
         ORDER BY c.strategy_type, o.horizon_days
     """).fetchall()
 
-    hdr3 = f"{'Strategy':<28} {'Horizon':>7} {'N':>6} {'Win%':>6}  {'AvgRet':>7}"
+    recent_rows = live_rows or backfill_rows
+
+    hdr3 = f"{'Strategy':<28} {'Src':>6} {'Horizon':>7} {'N':>6} {'Win%':>6}  {'AvgRet':>7}"
     print(hdr3)
-    print("  " + "-" * 52)
-    if recent_rows:
-        for r in recent_rows:
+    print("  " + "-" * 58)
+    if live_rows:
+        for r in live_rows:
             print(
-                f"  {r['strategy_type']:<26} {r['horizon_days']:>6}d "
+                f"  {r['strategy_type']:<26}  live  {r['horizon_days']:>6}d "
                 f"{r['n']:>6}  {_pct(r['wins'], r['n'])}  {r['avg_ret']*100:>6.2f}%"
             )
-    else:
+    if backfill_rows:
+        for r in backfill_rows:
+            print(
+                f"  {r['strategy_type']:<26}  bkfl  {r['horizon_days']:>6}d "
+                f"{r['n']:>6}  {_pct(r['wins'], r['n'])}  {r['avg_ret']*100:>6.2f}%"
+            )
+    if not recent_rows:
         print("  (no outcomes scored in last 30 days)")
 
     # ------------------------------------------------------------------ #

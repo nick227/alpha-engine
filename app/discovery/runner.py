@@ -19,6 +19,74 @@ from app.discovery.adaptive_industry import get_industry_adaptive_configs
 from app.discovery.adaptive_selection import select_adaptive_config, enable_adaptive_globally
 
 
+def _insert_sniper_near_misses(
+    db_path: str | Path,
+    as_of_date: str,
+    near_misses: list[dict[str, Any]],
+) -> None:
+    """Persist sniper gate-pass near-misses (score below threshold) for adaptive mining."""
+    if not near_misses:
+        return
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sniper_near_misses (
+                symbol        TEXT NOT NULL,
+                as_of_date    TEXT NOT NULL,
+                score         REAL,
+                price_extreme REAL,
+                vol_extreme   REAL,
+                spike_extreme REAL,
+                trend_extreme REAL,
+                fear_regime   INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (symbol, as_of_date)
+            )
+        """)
+        rows = [
+            (
+                nm["symbol"],
+                as_of_date,
+                nm.get("score"),
+                nm.get("price"),
+                nm.get("vol"),
+                nm.get("spike"),
+                nm.get("trend"),
+                nm.get("fear_regime", 0),
+            )
+            for nm in near_misses
+        ]
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO sniper_near_misses
+              (symbol, as_of_date, score, price_extreme, vol_extreme, spike_extreme, trend_extreme, fear_regime)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _get_fear_regime(db_path: str | Path, as_of_date: str) -> bool:
+    """Return True if VIX > VIX3M on or before as_of_date (inverted term structure = fear)."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        vix = conn.execute(
+            "SELECT close FROM price_bars WHERE ticker = ? AND timestamp <= ? ORDER BY timestamp DESC LIMIT 1",
+            ("^VIX", as_of_date),
+        ).fetchone()
+        vix3m = conn.execute(
+            "SELECT close FROM price_bars WHERE ticker = ? AND timestamp <= ? ORDER BY timestamp DESC LIMIT 1",
+            ("^VIX3M", as_of_date),
+        ).fetchone()
+        if vix and vix3m:
+            return float(vix[0]) > float(vix3m[0])
+        return False
+    finally:
+        conn.close()
+
+
 def _parse_date(s: str | date) -> str:
     if isinstance(s, date):
         return s.isoformat()
@@ -147,7 +215,11 @@ def run_discovery(
         # Phase 1: Environment snapshot and bucketing (upgraded to v3 with industry)
         env = build_env_snapshot_v3(db_path=db_path, as_of=as_of_date, vix_value=None)
         env_bucket = bucket_env_v3(env)
-        
+
+        # Regime context: fear_regime gates the sniper_coil strategy
+        fear_regime = _get_fear_regime(db_path, as_of_date)
+        regime_ctx: dict[str, Any] = {"fear_regime": fear_regime}
+
         # Add environment details to summary for logging
         summary: dict[str, Any] = {
             "as_of_date": as_of_date,
@@ -164,53 +236,83 @@ def run_discovery(
                 "industry_dispersion": env.industry_dispersion,
                 "size_regime": env.size_regime,
                 "env_bucket": env_bucket,
+                "fear_regime": fear_regime,
             },
             "strategies": {},
         }
-        
+
         # Critical logging for validation
         print(f"ENV_BUCKET_V3: {env_bucket} (sector: {env.sector_regime}, industry_disp: {env.industry_dispersion:.2f})")
-        
+        print(f"FEAR_REGIME: {fear_regime}")
+
         # Enable adaptive mode for industry-aware selection
         enable_adaptive_globally()
-        
+
         for strat in STRATEGIES.keys():
-            # Build industry-specific universe for this environment
-            industry_features = get_industry_universe(features, env_bucket)
-            print(f"  {strat}: {len(industry_features)} stocks after industry filtering")
-            
-            # Get industry-aware adaptive config for this environment
-            try:
-                adaptive_config = select_adaptive_config(
+            is_sniper = strat == "sniper_coil"
+
+            if is_sniper:
+                # Sniper runs on full universe (not industry-filtered) with regime context.
+                # No adaptive config — gates and thresholds are fixed by design.
+                # Absolute scoring (no cross-sectional rank normalization).
+                # Near-misses (all gates passed, score < threshold) are logged separately.
+                near_misses: list[dict[str, Any]] = []
+                cands = score_candidates(
+                    features,
                     strategy_type=strat,
-                    env_bucket=env_bucket,
-                    db_path=db_path,
-                    enable_adaptive=True,
+                    regime_context=regime_ctx,
+                    use_rank_normalization=False,
+                    near_miss_collector=near_misses,
                 )
-                print(f"  {strat}: Selected config: {adaptive_config.get('config_name', 'default')}")
-            except Exception as e:
-                # Fallback to industry-adaptive configs
-                industry_configs = get_industry_adaptive_configs(strat, env.sector_regime)
-                adaptive_config = industry_configs[0] if industry_configs else {}
-                print(f"  {strat}: Fallback config: {adaptive_config.get('config_name', 'default')}")
-            
-            # Score candidates with industry-specific universe and adaptive config
-            cands = score_candidates(industry_features, strategy_type=strat, config=adaptive_config)
-            top = cands[: int(top_n)]
+                strat_top_n = 3
+                if near_misses:
+                    _insert_sniper_near_misses(db_path, as_of_date, near_misses)
+                print(f"  {strat}: {len(cands)} candidates, {len(near_misses)} near-misses (fear_regime={fear_regime})")
+            else:
+                # Build industry-specific universe for this environment
+                industry_features = get_industry_universe(features, env_bucket)
+                print(f"  {strat}: {len(industry_features)} stocks after industry filtering")
+
+                # Get industry-aware adaptive config for this environment
+                try:
+                    adaptive_config = select_adaptive_config(
+                        strategy_type=strat,
+                        env_bucket=env_bucket,
+                        db_path=db_path,
+                        enable_adaptive=True,
+                    )
+                    print(f"  {strat}: Selected config: {adaptive_config.get('config_name', 'default')}")
+                except Exception as e:
+                    # Fallback to industry-adaptive configs
+                    industry_configs = get_industry_adaptive_configs(strat, env.sector_regime)
+                    adaptive_config = industry_configs[0] if industry_configs else {}
+                    print(f"  {strat}: Fallback config: {adaptive_config.get('config_name', 'default')}")
+
+                cands = score_candidates(industry_features, strategy_type=strat, config=adaptive_config)
+                strat_top_n = int(top_n)
+
+            top = cands[:strat_top_n]
             top_lt5 = [c for c in cands if (c.metadata.get("close") is not None and float(c.metadata["close"]) < 5.0)][
-                : int(top_n)
+                :strat_top_n
             ]
 
             repo_rows = to_repo_rows(top)
             repo.upsert_discovery_candidates(as_of_date=as_of_date, candidates=repo_rows, tenant_id=tenant_id)
 
-            summary["strategies"][strat] = {
+            strat_summary: dict[str, Any] = {
                 "top": [asdict(c) for c in top],
                 "top_lt5": [asdict(c) for c in top_lt5],
-                "industry_filtered_stocks": len(industry_features),
-                "selected_config": adaptive_config.get('config_name', 'default'),
-                "sector_regime": env.sector_regime,
             }
+            if is_sniper:
+                strat_summary["fear_regime"] = fear_regime
+                strat_summary["near_misses"] = len(near_misses)
+            else:
+                strat_summary["industry_filtered_stocks"] = len(industry_features)
+                strat_summary["selected_config"] = adaptive_config.get("config_name", "default")
+                strat_summary["sector_regime"] = env.sector_regime
+
+            summary["strategies"][strat] = strat_summary
+
         return summary
     finally:
         repo.close()

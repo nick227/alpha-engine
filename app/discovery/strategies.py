@@ -49,6 +49,13 @@ DEFAULT_STRATEGY_CONFIGS: dict[str, dict[str, Any]] = {
         "low_liquidity_weight": 0.3,
         "power": 1.8,
     },
+    "sniper_coil": {
+        "price_gate": 0.20,
+        "vol_gate": 0.018,
+        "volume_zscore_gate": 2.0,
+        "trend_gate": -0.05,
+        "score_threshold": 0.60,
+    },
 }
 
 
@@ -56,7 +63,7 @@ DEFAULT_STRATEGY_CONFIGS: dict[str, dict[str, Any]] = {
 # STRATEGIES (ALIGNED)
 # =========================
 
-def realness_repricer(fr: FeatureRow, config: dict[str, Any] | None = None):
+def realness_repricer(fr: FeatureRow, config: dict[str, Any] | None = None, context: dict | None = None):
     if config is None:
         config = DEFAULT_STRATEGY_CONFIGS["realness_repricer"]
     
@@ -86,7 +93,7 @@ def realness_repricer(fr: FeatureRow, config: dict[str, Any] | None = None):
     return raw, "depressed price + negative trend (repricer setup)", meta
 
 
-def silent_compounder(fr: FeatureRow, config: dict[str, Any] | None = None) -> tuple[float | None, str, dict[str, Any]]:
+def silent_compounder(fr: FeatureRow, config: dict[str, Any] | None = None, context: dict | None = None) -> tuple[float | None, str, dict[str, Any]]:
     """
     Silent Compounder: Optimal volatility band + steady price appreciation.
     IC: ~0.02-0.03 (weak but positive)
@@ -125,7 +132,7 @@ def silent_compounder(fr: FeatureRow, config: dict[str, Any] | None = None) -> t
     return raw, reason, {"volatility": fr.volatility_20d, "return_63d": fr.return_63d, "config": config}
 
 
-def narrative_lag(fr: FeatureRow, config: dict[str, Any] | None = None):
+def narrative_lag(fr: FeatureRow, config: dict[str, Any] | None = None, context: dict | None = None):
     if fr.return_63d is None:
         return None, "missing data", {}
 
@@ -153,7 +160,7 @@ def narrative_lag(fr: FeatureRow, config: dict[str, Any] | None = None):
     return raw, "lagging performance + undervaluation (possible catch-up)", meta
 
 
-def balance_sheet_survivor(fr: FeatureRow, config: dict[str, Any] | None = None):
+def balance_sheet_survivor(fr: FeatureRow, config: dict[str, Any] | None = None, context: dict | None = None):
     if fr.return_63d is None or fr.volatility_20d is None:
         return None, "missing data", {}
 
@@ -172,7 +179,7 @@ def balance_sheet_survivor(fr: FeatureRow, config: dict[str, Any] | None = None)
     return raw, "drawdown + stabilization", meta
 
 
-def ownership_vacuum(fr: FeatureRow, config: dict[str, Any] | None = None):
+def ownership_vacuum(fr: FeatureRow, config: dict[str, Any] | None = None, context: dict | None = None):
     if fr.volume_zscore_20d is None or fr.dollar_volume is None:
         return None, "missing data", {}
 
@@ -191,6 +198,83 @@ def ownership_vacuum(fr: FeatureRow, config: dict[str, Any] | None = None):
     return raw, "volume spike in lower liquidity name", meta
 
 
+def sniper_coil(
+    fr: FeatureRow,
+    config: dict[str, Any] | None = None,
+    context: dict | None = None,
+) -> tuple[float | None, str, dict[str, Any]]:
+    """
+    Sniper Coil: AND-gated, regime-locked, multiplicative scoring.
+
+    All five gates must pass before scoring begins. Any single failure returns None.
+    Scoring uses geometric mean of normalized extremes so one weak dimension drags
+    the entire score down — unlike additive strategies where weak signals compensate.
+
+    Expected output: 0–3 candidates per fear-regime day, zero on all other days.
+    Score threshold starts at 0.60; recalibrate after 30-day backtest.
+    """
+    if context is None:
+        context = {}
+    if config is None:
+        config = DEFAULT_STRATEGY_CONFIGS["sniper_coil"]
+
+    price_gate = config.get("price_gate", 0.20)
+    vol_gate = config.get("vol_gate", 0.018)
+    zscore_gate = config.get("volume_zscore_gate", 2.0)
+    trend_gate = config.get("trend_gate", -0.05)
+    score_threshold = config.get("score_threshold", 0.60)
+
+    # HARD GATE 1: fear regime required (VIX > VIX3M — inverted term structure)
+    if not context.get("fear_regime", False):
+        return None, "not fear regime", {}
+
+    # HARD GATE 2: price in bottom quintile of 252d range (compressed spring)
+    if fr.price_percentile_252d is None or fr.price_percentile_252d > price_gate:
+        return None, "not compressed", {}
+
+    # HARD GATE 3: vol compressed (accumulation phase — distribution tightening)
+    if fr.volatility_20d is None or fr.volatility_20d > vol_gate:
+        return None, "not tight", {}
+
+    # HARD GATE 4: anomalous volume (someone is accumulating)
+    if fr.volume_zscore_20d is None or fr.volume_zscore_20d < zscore_gate:
+        return None, "no volume signal", {}
+
+    # HARD GATE 5: in a downtrend (compression is directional, not random flatness)
+    if fr.return_63d is None or fr.return_63d > trend_gate:
+        return None, "not in downtrend", {}
+
+    # MULTIPLICATIVE EXTREMES
+    # Each dimension normalized to [0,1] relative to its gate threshold:
+    # 0 = barely past the gate, 1 = maximally extreme
+    price_extreme = clamp01((price_gate - fr.price_percentile_252d) / price_gate)
+    vol_extreme   = clamp01((vol_gate - fr.volatility_20d) / vol_gate)
+    vol_spike     = clamp01((fr.volume_zscore_20d - zscore_gate) / 3.0)   # max at zscore=5
+    trend_extreme = clamp01((abs(fr.return_63d) - abs(trend_gate)) / 0.15)  # max at -20%
+
+    # Geometric mean: one weak dimension pulls the whole score down
+    score = (price_extreme * vol_extreme * vol_spike * trend_extreme) ** 0.25
+
+    # Threshold is enforced by score_candidates() via THRESHOLDS["sniper_coil"].
+    # Sub-threshold candidates reaching here are near-misses (all 5 gates passed).
+    # score_candidates() routes them to near_miss_collector when one is provided.
+
+    meta: dict[str, Any] = {
+        "fear_regime": True,
+        "price_percentile_252d": fr.price_percentile_252d,
+        "volatility_20d": fr.volatility_20d,
+        "volume_zscore_20d": fr.volume_zscore_20d,
+        "return_63d": fr.return_63d,
+        "extremes": {
+            "price": round(price_extreme, 3),
+            "vol": round(vol_extreme, 3),
+            "spike": round(vol_spike, 3),
+            "trend": round(trend_extreme, 3),
+        },
+    }
+    return score, "sniper_coil: compressed price + vol + volume spike + fear regime", meta
+
+
 # =========================
 # REGISTRY
 # =========================
@@ -203,6 +287,8 @@ STRATEGIES: dict[str, Callable[[FeatureRow], tuple[float | None, str, dict[str, 
     "silent_compounder": silent_compounder,
     "ownership_vacuum": ownership_vacuum,
     "balance_sheet_survivor": balance_sheet_survivor,
+    # AND-gated regime sniper — only fires in fear regime (VIX > VIX3M), 0–3 signals/day
+    "sniper_coil": sniper_coil,
 }
 
 
@@ -216,6 +302,8 @@ THRESHOLDS: dict[str, float] = {
     "silent_compounder": 0.50,
     "narrative_lag": 0.70,
     "balance_sheet_survivor": 0.60,
+    # sniper_coil threshold is enforced inside the function (absolute, not cross-sectional)
+    "sniper_coil": 0.60,
 }
 
 # Universe filters applied before scoring (removes penny stocks and illiquid names).
@@ -231,6 +319,9 @@ def score_candidates(
     *,
     strategy_type: str,
     config: dict[str, Any] | None = None,
+    regime_context: dict[str, Any] | None = None,
+    use_rank_normalization: bool = True,
+    near_miss_collector: list | None = None,
 ) -> list[DiscoveryCandidate]:
     fn = STRATEGIES[strategy_type]
 
@@ -260,8 +351,19 @@ def score_candidates(
         if fr.return_63d is not None and abs(fr.return_63d) < ret_p40:
             continue
 
-        raw, reason, meta = fn(fr, config=config)
-        if raw is None or raw < threshold:
+        raw, reason, meta = fn(fr, config=config, context=regime_context or {})
+        if raw is None:
+            continue
+        if raw < threshold:
+            # Near-miss: all strategy gates passed but below scoring threshold.
+            # Collect these for adaptive mining (sniper_coil only, where meta has extremes).
+            if near_miss_collector is not None and meta.get("extremes"):
+                near_miss_collector.append({
+                    "symbol": sym,
+                    "score": float(raw),
+                    **meta["extremes"],
+                    "fear_regime": int((regime_context or {}).get("fear_regime", False)),
+                })
             continue
         if raw < MIN_CONFIDENCE:
             continue
@@ -279,21 +381,26 @@ def score_candidates(
         ranks[idx] = (r / (n - 1)) if n > 1 else 1.0
 
     out: list[DiscoveryCandidate] = []
-    for (sym, raw, reason, meta), score in zip(scored, ranks):
+    for (sym, raw, reason, meta), rank in zip(scored, ranks):
         fr = features[sym]
+        final_score = rank if use_rank_normalization else raw
 
-        md = {
+        md: dict[str, Any] = {
             "raw_score": raw,
             "drivers": meta.get("drivers", []),
             "close": fr.close,
             "dollar_volume": fr.dollar_volume,
         }
+        # Merge any extra metadata from the strategy (e.g. sniper_coil extremes)
+        for k, v in meta.items():
+            if k != "drivers":
+                md[k] = v
 
         out.append(
             DiscoveryCandidate(
                 symbol=sym,
                 strategy_type=strategy_type,
-                score=float(score),
+                score=float(final_score),
                 reason=str(reason),
                 metadata=md,
             )

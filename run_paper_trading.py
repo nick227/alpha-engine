@@ -52,6 +52,7 @@ def create_predictions_from_queue(
         strategy = metadata.get('strategy', 'unknown')
         direction = metadata.get('direction', 'UP')
         avg_score = metadata.get('avg_score', 0.5)
+        horizon_days = int(metadata.get('horizon_days') or horizon_days)
         
         # Create prediction
         pred_id = str(uuid.uuid4())
@@ -59,15 +60,21 @@ def create_predictions_from_queue(
             hour=9, minute=30, tzinfo=timezone.utc
         )
         
-        # Get entry price
+        # Get entry price: price_bars first, feature_snapshot fallback
         price_row = repo.conn.execute("""
             SELECT close FROM price_bars
             WHERE tenant_id = 'default' AND ticker = ? AND timeframe = '1d' AND DATE(timestamp) <= ?
             ORDER BY timestamp DESC LIMIT 1
         """, (symbol, as_of_date.isoformat())).fetchone()
-        
+
         if not price_row:
-            print(f"No price data for {symbol}")
+            price_row = repo.conn.execute("""
+                SELECT close FROM feature_snapshot
+                WHERE symbol = ? AND as_of_date <= ?
+                ORDER BY as_of_date DESC LIMIT 1
+            """, (symbol, as_of_date.isoformat())).fetchone()
+
+        if not price_row:
             continue
             
         entry_price = float(price_row['close'])
@@ -309,6 +316,12 @@ def main() -> None:
     repo.conn.execute("PRAGMA journal_mode=WAL;")
     repo.conn.execute("PRAGMA busy_timeout=5000;")
     
+    if args.replay:
+        scored = run_replay_for_expired(repo, date.today())
+        print(f"Replay complete: {scored} predictions scored")
+        repo.close()
+        return
+
     # Determine date range
     if args.report_only:
         # Report mode
