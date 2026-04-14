@@ -24,23 +24,24 @@ from app.discovery.runner import run_discovery
 PROMOTED_STRATEGIES: dict[str, dict[str, Any]] = {
     "silent_compounder": {
         # Equity vol band (~2% daily) + positive 63d drift → bullish continuation
-        # CORRECTED (2026-04-14): 58.2% at 5d, 64.3% at 20d on $20+ equity universe
-        # (Prior 73-83% numbers were bond ETF artifact — resolved by ideal_vol=0.02 filter)
+        # Confirmed (2026-04-14): 58.2% at 5d, 64.3% at 20d, avg +1.08% on $20+ equity universe
+        # Stop-loss at -15%: CORT lost -58% without it; capped losses improve Sharpe materially
         "direction": "UP",
         "horizon_days": 20,      # 20d is the confirmed best horizon (64.3% win, n=6035)
         "max_candidates": 15,
         "min_close": 20.0,       # $20+ is the quality sweet spot (58% vs 49% for $10-$20)
+        "max_loss_pct": 0.15,    # exit if position down 15% — wired into compute_candidate_outcomes
         "priority_base": 20,
     },
     "balance_sheet_survivor": {
         # Distress (negative 63d) + volatility stabilization → mean-reversion bounce
-        # Sweet spot is $10-$20 (64.6% win at 5d). $20+ floor inverts to 46% — do not use.
-        # min_close=$10, max_close=$20 targets the distressed-but-established range.
+        # Sweet spot is $10-$20 (56.9% at 5d, avg +2.16%). $20+ inverts to 46% — do not use.
         "direction": "UP",
         "horizon_days": 5,
         "max_candidates": 10,
         "min_close": 10.0,
-        "max_close": 20.0,   # cap at $20 — above that the thesis breaks down
+        "max_close": 20.0,       # cap at $20 — above that the thesis breaks down
+        "max_loss_pct": 0.15,
         "priority_base": 15,
     },
 }
