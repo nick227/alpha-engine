@@ -9,6 +9,8 @@ from typing import Any
 
 from app.db.repository import AlphaRepository
 from app.core.target_stocks import get_target_stocks, get_target_stocks_registry
+from app.core.environment import build_env_snapshot_v3
+from app.core.environment_v3 import bucket_env_v3
 from app.discovery.feature_snapshot import build_feature_snapshot
 from app.discovery.strategies import STRATEGIES, score_candidates, to_repo_rows
 from app.discovery.types import FeatureRow
@@ -139,14 +141,32 @@ def run_discovery(
                 if fr.avg_dollar_volume_20d is not None and fr.avg_dollar_volume_20d >= float(min_avg_dollar_volume_20d)
             }
 
+        # Phase 1: Environment snapshot and bucketing (upgraded to v3 with industry)
+        env = build_env_snapshot_v3(db_path=db_path, as_of=as_of_date, vix_value=None)
+        env_bucket = bucket_env_v3(env)
+        
+        # Add environment details to summary for logging
         summary: dict[str, Any] = {
             "as_of_date": as_of_date,
             "tenant_id": tenant_id,
             "universe_version": universe_version,
             "universe_size": len(universe_symbols) if universe_symbols is not None else None,
             "feature_rows": len(features),
+            "environment": {
+                "market_vol_pct": env.market_vol_pct,
+                "trend_strength": env.trend_strength,
+                "cross_sectional_disp": env.cross_sectional_disp,
+                "liquidity_regime": env.liquidity_regime,
+                "sector_regime": env.sector_regime,
+                "industry_dispersion": env.industry_dispersion,
+                "size_regime": env.size_regime,
+                "env_bucket": env_bucket,
+            },
             "strategies": {},
         }
+        
+        # Critical logging for validation
+        print(f"ENV_BUCKET_V3: {env_bucket} (sector: {env.sector_regime}, industry_disp: {env.industry_dispersion:.2f})")
         for strat in STRATEGIES.keys():
             cands = score_candidates(features, strategy_type=strat)
             top = cands[: int(top_n)]

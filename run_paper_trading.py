@@ -61,8 +61,8 @@ def create_predictions_from_queue(
         
         # Get entry price
         price_row = repo.conn.execute("""
-            SELECT close FROM price_bars 
-            WHERE tenant_id = 'ml_train' AND ticker = ? AND DATE(timestamp) <= ?
+            SELECT close FROM price_bars
+            WHERE tenant_id = 'default' AND ticker = ? AND timeframe = '1d' AND DATE(timestamp) <= ?
             ORDER BY timestamp DESC LIMIT 1
         """, (symbol, as_of_date.isoformat())).fetchone()
         
@@ -109,35 +109,107 @@ def create_predictions_from_queue(
     return created
 
 
-def run_replay_for_date(
+def run_replay_for_expired(
     repo: AlphaRepository,
     as_of_date: date,
-    horizon_days: int = 5
 ) -> int:
-    """Run replay for predictions expiring on given date."""
-    
-    expiry_date = as_of_date + timedelta(days=horizon_days)
-    expiry_time = datetime.combine(expiry_date, datetime.min.time()).replace(
-        hour=16, minute=0, tzinfo=timezone.utc
+    """
+    Score all discovery predictions whose horizon has expired by as_of_date.
+
+    Handles mixed horizons (5d for balance_sheet_survivor, 20d for silent_compounder).
+    Writes directly to prediction_outcomes — bypasses SQLitePredictionRepository's
+    strategies JOIN which would miss synthetic strategy IDs like 'silent_compounder_v1_paper'.
+    """
+    cutoff_dt = datetime.combine(as_of_date, datetime.min.time()).replace(
+        hour=23, minute=59, tzinfo=timezone.utc
     )
-    
-    # Count expired predictions
-    count_row = repo.conn.execute("""
-        SELECT COUNT(*) as count FROM predictions 
-        WHERE mode = 'discovery' 
-        AND timestamp <= ? 
-        AND datetime(timestamp, '+' || ? || ' days') <= ?
-        AND scored_event_id NOT IN (SELECT DISTINCT prediction_id FROM prediction_outcomes)
-    """, (as_of_date.isoformat(), horizon_days, expiry_time.isoformat())).fetchone()
-    
-    if count_row and count_row['count'] > 0:
-        print(f"Running replay for {count_row['count']} expired predictions...")
-        
-        # This would normally call the replay worker
-        # For now, just return the count
-        return count_row['count']
-    
-    return 0
+
+    # All unscored discovery predictions regardless of creation date
+    rows = repo.conn.execute("""
+        SELECT p.id, p.ticker, p.prediction, p.entry_price, p.horizon, p.timestamp
+        FROM predictions p
+        LEFT JOIN prediction_outcomes po
+            ON po.prediction_id = p.id AND po.tenant_id = p.tenant_id
+        WHERE p.tenant_id = 'default'
+          AND p.mode = 'discovery'
+          AND po.id IS NULL
+    """).fetchall()
+
+    if not rows:
+        return 0
+
+    scored = 0
+    for row in rows:
+        # Parse horizon string e.g. "5d", "20d"
+        horizon_str = str(row["horizon"]).strip().lower()
+        try:
+            horizon_days = int(horizon_str.rstrip("d"))
+        except (ValueError, AttributeError):
+            horizon_days = 5
+
+        # Parse creation timestamp
+        try:
+            created_at = datetime.fromisoformat(str(row["timestamp"]))
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+
+        expiry_dt = created_at + timedelta(days=horizon_days)
+        if expiry_dt > cutoff_dt:
+            continue  # Not yet expired
+
+        expiry_date = expiry_dt.date()
+
+        # Fetch exit price: first daily close on or after expiry date
+        exit_row = repo.conn.execute("""
+            SELECT close FROM price_bars
+            WHERE tenant_id = 'default' AND ticker = ? AND timeframe = '1d'
+              AND DATE(timestamp) >= ?
+            ORDER BY timestamp ASC LIMIT 1
+        """, (str(row["ticker"]), expiry_date.isoformat())).fetchone()
+
+        if not exit_row:
+            # Fallback: feature_snapshot (covers full 4,652-symbol universe)
+            exit_row = repo.conn.execute("""
+                SELECT close FROM feature_snapshot
+                WHERE symbol = ? AND as_of_date >= ?
+                ORDER BY as_of_date ASC LIMIT 1
+            """, (str(row["ticker"]), expiry_date.isoformat())).fetchone()
+
+        if not exit_row:
+            continue
+
+        exit_price = float(exit_row["close"])
+        entry_price = float(row["entry_price"])
+        if entry_price <= 0:
+            continue
+
+        return_pct = (exit_price / entry_price) - 1.0
+        direction = str(row["prediction"])  # 'BUY' or 'SELL'
+        direction_correct = (return_pct > 0 and direction == "BUY") or \
+                            (return_pct < 0 and direction == "SELL")
+
+        outcome_id = str(uuid.uuid4())
+        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+        repo.conn.execute("""
+            INSERT OR REPLACE INTO prediction_outcomes
+              (id, tenant_id, prediction_id, exit_price, return_pct, direction_correct,
+               max_runup, max_drawdown, evaluated_at, exit_reason, residual_alpha)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            outcome_id, "default", str(row["id"]),
+            exit_price, return_pct, 1 if direction_correct else 0,
+            max(return_pct, 0.0), min(return_pct, 0.0),
+            now_iso, "horizon", return_pct,
+        ))
+        scored += 1
+
+    if scored > 0:
+        repo.conn.commit()
+        print(f"  Scored {scored} expired discovery predictions")
+    return scored
 
 
 def generate_paper_report(
@@ -297,12 +369,8 @@ def main() -> None:
             created = create_predictions_from_queue(repo, current)
             total_created += created
             
-            # Check for expirations (5 days prior)
-            expiry_date = current - timedelta(days=5)
-            if expiry_date >= start:
-                expired = run_replay_for_date(repo, expiry_date)
-                if expired > 0:
-                    print(f"  {expired} predictions expired")
+            # Score any discovery predictions whose horizon expired by today
+            run_replay_for_expired(repo, current)
         
         current += timedelta(days=1)
     

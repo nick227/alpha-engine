@@ -18,7 +18,8 @@
       "Bash(kill 2282)",
       "Bash(PYTHONPATH=. python scripts/nightly_discovery_pipeline.py --date 2026-04-13 --dry-run)",
       "Bash(PYTHONPATH=. python scripts/compare_discovery_vs_baseline.py)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(PYTHONPATH=. python dev_scripts/scripts/download_prices_daily.py --symbols AAPL,MSFT,ETR,TFX,GRMN,CASY,FANG,JPM,CVX,HCA --days 5)"
     ]
   }
 }
