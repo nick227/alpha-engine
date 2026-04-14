@@ -15,7 +15,10 @@
       "Bash(awk '{print $1}')",
       "Bash(xargs kill:*)",
       "Bash(kill 2307 583)",
-      "Bash(kill 2282)"
+      "Bash(kill 2282)",
+      "Bash(PYTHONPATH=. python scripts/nightly_discovery_pipeline.py --date 2026-04-13 --dry-run)",
+      "Bash(PYTHONPATH=. python scripts/compare_discovery_vs_baseline.py)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }
