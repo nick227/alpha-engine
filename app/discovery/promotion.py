@@ -30,14 +30,19 @@ def select_high_conviction(
     db_path: str | Path,
     tenant_id: str,
     as_of_date: str | date,
-    window_days: int = 5,
-    min_overlap: int = 2,
-    min_days_seen: int = 3,
-    min_avg_score: float = 0.85,
-    top_k: int = 20,
+    window_days: int = 10,       # Increased from 5 - longer persistence window
+    min_overlap: int = 3,        # Increased from 2 - require more strategy overlap
+    min_days_seen: int = 5,      # Increased from 3 - require more days seen
+    min_avg_score: float = 0.90, # Increased from 0.85 - higher quality scores only
+    top_k: int = 10,             # Reduced from 20 - fewer, higher quality candidates
 ) -> list[WatchlistRow]:
     """
-    Select Tier-1 candidates: overlap >= 2 AND days_seen >= N over trailing window.
+    Select Tier-1 candidates with TIGHTENED criteria:
+    - overlap >= 3 (was 2) - multiple strategies must agree
+    - days_seen >= 5 (was 3) - persistent signal over time
+    - avg_score >= 0.90 (was 0.85) - high conviction only
+    - window_days = 10 (was 5) - longer persistence check
+    - top_k = 10 (was 20) - fewer but better candidates
 
     avg_score is computed across strategy rows for the as_of_date.
     days_seen counts distinct as_of_date occurrences for the symbol over the trailing window (across all strategies).

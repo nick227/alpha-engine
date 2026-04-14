@@ -1375,15 +1375,23 @@ class AlphaRepository:
         return [dict(r) for r in rows]
 
     def save_prediction(self, prediction_data: Dict[str, Any], tenant_id: str = "default") -> str:
-        """Save prediction using unified schema"""
+        """Save prediction using unified schema with playbook gating"""
         prediction_id = prediction_data.get("id") or str(uuid4())
-        
+
+        # Determine playbook_id based on strategy_id
+        strategy_id = prediction_data.get("strategy_id", "")
+        playbook_id = self._get_playbook_for_strategy(strategy_id)
+
+        # Check if symbol is in structural_candidates
+        ticker = prediction_data.get("ticker", "")
+        structural_filter = self._check_structural_candidate(ticker, tenant_id)
+
         self.conn.execute("""
-            INSERT OR REPLACE INTO predictions 
+            INSERT OR REPLACE INTO predictions
             (id, tenant_id, strategy_id, scored_event_id, ticker, timestamp,
              prediction, confidence, horizon, entry_price, mode, feature_snapshot_json,
-             regime, trend_strength)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             regime, trend_strength, playbook_id, discovery_overlap)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             prediction_id,
             tenant_id,
@@ -1398,11 +1406,48 @@ class AlphaRepository:
             prediction_data["mode"],
             prediction_data["feature_snapshot_json"],
             prediction_data.get("regime"),
-            prediction_data.get("trend_strength")
+            prediction_data.get("trend_strength"),
+            playbook_id,
+            1 if structural_filter else 0  # discovery_overlap = 1 if structural
         ))
-        
+
         self.conn.commit()
         return prediction_id
+
+    def _get_playbook_for_strategy(self, strategy_id: str) -> str:
+        """Map strategy_id to playbook_id"""
+        sid = strategy_id.lower()
+
+        # High-quality playbooks
+        if "realness_repricer" in sid or "balance_sheet" in sid:
+            return "distressed_repricer"
+        if "ownership_vacuum" in sid:
+            return "early_accumulation_breakout"
+        if "silent_compounder" in sid:
+            return "silent_compounder_trend_adoption"
+        if "narrative_lag" in sid:
+            return "narrative_lag_catchup"
+
+        # Strategy family mapping
+        if "ml" in sid or "factor" in sid or "ai_" in sid:
+            return "ml_factor_playbook"
+        if "technical" in sid:
+            return "technical_playbook"
+        if "sentiment" in sid:
+            return "sentiment_playbook"
+        if "baseline" in sid or "momentum" in sid:
+            return "momentum_playbook"
+
+        return "unclassified"
+
+    def _check_structural_candidate(self, symbol: str, tenant_id: str) -> bool:
+        """Check if symbol is a structural candidate"""
+        row = self.conn.execute("""
+            SELECT 1 FROM structural_candidates
+            WHERE symbol = ? AND tenant_id = ?
+            LIMIT 1
+        """, (symbol, tenant_id)).fetchone()
+        return row is not None
 
     def save_outcome(self, outcome_data: Dict[str, Any], tenant_id: str = "default") -> str:
         """Save prediction outcome using unified schema"""
@@ -2086,6 +2131,20 @@ class AlphaRepository:
     def insert_discovery_stats(self, rows_in: List[Dict[str, Any]], tenant_id: str = "default") -> None:
         if not rows_in:
             return
+        # Delete stale rows for the same (tenant, end_date, window_days, horizon_days) combos
+        # before inserting so re-runs are idempotent.
+        keys = set(
+            (str(r["end_date"]), int(r["window_days"]), int(r["horizon_days"]))
+            for r in rows_in
+        )
+        for end_date, window_days, horizon_days in keys:
+            self.conn.execute(
+                """
+                DELETE FROM discovery_stats
+                WHERE tenant_id = ? AND end_date = ? AND window_days = ? AND horizon_days = ?
+                """,
+                (tenant_id, end_date, window_days, horizon_days),
+            )
         rows = []
         for r in rows_in:
             rows.append(

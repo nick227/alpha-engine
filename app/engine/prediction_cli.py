@@ -244,15 +244,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             builder = PredictedSeriesBuilder(repository=repo)
-            cfg = BuildConfig(
-                model="directional_drift",
-                signal_source="consensus",
-                cap_daily_return=0.05,
-                vol_lookback=20,
-                skip_if_exists=True,
-                tenant_id=tenant_id,
-            )
-
+            
             built = 0
             skipped = 0
             failed = 0
@@ -260,6 +252,16 @@ def main(argv: list[str] | None = None) -> int:
             for r in rows:
                 symbol = str(r.get("symbol") or "").strip().upper()
                 source = str(r.get("source") or "discovery")
+                
+                # Use consensus for all, but discovery seeds provide the signal
+                cfg = BuildConfig(
+                    model="directional_drift",
+                    signal_source="consensus",  # Must be "consensus" for PredictedSeriesBuilder
+                    cap_daily_return=0.05,
+                    vol_lookback=20,
+                    skip_if_exists=True,
+                    tenant_id=tenant_id,
+                )
                 try:
                     seeded = _seed_consensus_from_queue_metadata(
                         repo=repo,

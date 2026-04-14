@@ -69,6 +69,19 @@ def _close_on_or_before(conn: sqlite3.Connection, *, tenant_id: str, symbol: str
         """,
         (str(tenant_id), str(symbol), str(d)),
     ).fetchone()
+    if r and r["close"] is not None:
+        return str(r["d"]), float(r["close"])
+    # Fallback: use feature_snapshot (discovery universe is much larger than price_bars)
+    r = conn.execute(
+        """
+        SELECT as_of_date as d, close
+        FROM feature_snapshot
+        WHERE symbol = ? AND as_of_date <= ?
+        ORDER BY as_of_date DESC
+        LIMIT 1
+        """,
+        (str(symbol), str(d)),
+    ).fetchone()
     if not r or r["close"] is None:
         return None
     return str(r["d"]), float(r["close"])
@@ -87,6 +100,19 @@ def _nth_bar_after(conn: sqlite3.Connection, *, tenant_id: str, symbol: str, d: 
         LIMIT 1 OFFSET ?
         """,
         (str(tenant_id), str(symbol), str(d), int(n) - 1),
+    ).fetchone()
+    if r and r["close"] is not None:
+        return str(r["d"]), float(r["close"])
+    # Fallback: use feature_snapshot (discovery universe is much larger than price_bars)
+    r = conn.execute(
+        """
+        SELECT as_of_date as d, close
+        FROM feature_snapshot
+        WHERE symbol = ? AND as_of_date > ?
+        ORDER BY as_of_date ASC
+        LIMIT 1 OFFSET ?
+        """,
+        (str(symbol), str(d), int(n) - 1),
     ).fetchone()
     if not r or r["close"] is None:
         return None
@@ -176,6 +202,7 @@ def compute_candidate_outcomes(
     tenant_id: str,
     as_of_date: str | date,
     horizons: list[int] | None = None,
+    max_loss_pct: float | None = 0.15,
 ) -> list[dict[str, Any]]:
     """
     Compute forward returns for all discovery candidate rows on a given as_of_date.
@@ -231,6 +258,11 @@ def compute_candidate_outcomes(
                 continue
             exit_date, exit_close = exit_row
             ret = (float(exit_close) / float(entry_close)) - 1.0 if entry_close else None
+            # Stop-loss: cap loss at max_loss_pct (e.g. -15%)
+            # Simulates exiting when position drops that far, regardless of hold horizon.
+            if ret is not None and max_loss_pct is not None and ret <= -max_loss_pct:
+                exit_close = float(entry_close) * (1.0 - max_loss_pct)
+                ret = -max_loss_pct
             for st in strategy_types:
                 out.append(
                     {

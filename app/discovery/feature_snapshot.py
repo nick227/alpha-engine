@@ -143,10 +143,12 @@ def build_feature_snapshot(
     for ticker, g in df.groupby("ticker", sort=False):
         sym = str(ticker).upper()
         g = g.sort_values("timestamp")
-        g_asof = g[g["d"] == as_of_date]
-        if g_asof.empty:
+
+        # Use latest available data instead of exact date match
+        # This ensures we get data even if as_of_date has limited coverage
+        if g.empty:
             continue
-        last = g_asof.iloc[-1]
+        last = g.iloc[-1]
         close = _safe_float(last["close"])
         vol = _safe_float(last["volume"])
         dollar_volume = (close * vol) if (close is not None and vol is not None) else None

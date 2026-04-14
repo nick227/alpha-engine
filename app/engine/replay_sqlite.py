@@ -165,9 +165,24 @@ class SQLitePriceRepository(PriceRepository):
             """,
             (self.tenant_id, ticker, ts),
         ).fetchone()
-        if row is None:
-            return None
-        return float(row["close"])
+        if row is not None:
+            return float(row["close"])
+        # Fallback: feature_snapshot covers 4,652 symbols vs price_bars' 103.
+        # Use the first snapshot date on or after the target date.
+        date_str = at.date().isoformat()
+        row = self.repo.conn.execute(
+            """
+            SELECT close
+            FROM feature_snapshot
+            WHERE symbol = ? AND as_of_date >= ?
+            ORDER BY as_of_date ASC
+            LIMIT 1
+            """,
+            (ticker, date_str),
+        ).fetchone()
+        if row is not None:
+            return float(row["close"])
+        return None
 
 
 class SQLiteOutcomeWriter(OutcomeWriter):
