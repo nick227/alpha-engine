@@ -42,14 +42,22 @@ graph LR
 - **Self-Correcting ML**: Performance-based adaptation
 - **Dimensional Analysis**: Multi-axis prediction tagging
 
-### **📊 Strategy Framework**
+### **Strategy Framework**
 - **Multiple Strategies**: Silent Compounder, Adaptive, etc.
 - **Performance Ranking**: Automatic strategy evaluation
 - **Risk Management**: Configurable position sizing
 - **Backtesting**: Historical performance validation
 
-### **🔧 Production Features**
+### **Enhanced Reporting & Monitoring**
+- **Daily Reports**: Strategy performance, system health, and insights
+- **Historical Tracking**: Performance trends and comparative analysis
+- **System Health**: Database, disk space, and activity monitoring
+- **Organized Logging**: Structured logs with automatic rotation
+- **Performance Metrics**: CPU, memory, and trading performance tracking
+
+### **Production Features**
 - **Task Scheduler Integration**: Automated daily execution
+- **Paper Trading Automation**: Alpaca integration for live paper trading
 - **Robust Logging**: Comprehensive activity tracking
 - **Error Handling**: Graceful failure recovery
 - **Database Persistence**: SQLite for development, PostgreSQL ready
@@ -120,34 +128,76 @@ python dev_scripts/test_scripts/test_dimensional_tagger.py
 python scripts/auto_backfill_outcomes.py
 ```
 
+#### **Option D: Paper Trading**
+```bash
+# Test Alpaca paper trading connection
+python dev_scripts/scripts/smoke_test_alpaca.py
+
+# Automated paper trading (after setup)
+python scripts/auto_paper_trading.py
+```
+
+#### **Option E: Enhanced Reporting & Monitoring**
+```bash
+# Generate comprehensive daily report
+python scripts/generate_daily_report.py
+
+# System monitoring dashboard
+python scripts/system_monitor.py
+
+# Performance metrics tracking
+python scripts/performance_tracker.py
+
+# Log rotation and cleanup
+python scripts/log_rotation.py
+
+# Complete reporting pipeline
+run_trading_report.bat
+```
+
 ---
 
-## 🗂️ Directory Structure
+## Directory Structure
 
 ```
 alpha-engine-poc/
-├── run_paper_trading.py           # Main trading engine
-├── run_*.bat                     # Task scheduler scripts
-├── app/                          # Core application modules
-│   ├── ml/                        # Machine learning components
-│   │   ├── dimensional_tagger.py     # Dimensional tagging system
-│   │   └── outcome_backfill.py      # Automatic outcome filling
-│   ├── discovery/                  # Discovery pipeline
-│   └── strategies/                 # Trading strategies
-├── config/                        # Configuration files
-├── data/                          # Database and data files
-├── logs/                          # Log files
-├── scripts/                       # Production scripts
-├── dev_scripts/                   # Development scripts
-│   ├── test_scripts/               # Test scripts
-│   ├── ab_test_scripts/            # A/B test scripts
-│   └── utility_scripts/           # Utility scripts
-└── docs/                          # Documentation
+|-- run_paper_trading.py           # Main trading engine
+|-- run_*.bat                     # Task scheduler scripts
+|-- app/                          # Core application modules
+|   |-- ml/                        # Machine learning components
+|   |   |-- dimensional_tagger.py     # Dimensional tagging system
+|   |   |-- outcome_backfill.py      # Automatic outcome filling
+|   |-- discovery/                  # Discovery pipeline
+|   |-- strategies/                 # Trading strategies
+|-- config/                        # Configuration files
+|-- data/                          # Database and data files
+|-- logs/                          # Organized log structure
+|   |-- daily/                     # Daily logs by date
+|   |-- weekly/                    # Weekly summaries
+|   |-- system/                    # System performance logs
+|   |-- trading/                   # Trading activity logs
+|   |-- errors/                    # Error logs
+|   |-- archive/                   # Rotated/archived logs
+|-- reports/                       # Generated reports
+|   |-- daily/                     # Daily trading reports
+|   |-- weekly/                    # Weekly summaries
+|   |-- summaries/                 # Monthly analysis
+|-- scripts/                       # Production scripts
+|   |-- generate_daily_report.py    # Enhanced daily reporting
+|   |-- system_monitor.py          # System monitoring dashboard
+|   |-- performance_tracker.py     # Performance metrics
+|   |-- log_rotation.py            # Log management
+|   |-- setup_organized_logging.py  # Logging structure setup
+|-- dev_scripts/                   # Development scripts
+|   |-- test_scripts/               # Test scripts
+|   |-- ab_test_scripts/            # A/B test scripts
+|   |-- utility_scripts/           # Utility scripts
+|-- docs/                          # Documentation
 ```
 
 ---
 
-## 🤖 Production Automation
+## Production Automation
 
 ### **Task Scheduler Setup**
 
@@ -319,9 +369,9 @@ Start-ScheduledTask -TaskName "AlphaEngine - Download Prices"
 
 ## 📚 Documentation
 
-- **[Directory Structure](DIRECTORY_STRUCTURE.md)** - Complete file organization
-- **[Task Scheduler Validation](TASK_SCHEDULER_VALIDATION.md)** - Automation setup
+- **[Alpaca Automation Guide](ALPACA_AUTOMATION_GUIDE.md)** - Paper trading setup and automation
 - **[Development Scripts](dev_scripts/)** - Development tools
+- **[CLI Reference](.README.md)** - Detailed command-line interface
 
 ---
 

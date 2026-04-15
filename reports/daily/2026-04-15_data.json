@@ -1,0 +1,64 @@
+{
+  "date": "2026-04-15",
+  "leaderboard": [
+    {
+      "name": "Sentiment Analysis v1",
+      "win_rate": 16.7,
+      "avg_return": 0.02,
+      "predictions": 13
+    },
+    {
+      "name": "Technical Analysis v2",
+      "win_rate": 12.5,
+      "avg_return": 0.03,
+      "predictions": 20
+    },
+    {
+      "name": "Quant Strategy v3",
+      "win_rate": 0.0,
+      "avg_return": -0.71,
+      "predictions": 3
+    },
+    {
+      "name": "Text ML v2",
+      "win_rate": 0,
+      "avg_return": 0,
+      "predictions": 1
+    },
+    {
+      "name": "Baseline Strategy v1",
+      "win_rate": 0,
+      "avg_return": 0,
+      "predictions": 3
+    }
+  ],
+  "top_predictions": [],
+  "consensus": [],
+  "activity": {
+    "signals_today": 0,
+    "avg_last_week": 47.2,
+    "activity_level": "Low",
+    "percent_change": -100.0
+  },
+  "outcomes": {
+    "win_rate": 32.1,
+    "avg_return": 0.07,
+    "worst_loss": -1.01,
+    "best_return": 3.27,
+    "total_predictions": 1269
+  },
+  "observations": [
+    "Quiet market: 0 signals (-100.0% below average)"
+  ],
+  "health": {
+    "database_connected": true,
+    "recent_predictions": false,
+    "recent_outcomes": true,
+    "disk_space_ok": true,
+    "memory_usage_ok": true,
+    "error_rate_normal": true
+  },
+  "historical_comparison": {
+    "comparison_available": false
+  }
+}

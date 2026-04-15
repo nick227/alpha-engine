@@ -2,4 +2,18 @@
 cd /d C:\wamp64\www\alpha-engine-poc
 call .venv\Scripts\activate
 set PYTHONPATH=.
-python dev_scripts\scripts\nightly_discovery_pipeline.py --run-predictions >> logs\discovery_nightly.log 2>&1
+
+echo ========================================
+echo Discovery Pipeline Task - %date% %time%
+echo ========================================
+
+echo Setting up organized logging...
+python scripts\setup_organized_logging.py
+
+echo Running nightly discovery pipeline...
+python scripts\log_discovery_pipeline.py
+
+echo ========================================
+echo Discovery pipeline task complete.
+echo Logs saved to: logs\daily\ and logs\system\
+echo ========================================

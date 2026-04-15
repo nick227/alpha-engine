@@ -1,0 +1,33 @@
+======================================================================
+SYSTEM MONITORING DASHBOARD
+======================================================================
+Generated: 2026-04-15 01:29:16
+
+SYSTEM HEALTH
+----------------------------------------
+Status: WARNING (YELLOW)
+Database: Connected
+Prediction Activity: Inactive
+Last Check: 2026-04-15
+Issues:
+  - No recent predictions
+
+TRADING TRENDS (7 Days)
+----------------------------------------
+Recent Win Rate: 32.1% (avg: 32.1%)
+Recent Signals: 0 (avg: 0.0/day)
+Win Rate Trend: STABLE
+Signal Trend: STABLE
+
+SYSTEM PERFORMANCE
+----------------------------------------
+Performance monitoring unavailable
+
+QUICK ACTIONS
+----------------------------------------
+1. Run daily report: python scripts/generate_daily_report.py
+2. Check performance: python scripts/performance_tracker.py
+3. Rotate logs: python scripts/log_rotation.py
+4. View reports: dir reports\daily\
+
+======================================================================

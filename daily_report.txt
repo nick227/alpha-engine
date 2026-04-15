@@ -1,0 +1,55 @@
+============================================================
+DAILY TRADING REPORT - 2026-04-15
+============================================================
+
+SYSTEM HEALTH
+----------------------------------------
+Status: ISSUES DETECTED
+  - Recent predictions: NONE
+
+STRATEGY LEADERBOARD (Last 7 Days)
+----------------------------------------
+1. Sentiment Analysis v1 => 16.7% win (13 preds)
+2. Technical Analysis v2 => 12.5% win (20 preds)
+3. Quant Strategy v3 => 0.0% win (3 preds)
+4. Text ML v2 => 0% win (1 preds)
+5. Baseline Strategy v1 => 0% win (3 preds)
+
+TOP SIGNALS (Today)
+----------------------------------------
+No predictions today
+
+MULTI-STRATEGY AGREEMENT
+----------------------------------------
+No multi-strategy consensus today
+
+ACTIVITY LEVEL
+----------------------------------------
+Signals today: 0
+Avg last week: 47.2
+Market: Low (-100.0% vs avg)
+
+RECENT OUTCOMES (Last 5 Days)
+----------------------------------------
+Win rate: 32.1%
+Avg return: +0.07%
+Best: +3.27% | Worst: -1.01%
+
+INTERESTING OBSERVATIONS
+----------------------------------------
+  Quiet market: 0 signals (-100.0% below average)
+
+SYSTEM PERFORMANCE
+----------------------------------------
+CPU: 0% (avg: 0.0%)
+Memory: 0% (avg: 0.0%)
+Disk usage: 0%
+Database size: 0MB
+
+DATA QUALITY
+----------------------------------------
+Total strategies tracked: 5
+Days with historical data: 0
+Report generated: 01:28:54
+
+============================================================

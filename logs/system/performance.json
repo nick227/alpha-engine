@@ -1,0 +1,13 @@
+{
+  "metrics": [
+    {
+      "timestamp": "2026-04-15T01:28:54.111805",
+      "error": "argument 1 must be str, not WindowsPath",
+      "today_predictions": 0,
+      "today_outcomes": 643,
+      "week_total_predictions": 1405,
+      "week_avg_return": 0.063,
+      "week_win_rate": 32.5
+    }
+  ]
+}
