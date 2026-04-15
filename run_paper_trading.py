@@ -344,9 +344,9 @@ def main() -> None:
         start = datetime.fromisoformat(args.start_date).date()
         end = datetime.fromisoformat(args.end_date).date()
     else:
-        # Default to last 5 trading days
+        # Fast path: default to today only for pipeline use
         end = date.today()
-        start = end - timedelta(days=7)  # Buffer for weekends
+        start = end  # Single day execution for pipeline
     
     print(f"Paper trading: {start} to {end}")
     

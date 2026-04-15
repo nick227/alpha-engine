@@ -2,6 +2,12 @@
   "date": "2026-04-15",
   "leaderboard": [
     {
+      "name": "Balance Sheet Survivor v1 Paper",
+      "win_rate": 89.5,
+      "avg_return": 0.06,
+      "predictions": 43
+    },
+    {
       "name": "Sentiment Analysis v1",
       "win_rate": 16.7,
       "avg_return": 0.02,
@@ -26,33 +32,111 @@
       "predictions": 1
     },
     {
+      "name": "Silent Compounder v1 Paper",
+      "win_rate": 0,
+      "avg_return": 0,
+      "predictions": 90
+    },
+    {
       "name": "Baseline Strategy v1",
       "win_rate": 0,
       "avg_return": 0,
       "predictions": 3
     }
   ],
-  "top_predictions": [],
+  "top_predictions": [
+    {
+      "ticker": "ETR",
+      "confidence": 1.0,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "TFX",
+      "confidence": 0.999,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "CPRX",
+      "confidence": 0.997,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "DXPE",
+      "confidence": 0.996,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "XMMO",
+      "confidence": 0.994,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "EWW",
+      "confidence": 0.993,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "FANG",
+      "confidence": 0.991,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "PRDO",
+      "confidence": 0.99,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "SHG",
+      "confidence": 0.988,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "SDRL",
+      "confidence": 0.987,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    }
+  ],
   "consensus": [],
   "activity": {
-    "signals_today": 0,
+    "signals_today": 23,
     "avg_last_week": 47.2,
     "activity_level": "Low",
-    "percent_change": -100.0
+    "percent_change": -51.3
   },
   "outcomes": {
-    "win_rate": 32.1,
+    "win_rate": 32.7,
     "avg_return": 0.07,
     "worst_loss": -1.01,
     "best_return": 3.27,
-    "total_predictions": 1269
+    "total_predictions": 1292
   },
   "observations": [
-    "Quiet market: 0 signals (-100.0% below average)"
+    "Balance Sheet Survivor v1 Paper dominating with 89.5% win rate",
+    "Quiet market: 23 signals (-51.3% below average)"
   ],
   "health": {
     "database_connected": true,
-    "recent_predictions": false,
+    "recent_predictions": true,
     "recent_outcomes": true,
     "disk_space_ok": true,
     "memory_usage_ok": true,

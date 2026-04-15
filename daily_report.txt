@@ -4,20 +4,23 @@ DAILY TRADING REPORT - 2026-04-15
 
 SYSTEM HEALTH
 ----------------------------------------
-Status: ISSUES DETECTED
-  - Recent predictions: NONE
+Status: OK
 
 STRATEGY LEADERBOARD (Last 7 Days)
 ----------------------------------------
-1. Sentiment Analysis v1 => 16.7% win (13 preds)
-2. Technical Analysis v2 => 12.5% win (20 preds)
-3. Quant Strategy v3 => 0.0% win (3 preds)
-4. Text ML v2 => 0% win (1 preds)
-5. Baseline Strategy v1 => 0% win (3 preds)
+1. Balance Sheet Survivor v1 Paper => 89.5% win (43 preds)
+2. Sentiment Analysis v1 => 16.7% win (13 preds)
+3. Technical Analysis v2 => 12.5% win (20 preds)
+4. Quant Strategy v3 => 0.0% win (3 preds)
+5. Text ML v2 => 0% win (1 preds)
 
 TOP SIGNALS (Today)
 ----------------------------------------
-No predictions today
+ETR => 1.0 => Silent Compounder v1 Paper (BUY)
+TFX => 0.999 => Silent Compounder v1 Paper (BUY)
+CPRX => 0.997 => Silent Compounder v1 Paper (BUY)
+DXPE => 0.996 => Silent Compounder v1 Paper (BUY)
+XMMO => 0.994 => Silent Compounder v1 Paper (BUY)
 
 MULTI-STRATEGY AGREEMENT
 ----------------------------------------
@@ -25,19 +28,20 @@ No multi-strategy consensus today
 
 ACTIVITY LEVEL
 ----------------------------------------
-Signals today: 0
+Signals today: 23
 Avg last week: 47.2
-Market: Low (-100.0% vs avg)
+Market: Low (-51.3% vs avg)
 
 RECENT OUTCOMES (Last 5 Days)
 ----------------------------------------
-Win rate: 32.1%
+Win rate: 32.7%
 Avg return: +0.07%
 Best: +3.27% | Worst: -1.01%
 
 INTERESTING OBSERVATIONS
 ----------------------------------------
-  Quiet market: 0 signals (-100.0% below average)
+  Balance Sheet Survivor v1 Paper dominating with 89.5% win rate
+  Quiet market: 23 signals (-51.3% below average)
 
 SYSTEM PERFORMANCE
 ----------------------------------------
@@ -48,8 +52,8 @@ Database size: 0MB
 
 DATA QUALITY
 ----------------------------------------
-Total strategies tracked: 5
+Total strategies tracked: 7
 Days with historical data: 0
-Report generated: 01:28:54
+Report generated: 15:26:14
 
 ============================================================

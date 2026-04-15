@@ -1,12 +1,12 @@
 ================================================================================
 COMPLETE SYSTEM MONITORING DASHBOARD
 ================================================================================
-Generated: 2026-04-15 01:35:18
+Generated: 2026-04-15 15:06:22
 
 EXECUTIVE SUMMARY
 --------------------------------------------------
 System Health: WARN - WARNING
-Scheduled Tasks: PARTIAL - 0/4 tasks completed
+Scheduled Tasks: PARTIAL - 3/4 tasks completed
 Performance: OK - CPU: 0%, Memory: 0%
 
 DETAILED SYSTEM HEALTH
@@ -20,17 +20,20 @@ Issues:
 
 SCHEDULED TASKS STATUS
 --------------------------------------------------
-NOLOG Price Data Download (6:00 AM)
-   Status: NO_LOG
-   Message: No log file found
+OK Price Data Download (6:00 AM)
+   Status: SUCCESS
+   Message: Task success
+   execution_time_seconds: 177.66
 
-NOLOG Discovery Pipeline + Predictions (8:00 AM)
-   Status: NO_LOG
-   Message: No log file found
+OK Discovery Pipeline + Predictions (8:00 AM)
+   Status: SUCCESS
+   Message: Task success
+   execution_time_seconds: 177.15
 
-NOLOG Replay Score Calculation (8:30 AM)
-   Status: NO_LOG
-   Message: No log file found
+OK Replay Score Calculation (8:30 AM)
+   Status: SUCCESS
+   Message: Task success
+   execution_time_seconds: 3.24
 
 NOLOG Daily Trading Report (9:00 AM)
    Status: NO_LOG
@@ -38,7 +41,7 @@ NOLOG Daily Trading Report (9:00 AM)
 
 TRADING PERFORMANCE TRENDS
 --------------------------------------------------
-Recent Win Rate: 32.1% (avg: 32.1%)
+Recent Win Rate: 32.7% (avg: 32.7%)
 Recent Signals: 0 (avg: 0.0/day)
 Win Rate Trend: STABLE
 Signal Trend: STABLE
@@ -52,7 +55,7 @@ Database Size: 0MB
 
 RECENT ACTIVITY TIMELINE
 --------------------------------------------------
-Wednesday (2026-04-15): 0/4 tasks completed
+Wednesday (2026-04-15): 3/4 tasks completed
 Tuesday (2026-04-14): 0/4 tasks completed
 Monday (2026-04-13): 0/4 tasks completed
 

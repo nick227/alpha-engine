@@ -2,26 +2,35 @@
 SCHEDULED TASKS SUMMARY REPORT
 ======================================================================
 Date: 2026-04-15
-Generated: 2026-04-15 01:34:18
+Generated: 2026-04-15 15:06:19
 
 OVERALL STATUS
 ----------------------------------------
-Status: 0/4 TASKS COMPLETED
-Tasks: 0/4 successful
+Status: 3/4 TASKS COMPLETED
+Tasks: 3/4 successful
 
 INDIVIDUAL TASK STATUS
 ----------------------------------------
-NOLOG Price Data Download
-   Status: NO_LOG
-   Message: No log file found
+OK Price Data Download
+   Status: SUCCESS
+   Message: Task success
+   Metrics:
+     - execution_time_seconds: 177.66
 
-NOLOG Discovery Pipeline + Predictions
-   Status: NO_LOG
-   Message: No log file found
+OK Discovery Pipeline + Predictions
+   Status: SUCCESS
+   Message: Task success
+   Metrics:
+     - execution_time_seconds: 177.15
+     - stdout_lines: 41
 
-NOLOG Replay Score Calculation
-   Status: NO_LOG
-   Message: No log file found
+OK Replay Score Calculation
+   Status: SUCCESS
+   Message: Task success
+   Metrics:
+     - execution_time_seconds: 3.24
+     - stdout_lines: 2
+     - detected_count: 23 predictions
 
 NOLOG Daily Trading Report
    Status: NO_LOG
@@ -29,7 +38,7 @@ NOLOG Daily Trading Report
 
 RECENT ACTIVITY (Last 3 Days)
 ----------------------------------------
-Wednesday (2026-04-15): 0/4 tasks completed
+Wednesday (2026-04-15): 3/4 tasks completed
 Tuesday (2026-04-14): 0/4 tasks completed
 Monday (2026-04-13): 0/4 tasks completed
 

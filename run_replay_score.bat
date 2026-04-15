@@ -11,7 +11,7 @@ echo Setting up organized logging...
 python scripts\setup_organized_logging.py
 
 echo Running replay score calculation...
-python scripts\log_replay_score.py
+python run_paper_trading.py --replay
 
 echo ========================================
 echo Replay score task complete.
