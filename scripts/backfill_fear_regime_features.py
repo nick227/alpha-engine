@@ -129,8 +129,8 @@ def _compute_features(df: pd.DataFrame, fear_dates: set[str]) -> pd.DataFrame:
         g["volatility_20d"] = g["close"].pct_change().rolling(20).std()
 
         g["price_percentile_252d"] = g["close"].rolling(252).apply(
-            lambda x: (x.iloc[-1] - x.min()) / (x.max() - x.min()) if x.max() != x.min() else 0.0,
-            raw=False,
+            lambda x: (x[-1] - x.min()) / (x.max() - x.min()) if x.max() != x.min() else 0.0,
+            raw=True,
         )
 
         g["dollar_volume"] = g["close"] * g["volume"]

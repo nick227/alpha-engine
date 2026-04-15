@@ -54,7 +54,7 @@ DEFAULT_STRATEGY_CONFIGS: dict[str, dict[str, Any]] = {
         "vol_gate": 0.018,
         "volume_zscore_gate": 2.0,
         "trend_gate": -0.05,
-        "score_threshold": 0.60,
+        "score_threshold": 0.60,  # calibrated from 549-day fear-regime backtest; 152 candidates, 75 firing dates, avg 2.0/date
     },
 }
 
@@ -302,7 +302,7 @@ THRESHOLDS: dict[str, float] = {
     "silent_compounder": 0.50,
     "narrative_lag": 0.70,
     "balance_sheet_survivor": 0.60,
-    # sniper_coil threshold is enforced inside the function (absolute, not cross-sectional)
+    # sniper_coil threshold is enforced absolutely (not cross-sectional rank)
     "sniper_coil": 0.60,
 }
 
@@ -344,12 +344,15 @@ def score_candidates(
         # Critical: exclude market indices (not equities)
         if sym.startswith('^'):
             continue
-        # Behavior filter: remove low-signal instruments (ETFs naturally cluster here)
-        if fr.volatility_20d is not None and fr.volatility_20d < vol_p30:
-            continue
-        # Behavior filter: remove low-dispersion instruments (junk/ETFs)
-        if fr.return_63d is not None and abs(fr.return_63d) < ret_p40:
-            continue
+        # Behavior filter: remove low-signal instruments (ETFs naturally cluster here).
+        # Skipped for sniper_coil — it requires LOW vol by design, and these filters
+        # strip exactly the compressed, quiet stocks sniper is hunting for.
+        if strategy_type != "sniper_coil":
+            if fr.volatility_20d is not None and fr.volatility_20d < vol_p30:
+                continue
+            # Behavior filter: remove low-dispersion instruments (junk/ETFs)
+            if fr.return_63d is not None and abs(fr.return_63d) < ret_p40:
+                continue
 
         raw, reason, meta = fn(fr, config=config, context=regime_context or {})
         if raw is None:

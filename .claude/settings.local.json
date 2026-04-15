@@ -22,7 +22,8 @@
       "Bash(PYTHONPATH=. python dev_scripts/scripts/download_prices_daily.py --symbols AAPL,MSFT,ETR,TFX,GRMN,CASY,FANG,JPM,CVX,HCA --days 5)",
       "Bash(PYTHONPATH=. python dev_scripts/scripts/backfill_discovery_outcomes.py --lookback 40 --force)",
       "Bash(python dev_scripts/scripts/compare_discovery_vs_baseline.py)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(cmd:*)"
     ]
   }
 }
