@@ -1,4 +1,8 @@
-# Alpha Engine POC — CLI Reference
+# Alpha Engine — CLI Reference
+
+> **Command-line interface reference for operators and developers**
+
+This document contains detailed CLI command references for the Alpha Engine system. For a general overview, see the main [README.md](README.md).
 
 This repo has a few “operator” entrypoints that are meant to be run from the repo root (the same folder as `app/`).
 
