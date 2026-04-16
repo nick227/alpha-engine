@@ -11,7 +11,7 @@ from app.core.track_aggregation import build_track_overlay
 from app.core.repository import SignalRepository, PriceRepository
 from app.core.types import SignalDirection
 from app.engine.vectorbt_adapter import VectorbtAdapter
-from experiments.strategies.baseline_momentum import BaselineMomentum
+from app.strategies.baseline_momentum import BaselineMomentumStrategy
 
 # Legacy functions preserved for comparison
 def run_backtest_time_analysis(
@@ -113,7 +113,7 @@ def run_vectorbt_backtest(
         
     # Initialize appropriate strategy
     if strategy_name == "baseline_momentum":
-        strategy = BaselineMomentum(lookback=lookback, threshold=threshold)
+        strategy = BaselineMomentumStrategy(lookback=lookback, threshold=threshold)
     else:
         raise ValueError(f"Unknown strategy: {strategy_name}")
         

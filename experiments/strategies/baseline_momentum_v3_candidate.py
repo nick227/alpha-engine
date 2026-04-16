@@ -3,10 +3,10 @@ import numpy as np
 from datetime import datetime, timedelta
 from app.core.types import SignalDirection
 from app.core.feature_engine import FeatureEngine
-from experiments.strategies.baseline_momentum import BaselineMomentum
+from app.strategies.baseline_momentum import BaselineMomentumStrategy
 
 
-class BaselineMomentumV3A(BaselineMomentum):
+class BaselineMomentumV3A(BaselineMomentumStrategy):
     """Baseline Momentum Strategy with Delayed Entry (v3_a).
     
     Adds entry delay constraint to reduce signal noise and correlation stacking.

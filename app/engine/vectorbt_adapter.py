@@ -3,7 +3,7 @@ import numpy as np
 import vectorbt as vbt
 from datetime import timedelta
 from app.core.repository import SignalRepository, PriceRepository
-from app.core.types import Signal, PriceData
+from app.core.types import Signal
 
 class VectorbtAdapter:
     """Adapter for vectorbt portfolio simulation with advanced cost modeling.

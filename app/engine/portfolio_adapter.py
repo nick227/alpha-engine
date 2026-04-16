@@ -3,7 +3,7 @@ import numpy as np
 import vectorbt as vbt
 from typing import Dict, List, Union, Optional
 from app.engine.vectorbt_adapter import VectorbtAdapter
-from experiments.strategies.baseline_momentum import BaselineMomentum
+from app.strategies.baseline_momentum import BaselineMomentumStrategy
 from experiments.strategies.mean_reversion_fixed import MeanReversionStrategy
 from app.core.execution_policies import apply_execution_policy
 
@@ -37,7 +37,7 @@ class PortfolioAdapter:
             self.strategies = [
                 {
                     'name': 'baseline_momentum',
-                    'class': BaselineMomentum,
+                    'class': BaselineMomentumStrategy,
                     'params': {'lookback': 20, 'threshold': 0.02}
                 },
                 {
