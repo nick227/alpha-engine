@@ -10,3 +10,4 @@ build/
 outputs/
 data/
 cache/
+pipeline.lock

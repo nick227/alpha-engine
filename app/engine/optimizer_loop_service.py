@@ -169,7 +169,9 @@ class OptimizerLoopService:
 
         # Precompute train/forward windows, cached across ticks keyed by (ticker set, time window).
         # Invalidation: version stamps from raw_events / price_bars.
-        raw_events_version = repo.conn.execute("SELECT COALESCE(MAX(ingested_at), '') as v FROM raw_events WHERE tenant_id='default'").fetchone()["v"]
+        raw_events_version = repo.conn.execute(
+            "SELECT COALESCE(MAX(timestamp), '') as v FROM raw_events WHERE tenant_id='default'"
+        ).fetchone()["v"]
         bars_version = repo.conn.execute("SELECT COALESCE(MAX(timestamp), '') as v FROM price_bars WHERE tenant_id='default' AND timeframe='1m'").fetchone()["v"]
         cache_key = (tuple(tickers), min_ts, max_ts, 0.3)
 

@@ -10,6 +10,12 @@ import os
 import joblib
 from datetime import datetime
 
+import sys
+from pathlib import Path
+
+_here = Path(__file__).resolve()
+sys.path.insert(0, str(_here.parents[1]))
+
 from app.ml.train import train_model
 from app.ml.timebox import TimeWindow
 

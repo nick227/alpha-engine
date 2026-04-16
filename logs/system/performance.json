@@ -44,6 +44,24 @@
       "week_total_predictions": 1428,
       "week_avg_return": 0.063,
       "week_win_rate": 33.1
+    },
+    {
+      "timestamp": "2026-04-16T14:17:45.577574",
+      "error": "argument 1 must be str, not WindowsPath",
+      "today_predictions": 23,
+      "today_outcomes": 1586,
+      "week_total_predictions": 1586,
+      "week_avg_return": -0.103,
+      "week_win_rate": 33.9
+    },
+    {
+      "timestamp": "2026-04-16T14:18:20.741010",
+      "error": "argument 1 must be str, not WindowsPath",
+      "today_predictions": 23,
+      "today_outcomes": 1586,
+      "week_total_predictions": 1586,
+      "week_avg_return": -0.103,
+      "week_win_rate": 33.9
     }
   ]
 }

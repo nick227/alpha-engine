@@ -1,3 +1,3 @@
 @echo off
-cd C:\wamp64\www\alpha-engine-poc
-python run_paper_trading.py --days 1 >> logs\morning.log 2>&1
+REM Compatibility stub. Implementation lives in scripts\windows\
+call "%~dp0scripts\windows\run_trading_morning.bat" %*

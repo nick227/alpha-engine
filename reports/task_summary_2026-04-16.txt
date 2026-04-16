@@ -1,0 +1,45 @@
+======================================================================
+SCHEDULED TASKS SUMMARY REPORT
+======================================================================
+Date: 2026-04-16
+Generated: 2026-04-16 14:18:24
+
+OVERALL STATUS
+----------------------------------------
+Status: 0/4 TASKS COMPLETED
+Tasks: 0/4 successful
+Not run: 3 tasks
+
+INDIVIDUAL TASK STATUS
+----------------------------------------
+SKIP Price Data Download
+   Status: NOT_RUN
+   Message: No execution found today
+
+SKIP Discovery Pipeline + Predictions
+   Status: NOT_RUN
+   Message: No execution found today
+
+SKIP Replay Score Calculation
+   Status: NOT_RUN
+   Message: No execution found today
+
+NOLOG Daily Trading Report
+   Status: NO_LOG
+   Message: No log file found
+
+RECENT ACTIVITY (Last 3 Days)
+----------------------------------------
+Thursday (2026-04-16): 0/4 tasks completed
+Wednesday (2026-04-15): 3/4 tasks completed
+Tuesday (2026-04-14): 0/4 tasks completed
+
+QUICK ACTIONS
+----------------------------------------
+1. Run price download: run_download_prices.bat
+2. Run discovery pipeline: run_discovery_nightly.bat
+3. Run replay score: run_replay_score.bat
+4. Generate reports: run_trading_report.bat
+5. View task logs: dir logs\system\
+
+======================================================================

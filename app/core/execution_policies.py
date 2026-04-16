@@ -104,7 +104,12 @@ class PositionSizingConstraint(ExecutionPolicy):
             
         if sizing_method == "equal":
             # Equal-weighted size
-            return self.base_signals.apply(lambda x: self.base_size * (x / abs(x)))  # Preserve direction
+            def _scale(v: float) -> float:
+                if v == 0:
+                    return 0.0
+                return float(self.base_size) * (float(v) / abs(float(v)))
+
+            return self.base_signals.map(_scale)
             
         elif sizing_method == "confidence":
             # Confidence-weighted size (using absolute signal strength as proxy)
@@ -155,7 +160,12 @@ class PositionSizingConstraint(ExecutionPolicy):
             risk_multiplier = 1.5  # Multiplier for high conviction signals
             
             # This would integrate with volatility for risk-based sizing
-            return self.base_signals.apply(lambda x: risk_per_position * (x / abs(x)))  # Preserve direction
+            def _risk_scale(v: float) -> float:
+                if v == 0:
+                    return 0.0
+                return float(risk_per_position) * (float(v) / abs(float(v)))
+
+            return self.base_signals.map(_risk_scale)
             
         else:
             raise ValueError(f"Unknown sizing method: {sizing_method}")
@@ -237,14 +247,15 @@ def apply_execution_policy(
     """
     if policy_type == "clustering":
         policy = PositionClusteringConstraint(signals, kwargs.get("max_positions", 2))
+        return policy.apply()
     elif policy_type == "sizing":
         policy = PositionSizingConstraint(signals, kwargs.get("base_size", 1.0))
+        return policy.apply(sizing_method=kwargs.get("sizing_method", "equal"))
     elif policy_type == "capital":
         policy = CapitalConstraint(signals, kwargs.get("max_capital", 1.0))
+        return policy.apply(max_sector_exposure=kwargs.get("max_sector_exposure", 1.0))
     else:
         raise ValueError(f"Unknown policy type: {policy_type}")
-        
-    return policy.apply(**kwargs)
 
 # Example:
 # signals = strategy.get_signals(pricing)

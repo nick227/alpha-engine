@@ -1,0 +1,119 @@
+{
+  "date": "2026-04-16",
+  "leaderboard": [
+    {
+      "name": "Silent Compounder v1 Paper",
+      "win_rate": 0,
+      "avg_return": 0,
+      "predictions": 30
+    },
+    {
+      "name": "Balance Sheet Survivor v1 Paper",
+      "win_rate": 0,
+      "avg_return": 0,
+      "predictions": 16
+    }
+  ],
+  "top_predictions": [
+    {
+      "ticker": "ETR",
+      "confidence": 1.0,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "TFX",
+      "confidence": 0.999,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "CPRX",
+      "confidence": 0.997,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "DXPE",
+      "confidence": 0.996,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "XMMO",
+      "confidence": 0.994,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "EWW",
+      "confidence": 0.993,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "FANG",
+      "confidence": 0.991,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "PRDO",
+      "confidence": 0.99,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "SHG",
+      "confidence": 0.988,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    },
+    {
+      "ticker": "SDRL",
+      "confidence": 0.987,
+      "strategy": "Silent Compounder v1 Paper",
+      "direction": "BUY",
+      "horizon": "20d"
+    }
+  ],
+  "consensus": [],
+  "activity": {
+    "signals_today": 23,
+    "avg_last_week": 20,
+    "activity_level": "Normal",
+    "percent_change": 15.0
+  },
+  "outcomes": {
+    "win_rate": 33.9,
+    "avg_return": -0.1,
+    "worst_loss": -0.85,
+    "best_return": 0.14,
+    "total_predictions": 1586
+  },
+  "observations": [],
+  "health": {
+    "database_connected": true,
+    "recent_predictions": true,
+    "recent_outcomes": true,
+    "disk_space_ok": true,
+    "memory_usage_ok": true,
+    "error_rate_normal": true
+  },
+  "historical_comparison": {
+    "comparison_available": true,
+    "historical_avg_win_rate": 32.7,
+    "historical_avg_signals": 23,
+    "historical_avg_return": 0.07,
+    "days_compared": 1
+  }
+}

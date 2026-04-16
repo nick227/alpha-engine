@@ -1,3 +1,3 @@
 @echo off
-cd C:\wamp64\www\alpha-engine-poc
-python scripts\replay_once.py >> logs\replay.log 2>&1
+REM Compatibility stub. Implementation lives in scripts\windows\
+call "%~dp0scripts\windows\run_trading_replay.bat" %*

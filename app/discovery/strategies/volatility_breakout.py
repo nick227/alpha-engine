@@ -223,14 +223,4 @@ def create_volatility_breakout_candidates(
     return candidates
 
 
-# Strategy registration
-def register_strategy():
-    """Register volatility breakout strategy with the strategy registry"""
-    from app.discovery.strategies import STRATEGIES, THRESHOLDS
-    
-    STRATEGIES["volatility_breakout"] = volatility_breakout
-    THRESHOLDS["volatility_breakout"] = 0.60
-
-
-# Auto-register on import
-register_strategy()
+# Strategy registration is handled in `app.discovery.strategies.registry` to avoid circular imports

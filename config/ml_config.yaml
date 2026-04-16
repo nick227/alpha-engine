@@ -1,0 +1,99 @@
+# ML Configuration - STRICT CONSTRAINTS
+# Configuration for ML training and integration with anti-overfitting measures
+
+# Database configuration
+database:
+  path: "data/alpha.db"
+  backup_enabled: true
+  backup_interval_hours: 24
+
+# Model configuration
+model:
+  type: "gradient_boosting"  # logistic or gradient_boosting
+  path: "models/trade_predictor.joblib"
+  retrain_interval_days: 7  # STRICT: Weekly minimum, not daily
+  min_training_samples: 100
+  
+# Training configuration
+training:
+  lookback_days: 252  # One year of data
+  test_size: 0.2
+  random_state: 42
+  cross_validation_folds: 5
+  
+# STRICT: Feature configuration - MAX 8 FEATURES TOTAL
+features:
+  # Core features for ML model - DO NOT EXPAND BEYOND 8
+  core_features:
+    - "trend_strength"      # Compressed from multiple returns
+    - "volatility_regime"   # expansion/contraction/normal
+    - "position_in_range"   # 0-1 normalized position
+    - "volume_anomaly"      # z-score of volume
+    - "spy_trend"          # Market direction (5d return)
+    - "vix_level"          # Fear gauge (percentile)
+    - "sector_trend"       # Sector relative performance
+    - "price_momentum"      # 5d price momentum
+  
+  # Feature engineering parameters
+  trend_weights: [0.2, 0.5, 0.3]  # 1d, 5d, 20d - recent weighted
+  volatility_thresholds:
+    expansion: 0.03
+    contraction: 0.015
+    normal: 0.015
+  
+  # Cross-asset context - REAL-TIME ONLY
+  cross_asset:
+    spy_symbol: "SPY"
+    vix_symbol: "^VIX"
+    lookback_days: 5
+    
+# STRICT: ML filtering configuration - REAL SYSTEM EDGE
+filtering:
+  enabled: true
+  # TEST THESE VALUES: 0.55, 0.60, 0.65, 0.70
+  win_probability_threshold: 0.60
+  max_candidates_per_day: 10
+  min_confidence: 0.5
+  
+  # STRICT: ML can ONLY filter, never override
+  ml_constraints:
+    max_features: 8
+    no_future_data: true
+    no_direction_override: true
+    no_regime_override: true
+    only_filtering: true
+  
+# Model evaluation
+evaluation:
+  metrics:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1_score"
+    - "roc_auc"
+  
+  performance_thresholds:
+    min_accuracy: 0.55
+    min_precision: 0.50
+    min_recall: 0.40
+    
+# Logging configuration
+logging:
+  level: "INFO"
+  file: "logs/ml_training.log"
+  max_size_mb: 100
+  backup_count: 5
+  
+# Production settings
+production:
+  auto_retrain: true
+  model_validation: true
+  rollback_on_degradation: true
+  alert_on_failure: true
+  
+# Development settings
+development:
+  mock_data: true
+  save_training_data: true
+  enable_debug: true
+  test_mode: false

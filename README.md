@@ -162,7 +162,7 @@ run_trading_report.bat
 ```
 alpha-engine-poc/
 |-- run_paper_trading.py           # Main trading engine
-|-- run_*.bat                     # Task scheduler scripts
+|-- run_*.bat                     # Task scheduler entrypoints (stubs; see scripts/windows/)
 |-- app/                          # Core application modules
 |   |-- ml/                        # Machine learning components
 |   |   |-- dimensional_tagger.py     # Dimensional tagging system
@@ -230,7 +230,7 @@ Register-ScheduledTask -TaskName "AlphaEngine - Replay Score" -Action $action -T
 python scripts/auto_backfill_outcomes.py
 
 # Generate performance report
-python run_trading_report.bat
+run_trading_report.bat
 
 # Verify task execution
 type logs\prices.log

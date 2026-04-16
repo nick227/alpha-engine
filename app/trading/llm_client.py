@@ -3,7 +3,11 @@ import json
 import logging
 import asyncio
 from typing import Dict, Any, Optional
-from openai import AsyncOpenAI
+
+try:
+    from openai import AsyncOpenAI  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    AsyncOpenAI = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,9 @@ class LLMClient:
         
         if not self.api_key:
             logger.warning("OPENAI_API_KEY not found in environment. LLM validation will fail-safe.")
+            self.client = None
+        elif AsyncOpenAI is None:
+            logger.warning("openai package not installed. LLM validation will fail-safe.")
             self.client = None
         else:
             self.client = AsyncOpenAI(api_key=self.api_key)

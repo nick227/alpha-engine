@@ -13,7 +13,13 @@ def filter_by_industry(features: Dict[str, FeatureRow], target_sectors: List[str
     if not has_sectors:
         return features
     
-    return {s: fr for s, fr in features.items() if fr.sector in target_sectors}
+    targets = {str(s).strip().lower() for s in target_sectors if str(s).strip()}
+    out: Dict[str, FeatureRow] = {}
+    for sym, fr in features.items():
+        sector = str(fr.sector).strip().lower() if fr.sector is not None else ""
+        if sector in targets:
+            out[sym] = fr
+    return out
 
 
 def get_sectors_for_env(env_bucket: tuple[str, str, str, str, str, str, str]) -> List[str]:
