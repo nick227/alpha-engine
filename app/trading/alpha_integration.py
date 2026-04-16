@@ -18,6 +18,8 @@ from app.engine.consensus_engine import ConsensusPrediction
 from app.core.types import Prediction
 from app.db.repository import AlphaRepository
 from app.trading.base import TradingProvider
+from app.core.regime_v3 import RegimeClassifierV3, SignalGating, QualityScoreV3, PositionSizerV3
+from app.trading.position_sizing_v3 import EnhancedPositionSizer, RegimeAwarePortfolioManager
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,20 @@ class AlphaEngineIntegration:
         self.paper_trader = paper_trader
         self.feature_integration = feature_integration
         self.signal_history: List[Dict[str, Any]] = []
+        
+        # Initialize regime classifier
+        self.regime_classifier = RegimeClassifierV3()
+        
+        # Initialize enhanced position sizer
+        self.position_sizer = EnhancedPositionSizer()
+        self.portfolio_manager = RegimeAwarePortfolioManager(self.position_sizer)
+        
+        # Track regime statistics
+        self.regime_stats = {
+            'total_signals': 0,
+            'gated_signals': 0,
+            'regime_distribution': {}
+        }
         
     async def process_consensus_signals(
         self,
@@ -63,8 +79,19 @@ class AlphaEngineIntegration:
                 if not trade_signal:
                     continue
                 
+                # Apply regime gating
+                gated_signal = self._apply_regime_gating(trade_signal, consensus)
+                
+                if not gated_signal:
+                    self.regime_stats['gated_signals'] += 1
+                    continue
+                
+                # Calculate enhanced quality score
+                quality_score = self._calculate_quality_score(gated_signal, consensus)
+                gated_signal['quality_score'] = quality_score
+                
                 # Process through paper trader
-                trade_event = await self.paper_trader.process_signal(**trade_signal)
+                trade_event = await self.paper_trader.process_signal(**gated_signal)
                 
                 if trade_event and trade_event.get('status') in ['EXECUTED', 'executed', 'filled']:
                     executed_trades.append(trade_event)
@@ -166,6 +193,135 @@ class AlphaEngineIntegration:
             return f"consensus_quant_{quant_strategy}"
         else:
             return "consensus_default"
+    
+    def _apply_regime_gating(
+        self, 
+        trade_signal: Dict[str, Any], 
+        consensus: ConsensusPrediction
+    ) -> Optional[Dict[str, Any]]:
+        """Apply regime gating to trade signal"""
+        
+        # Extract regime information from consensus
+        regime_data = consensus.regime or {}
+        
+        # Create regime classification from existing data
+        # This is a simplified version - in production, you'd calculate this from market data
+        volatility_regime = regime_data.get('volatility_regime', 'NORMAL')
+        trend_regime = regime_data.get('trend_strength', 'UNKNOWN')
+        
+        # Map to new regime classification
+        from app.core.regime_v3 import RegimeClassification, TrendRegime, VolatilityRegime
+        
+        # Convert legacy regime to new classification
+        if trend_regime == 'STRONG':
+            trend = TrendRegime.BULL  # Assume bull for strong trends
+        elif trend_regime == 'WEAK':
+            trend = TrendRegime.CHOP
+        else:
+            trend = TrendRegime.CHOP
+        
+        if volatility_regime == 'HIGH':
+            vol = VolatilityRegime.EXPANSION
+        elif volatility_regime == 'LOW':
+            vol = VolatilityRegime.COMPRESSION
+        else:
+            vol = VolatilityRegime.NORMAL
+        
+        regime = RegimeClassification(
+            trend_regime=trend,
+            volatility_regime=vol,
+            combined_regime=f"({trend.value}, {vol.value})",
+            price_vs_ma50=0.0,
+            ma50_vs_ma200=0.0,
+            atr_percentile=0.5,
+            volatility_value=regime_data.get('volatility_value', 0.02),
+            adx_value=regime_data.get('adx_value')
+        )
+        
+        # Determine strategy type from signal
+        strategy_type = self._extract_strategy_type(trade_signal, consensus)
+        
+        # Apply gating
+        allowed, reason = SignalGating.gate_signal(strategy_type, regime)
+        
+        # Update statistics
+        self.regime_stats['total_signals'] += 1
+        regime_key = regime.combined_regime
+        self.regime_stats['regime_distribution'][regime_key] = \
+            self.regime_stats['regime_distribution'].get(regime_key, 0) + 1
+        
+        if not allowed:
+            logger.info(f"Signal {consensus.ticker} gated: {strategy_type} not allowed in {regime.combined_regime} ({reason})")
+            return None
+        
+        # Add regime information to signal
+        trade_signal['regime_classification'] = regime
+        trade_signal['strategy_type'] = strategy_type
+        trade_signal['gating_reason'] = reason
+        
+        return trade_signal
+    
+    def _extract_strategy_type(self, trade_signal: Dict[str, Any], consensus: ConsensusPrediction) -> str:
+        """Extract strategy type from signal"""
+        
+        # Try to get from strategy_id
+        strategy_id = trade_signal.get('strategy_id', '').lower()
+        
+        if 'breakout' in strategy_id or 'volatility' in strategy_id:
+            return 'volatility_breakout'
+        elif 'momentum' in strategy_id or 'trend' in strategy_id:
+            return 'momentum'
+        elif 'reversal' in strategy_id or 'mean_reversion' in strategy_id:
+            return 'mean_reversion'
+        
+        # Try to infer from consensus metadata
+        metadata = consensus.metadata or {}
+        
+        # Check for volatility breakout patterns
+        if metadata.get('volatility_breakout'):
+            return 'volatility_breakout'
+        
+        # Default to momentum for consensus signals
+        return 'momentum'
+    
+    def _calculate_quality_score(
+        self, 
+        trade_signal: Dict[str, Any], 
+        consensus: ConsensusPrediction
+    ) -> float:
+        """Calculate enhanced quality score"""
+        
+        # Extract components
+        signal_strength = trade_signal.get('confidence', 0.5)
+        regime = trade_signal.get('regime_classification')
+        strategy_type = trade_signal.get('strategy_type', 'momentum')
+        
+        # Calculate agreement score
+        metadata = consensus.metadata or {}
+        agreement_score = 0.5  # Default
+        
+        if metadata.get('same_direction'):
+            agreement_score = 0.75
+        if metadata.get('agreement_bonus', 0) > 0.05:
+            agreement_score = 1.0
+        
+        # Calculate liquidity confidence
+        liquidity_confidence = 0.5  # Default - would calculate from market data
+        
+        # Calculate quality score
+        if regime:
+            quality = QualityScoreV3.calculate_quality_score(
+                signal_strength=signal_strength,
+                regime=regime,
+                strategy_type=strategy_type,
+                agreement_score=agreement_score,
+                liquidity_confidence=liquidity_confidence
+            )
+        else:
+            # Fallback to simple confidence-based score
+            quality = signal_strength
+        
+        return quality
     
     async def process_predictions(
         self,

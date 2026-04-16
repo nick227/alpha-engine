@@ -80,7 +80,7 @@ def build_feature_snapshot(
                   AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
                 ORDER BY ticker ASC, timestamp ASC
                 """,
-                (tenant_id, timeframe, start.isoformat(), as_of_date.isoformat()),
+                (tenant_id, timeframe, start.isoformat(), (as_of_date - timedelta(days=1)).isoformat()),
             ).fetchall()
 
         syms = [str(s).strip().upper() for s in symbol_subset if str(s).strip()]
@@ -96,7 +96,7 @@ def build_feature_snapshot(
               AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
             ORDER BY ticker ASC, timestamp ASC
             """,
-            [tenant_id, timeframe, *syms, start.isoformat(), as_of_date.isoformat()],
+            [tenant_id, timeframe, *syms, start.isoformat(), (as_of_date - timedelta(days=1)).isoformat()],
         ).fetchall()
 
     rows: list[sqlite3.Row] = []
@@ -144,6 +144,11 @@ def build_feature_snapshot(
         sym = str(ticker).upper()
         g = g.sort_values("timestamp")
 
+        # CRITICAL: Ensure no future data leakage
+        max_data_date = g["timestamp"].max().date()
+        if max_data_date >= as_of_date:
+            raise ValueError(f"Feature leakage detected: data includes {max_data_date} >= prediction date {as_of_date}")
+
         # Use latest available data instead of exact date match
         # This ensures we get data even if as_of_date has limited coverage
         if g.empty:
@@ -177,7 +182,9 @@ def build_feature_snapshot(
 
         w252 = closes[-252:] if closes.size >= 252 else closes
         max_dd_252 = _max_drawdown(w252.astype(float)) if w252.size >= 2 else None
-        price_pct_252 = _percentile_rank(w252.astype(float), float(close)) if close is not None else None
+        # CRITICAL: Don't use current close in percentile rank - use previous close
+        prev_close = closes[-2] if closes.size >= 2 else close
+        price_pct_252 = _percentile_rank(w252.astype(float), float(prev_close)) if prev_close is not None else None
 
         # liquidity
         dv20 = dollar_volumes[-20:] if dollar_volumes.size >= 20 else dollar_volumes

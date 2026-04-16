@@ -1,0 +1,243 @@
+import sqlite3
+import numpy as np
+from datetime import datetime, timedelta
+from app.simulation.portfolio_simulator import PortfolioSimulator
+
+def get_momentum_signals(threshold=0.02):
+    """Get momentum signals with adjustable threshold"""
+    
+    simulator = PortfolioSimulator("data/alpha.db")
+    simulator.connect()
+    
+    # Get all predictions to calculate daily returns
+    price_query = """
+    SELECT 
+        DATE(p.timestamp) as signal_date,
+        p.ticker,
+        p.entry_price
+    FROM predictions p
+    WHERE p.mode = 'backtest'
+    AND p.horizon = '7d'
+    AND p.entry_price IS NOT NULL
+    """
+    
+    cursor = simulator.conn.execute(price_query)
+    all_predictions = cursor.fetchall()
+    
+    # Group by ticker for daily return calculation
+    ticker_data = {}
+    for pred in all_predictions:
+        ticker = pred['ticker']
+        if ticker not in ticker_data:
+            ticker_data[ticker] = []
+        ticker_data[ticker].append(pred)
+    
+    # Calculate daily returns and find momentum signals
+    momentum_signals = []
+    
+    for ticker, predictions in ticker_data.items():
+        # Sort by date
+        predictions.sort(key=lambda x: datetime.strptime(x['signal_date'], '%Y-%m-%d').date())
+        
+        for i, pred in enumerate(predictions):
+            signal_date = datetime.strptime(pred['signal_date'], '%Y-%m-%d').date()
+            
+            # Calculate daily return
+            if i > 0:
+                prev_price = predictions[i-1]['entry_price']
+                current_price = pred['entry_price']
+                daily_return = (current_price - prev_price) / prev_price
+                
+                # Momentum signal with adjustable threshold
+                if daily_return > threshold:
+                    momentum_signals.append({
+                        'date': signal_date,
+                        'ticker': ticker,
+                        'signal_return': daily_return
+                    })
+    
+    simulator.close()
+    return momentum_signals
+
+def get_next_day_return(ticker, signal_date):
+    """Get return from close(T) to close(T+1)"""
+    
+    simulator = PortfolioSimulator("data/alpha.db")
+    simulator.connect()
+    
+    # Get entry price (close at signal date)
+    entry_query = """
+    SELECT p.entry_price
+    FROM predictions p
+    WHERE p.ticker = ?
+    AND DATE(p.timestamp) = DATE(?)
+    AND p.mode = 'backtest'
+    AND p.horizon = '7d'
+    AND p.entry_price IS NOT NULL
+    LIMIT 1
+    """
+    
+    cursor = simulator.conn.execute(entry_query, (ticker, signal_date))
+    entry_result = cursor.fetchone()
+    
+    if not entry_result:
+        simulator.close()
+        return None
+    
+    entry_price = entry_result['entry_price']
+    
+    # Get exit price (next day's close)
+    next_day = signal_date + timedelta(days=1)
+    exit_query = """
+    SELECT p.entry_price as close_price
+    FROM predictions p
+    WHERE p.ticker = ?
+    AND DATE(p.timestamp) = DATE(?)
+    AND p.mode = 'backtest'
+    AND p.horizon = '7d'
+    AND p.entry_price IS NOT NULL
+    LIMIT 1
+    """
+    
+    cursor = simulator.conn.execute(exit_query, (ticker, next_day))
+    exit_result = cursor.fetchone()
+    
+    if not exit_result:
+        simulator.close()
+        return None
+    
+    exit_price = exit_result['close_price']
+    
+    # Compute return
+    return_pct = (exit_price / entry_price) - 1
+    
+    simulator.close()
+    return return_pct
+
+def test_momentum_thresholds():
+    """Test momentum with different thresholds to scale sample size"""
+    
+    print("=== MOMENTUM THRESHOLD SCALING TEST ===")
+    print("Testing different signal thresholds to increase sample size\n")
+    
+    thresholds = [0.015, 0.02, 0.025, 0.03]
+    
+    results = {}
+    
+    for threshold in thresholds:
+        print(f"=== THRESHOLD: >{threshold*100:.1f}% ===")
+        
+        # Get signals
+        signals = get_momentum_signals(threshold)
+        print(f"Signals found: {len(signals)}")
+        
+        if len(signals) < 10:
+            print("Insufficient signals - skipping")
+            continue
+        
+        # Group by date for portfolio construction
+        signals_by_date = {}
+        for signal in signals:
+            date = signal['date']
+            if date not in signals_by_date:
+                signals_by_date[date] = []
+            signals_by_date[date].append(signal)
+        
+        # Portfolio variables
+        equity = 1.0
+        daily_returns = []
+        wins = []
+        losses = []
+        
+        # Process each trading day
+        trading_dates = sorted(signals_by_date.keys())
+        
+        for date in trading_dates:
+            day_signals = signals_by_date[date]
+            
+            # Get returns for all signals on this day
+            trade_returns = []
+            
+            for signal in day_signals:
+                trade_return = get_next_day_return(signal['ticker'], date)
+                
+                if trade_return is not None:
+                    # Apply friction
+                    trade_return -= 0.0015
+                    trade_returns.append(trade_return)
+            
+            if len(trade_returns) == 0:
+                continue
+            
+            # Equal weight across trades
+            day_return = sum(trade_returns) / len(trade_returns)
+            daily_returns.append(day_return)
+            
+            # Compound
+            equity *= (1 + day_return)
+            
+            # Track wins/losses
+            for r in trade_returns:
+                if r > 0:
+                    wins.append(r)
+                else:
+                    losses.append(r)
+        
+        # Calculate results
+        total_return = equity - 1
+        win_rate = len(wins) / (len(wins) + len(losses)) if (wins or losses) else 0
+        avg_win = sum(wins) / len(wins) if wins else 0
+        avg_loss = sum(losses) / len(losses) if losses else 0
+        
+        print(f"Trading days: {len(daily_returns)}")
+        print(f"Total trades: {len(wins) + len(losses)}")
+        print(f"Win rate: {win_rate:.1%}")
+        print(f"Portfolio return: {total_return:+.2%}")
+        print(f"Avg win: {avg_win:+.2%}")
+        print(f"Avg loss: {avg_loss:+.2%}")
+        
+        results[threshold] = {
+            'signals': len(signals),
+            'trades': len(wins) + len(losses),
+            'win_rate': win_rate,
+            'return': total_return,
+            'avg_win': avg_win,
+            'avg_loss': avg_loss
+        }
+        
+        print()
+    
+    # Summary analysis
+    print("=== THRESHOLD ANALYSIS ===")
+    print("Threshold  Signals  Trades  Win Rate  Return")
+    print("-" * 45)
+    
+    for threshold in sorted(results.keys()):
+        r = results[threshold]
+        print(f"{threshold*100:>7.1f}%     {r['signals']:>6}   {r['trades']:>6}   {r['win_rate']:>7.1%}   {r['return']:>+6.2f}")
+    
+    # Find best threshold
+    best_threshold = None
+    best_score = -999
+    
+    for threshold, r in results.items():
+        # Score: win rate > 52% AND positive return
+        if r['win_rate'] > 0.52 and r['return'] > 0 and r['trades'] >= 30:
+            score = r['return']  # Simple: highest return
+            if score > best_score:
+                best_score = score
+                best_threshold = threshold
+    
+    print(f"\n=== RECOMMENDATION ===")
+    if best_threshold:
+        print(f"Best threshold: >{best_threshold*100:.1f}%")
+        print(f"This threshold shows both directional accuracy and profitability")
+        print(f"Ready for filter testing with this baseline")
+    else:
+        print("No threshold meets minimum criteria (>52% win rate, >0% return, 30+ trades)")
+        print("Consider expanding dataset or adjusting signal definition")
+    
+    return results, best_threshold
+
+if __name__ == "__main__":
+    test_momentum_thresholds()

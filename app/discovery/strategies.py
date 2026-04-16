@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from app.discovery.scoring import clamp, clamp01
 from app.discovery.types import DiscoveryCandidate, FeatureRow
+from app.discovery.strategies.volatility_breakout import volatility_breakout
 
 
 def _as_json(meta: dict[str, Any]) -> str:
@@ -289,6 +290,8 @@ STRATEGIES: dict[str, Callable[[FeatureRow], tuple[float | None, str, dict[str, 
     "balance_sheet_survivor": balance_sheet_survivor,
     # AND-gated regime sniper — only fires in fear regime (VIX > VIX3M), 0–3 signals/day
     "sniper_coil": sniper_coil,
+    # Core volatility breakout strategy — regime-filtered trend following
+    "volatility_breakout": volatility_breakout,
 }
 
 
@@ -304,6 +307,8 @@ THRESHOLDS: dict[str, float] = {
     "balance_sheet_survivor": 0.60,
     # sniper_coil threshold is enforced absolutely (not cross-sectional rank)
     "sniper_coil": 0.60,
+    # volatility breakout threshold
+    "volatility_breakout": 0.60,
 }
 
 # Universe filters applied before scoring (removes penny stocks and illiquid names).

@@ -4,6 +4,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Literal
 
+# Add SignalDirection enum
+SignalDirection = Literal[-1, 0, 1]
+"""Type for signal directions:
+- -1: Short/sell signal
+-  0: Neutral/no signal
+-  1: Long/buy signal
+"""
+
+# Export Signal class
+from app.core.signal import Signal
+
 Direction = Literal["positive", "negative", "neutral", "mixed"]
 PredictionDirection = Literal["up", "down", "flat"]
 
