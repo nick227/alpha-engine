@@ -10,13 +10,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
-import sys
-from pathlib import Path
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-_here = Path(__file__).resolve()
-sys.path.insert(0, str(_here.parents[2]))
 
 from app.core.regime_v3 import RegimeClassifierV3, TrendRegime, VolatilityRegime
 

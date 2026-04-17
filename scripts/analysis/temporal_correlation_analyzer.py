@@ -16,17 +16,12 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
-import sys
-from pathlib import Path
 import requests
 import json
 from collections import defaultdict
 import yfinance as yf
 
-_here = Path(__file__).resolve()
-sys.path.insert(0, str(_here.parents[2]))
-
-from strategy_performance_periods import StrategyPerformanceAnalyzer
+from .strategy_performance_periods import StrategyPerformanceAnalyzer
 
 
 class TemporalCorrelationAnalyzer:

@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 
-from temporal_correlation_analyzer import TemporalCorrelationAnalyzer
+from .temporal_correlation_analyzer import TemporalCorrelationAnalyzer
 
 
 class InsightType(Enum):
