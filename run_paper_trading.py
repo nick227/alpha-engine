@@ -116,6 +116,108 @@ def create_predictions_from_queue(
     return created
 
 
+def materialize_discovery_predictions_after_run_queue(
+    repo: AlphaRepository,
+    as_of_date: date,
+    *,
+    tenant_id: str = "default",
+) -> int:
+    """
+    After `prediction_cli run-queue`, queue rows are `processed`. Insert matching
+    `predictions` rows for replay/reporting (discovery mode) when missing.
+    """
+    rows = repo.conn.execute(
+        """
+        SELECT pq.symbol, pq.source, pq.metadata_json
+        FROM prediction_queue pq
+        WHERE pq.tenant_id = ?
+          AND pq.as_of_date = ?
+          AND pq.source LIKE 'discovery_%'
+          AND pq.status = 'processed'
+          AND NOT EXISTS (
+            SELECT 1 FROM predictions p
+            WHERE p.tenant_id = ?
+              AND p.ticker = pq.symbol
+              AND p.mode = 'discovery'
+              AND substr(p.timestamp, 1, 10) = pq.as_of_date
+          )
+        """,
+        (tenant_id, as_of_date.isoformat(), tenant_id),
+    ).fetchall()
+
+    if not rows:
+        print(f"No processed discovery queue rows needing predictions materialization for {as_of_date}")
+        return 0
+
+    created = 0
+    for row in rows:
+        symbol = row["symbol"]
+        metadata = json.loads(row["metadata_json"])
+        strategy = metadata.get("strategy", "unknown")
+        direction = metadata.get("direction", "UP")
+        avg_score = metadata.get("avg_score", 0.5)
+        horizon_days = int(metadata.get("horizon_days") or 5)
+
+        pred_id = str(uuid.uuid4())
+        created_at = datetime.combine(as_of_date, datetime.min.time()).replace(
+            hour=9, minute=30, tzinfo=timezone.utc
+        )
+
+        price_row = repo.conn.execute(
+            """
+            SELECT close FROM price_bars
+            WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND DATE(timestamp) <= ?
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (tenant_id, symbol, as_of_date.isoformat()),
+        ).fetchone()
+
+        if not price_row:
+            price_row = repo.conn.execute(
+                """
+                SELECT close FROM feature_snapshot
+                WHERE symbol = ? AND as_of_date <= ?
+                ORDER BY as_of_date DESC LIMIT 1
+                """,
+                (symbol, as_of_date.isoformat()),
+            ).fetchone()
+
+        if not price_row:
+            continue
+
+        entry_price = float(price_row["close"])
+
+        repo.conn.execute(
+            """
+            INSERT INTO predictions (
+                id, tenant_id, strategy_id, ticker, mode, timestamp,
+                confidence, prediction, horizon, entry_price, scored_event_id,
+                feature_snapshot_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pred_id,
+                tenant_id,
+                f"{strategy}_v1_paper",
+                symbol,
+                "discovery",
+                created_at.isoformat(),
+                float(avg_score),
+                "BUY" if direction == "UP" else "SELL",
+                f"{horizon_days}d",
+                entry_price,
+                pred_id,
+                json.dumps(metadata),
+            ),
+        )
+        created += 1
+        print(f"Materialized: {symbol} {direction} @ ${entry_price:.2f} (conf: {float(avg_score):.3f})")
+
+    repo.conn.commit()
+    print(f"Materialized {created} discovery predictions for {as_of_date}")
+    return created
+
+
 def run_replay_for_expired(
     repo: AlphaRepository,
     as_of_date: date,
@@ -309,13 +411,29 @@ def main() -> None:
     parser.add_argument("--days", type=int, help="Number of trading days")
     parser.add_argument("--report-only", action="store_true", help="Only generate report")
     parser.add_argument("--replay", action="store_true", help="Score all expired discovery predictions")
-    
+    parser.add_argument(
+        "--materialize-discovery-predictions",
+        action="store_true",
+        help="Insert predictions rows from processed discovery queue (after prediction_cli run-queue)",
+    )
+    parser.add_argument(
+        "--materialize-date",
+        default=None,
+        help="As-of date YYYY-MM-DD for --materialize-discovery-predictions (default: today)",
+    )
+
     args = parser.parse_args()
-    
+
     repo = AlphaRepository(args.db)
     repo.conn.execute("PRAGMA journal_mode=WAL;")
     repo.conn.execute("PRAGMA busy_timeout=5000;")
-    
+
+    if args.materialize_discovery_predictions:
+        as_of = date.fromisoformat(args.materialize_date) if args.materialize_date else date.today()
+        materialize_discovery_predictions_after_run_queue(repo, as_of)
+        repo.close()
+        return
+
     if args.replay:
         scored = run_replay_for_expired(repo, date.today())
         print(f"Replay complete: {scored} predictions scored")

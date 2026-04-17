@@ -29,13 +29,20 @@ The inner script sets `ROOT` from the location of `scripts\windows\run_daily_pip
 
 All steps append to the same daily log file (see §4). Any step that exits non-zero aborts the run: the batch logs `STEP N FAILED`, then `Pipeline ABORTED`, removes the lock file, and exits with code `1`.
 
+The batch sets **`ASOF`** to today’s calendar date (`YYYY-MM-DD`) for steps that need an explicit as-of label.
+
 | Step | Purpose | Command (from repo root) |
 |------|---------|---------------------------|
 | **1** | Download / refresh price bars | `python dev_scripts\scripts\download_prices_daily.py` |
-| **2** | Discovery and queue predictions for promoted strategies | `python dev_scripts\scripts\nightly_discovery_pipeline.py` |
-| **3** | Create predictions from the queue (paper trading path) | `python run_paper_trading.py --days 1` |
-| **4** | Replay: score predictions whose horizon has expired | `python run_paper_trading.py --replay` |
-| **5** | Backfill outcomes where prices now allow scoring | `python dev_scripts\scripts\auto_backfill_outcomes.py` |
+| **2** | Discovery CLI **nightly**: candidates, watchlist promotion, `prediction_queue`, outcomes, stats, plus **threshold-based** multi-strategy enqueue | `python -m app.discovery.discovery_cli nightly --db data\alpha.db --tenant-id default` |
+| **3** | Build **predicted series** from the queue (engine path) | `python -m app.engine.prediction_cli run-queue --as-of %ASOF% ...` (exit code `3` = partial ticker failures; the batch still treats the step as completed) |
+| **4** | Materialize **`predictions`** rows for discovery queue items (needed for replay/UI that read `predictions`) | `python run_paper_trading.py --materialize-discovery-predictions --materialize-date %ASOF%` |
+| **5** | Replay: score expired discovery predictions | `python run_paper_trading.py --replay` |
+| **6** | Backfill outcomes where prices now allow scoring | `python dev_scripts\scripts\auto_backfill_outcomes.py` |
+
+**Throughput tuning (optional env vars):** `ALPHA_TARGET_SIGNALS_PER_DAY`, `ALPHA_PER_STRATEGY_CAP`, `ALPHA_MIN_DISCOVERY_CONFIDENCE`, `ALPHA_INACTIVE_STRATEGIES` (comma-separated). These feed `app.engine.threshold_queue` and the supplemental enqueue after watchlist rows.
+
+**CLI flags** on `discovery_cli nightly` (instead of env): `--supplement-target`, `--supplement-min-confidence`, `--supplement-per-strategy-cap`, `--no-threshold-supplement`.
 
 **Success:** The log ends with `Pipeline finished OK` and the batch exits `0`.
 
@@ -58,7 +65,7 @@ If a run crashes hard before cleanup, a **stale** `pipeline.lock` can remain and
 
 The batch also writes `pip list` to the top of each run’s section for environment auditing.
 
-**Other logs:** Application code may write structured or per-day logs under `logs\daily\`, `logs\system\`, etc. Those complement but do not replace the batch log for answering “did the scheduled job complete all five steps?”
+**Other logs:** Application code may write structured or per-day logs under `logs\daily\`, `logs\system\`, etc. Those complement but do not replace the batch log for answering “did the scheduled job complete all six steps?”
 
 ---
 

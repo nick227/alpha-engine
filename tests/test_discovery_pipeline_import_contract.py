@@ -72,3 +72,26 @@ def test_nightly_discovery_cli_help_exits_zero() -> None:
     )
     assert r.returncode == 0, r.stderr
     assert "dry-run" in (r.stdout + r.stderr).lower()
+
+
+def test_discovery_cli_nightly_help_exits_zero() -> None:
+    r = subprocess.run(
+        [sys.executable, "-m", "app.discovery.discovery_cli", "nightly", "--help"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "supplement" in (r.stdout + r.stderr).lower()
+
+
+def test_prediction_cli_run_queue_help_exits_zero() -> None:
+    r = subprocess.run(
+        [sys.executable, "-m", "app.engine.prediction_cli", "run-queue", "--help"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert r.returncode == 0, r.stderr

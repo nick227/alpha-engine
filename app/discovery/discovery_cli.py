@@ -187,6 +187,19 @@ def build_parser() -> argparse.ArgumentParser:
     nightly.add_argument("--outcomes-horizons", default="1,5,20")
     nightly.add_argument("--stats-window", type=int, default=30)
     nightly.add_argument("--stats-horizons", default="5,20")
+    nightly.add_argument(
+        "--no-threshold-supplement",
+        action="store_true",
+        help="Skip multi-strategy threshold enqueue after watchlist rows are queued",
+    )
+    nightly.add_argument(
+        "--supplement-target",
+        type=int,
+        default=120,
+        help="Max additional symbols to enqueue via score/confidence gates (default: 120)",
+    )
+    nightly.add_argument("--supplement-min-confidence", type=float, default=0.42)
+    nightly.add_argument("--supplement-per-strategy-cap", type=int, default=22)
 
     return p
 
@@ -472,6 +485,20 @@ def main(argv: list[str] | None = None) -> int:
                     tenant_id=str(args.tenant_id),
                 )
 
+                supplement_summary: dict[str, Any] = {}
+                if not bool(args.no_threshold_supplement):
+                    from app.engine.discovery_integration import supplement_prediction_queue_from_discovery
+
+                    supplement_summary = supplement_prediction_queue_from_discovery(
+                        repo=repo,
+                        disc_summary=disc_summary,
+                        as_of_date=asof,
+                        tenant_id=str(args.tenant_id),
+                        target_signals=int(args.supplement_target),
+                        min_confidence=float(args.supplement_min_confidence),
+                        per_strategy_cap=int(args.supplement_per_strategy_cap),
+                    )
+
                 # quick counts for observability
                 cand_n = int(
                     (repo.conn.execute(
@@ -547,6 +574,7 @@ def main(argv: list[str] | None = None) -> int:
                         "prediction_queue": {
                             "pending": int(pq_pending),
                         },
+                        "threshold_supplement": supplement_summary,
                         "watchlist_size": len(wl),
                         "stats_rows": len(all_rows),
                         "outcomes_scope": str(args.outcomes_scope),
