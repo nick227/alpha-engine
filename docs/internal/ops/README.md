@@ -19,6 +19,7 @@ Runbooks and operational guidance for running, monitoring, and debugging Alpha E
 - `ADMIN_GUIDE.md`
 
 ## Runbooks
+- Daily Windows batch pipeline (scheduled task + five steps): `docs/internal/ops/daily-process.md`
 - Ingestion health checks: `docs/internal/ops/ingestion-health-checks.md`
 - Source mapping + keys/secrets: `docs/internal/ops/secrets-and-keys.md`
 - Backfill + replay operations: `docs/internal/ops/backfill-and-replay.md`
