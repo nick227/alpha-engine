@@ -1,0 +1,189 @@
+# Temporal Correlation Strategy Configuration
+
+# Strategy metadata
+name: "temporal_correlation_strategy"
+description: "Time-based strategy that leverages temporal correlation analysis insights to optimize entry timing, position sizing, and risk management"
+version: "1.0.0"
+base_strategy: "bear_expansion_strategy"
+
+# Temporal signal thresholds
+signal_thresholds:
+  sentiment_threshold: 0.6        # Minimum sentiment score to generate signal
+  volatility_threshold: 0.7       # Minimum VIX percentile deviation
+  economic_event_threshold: 0.5   # Minimum economic event impact
+  seasonal_threshold: 0.4        # Minimum seasonal pattern strength
+  
+# Position sizing adjustments
+position_sizing:
+  max_position_multiplier: 2.0    # Maximum position size multiplier
+  min_position_multiplier: 0.3    # Minimum position size multiplier
+  volatility_adjustment_factor: 0.5  # Risk reduction factor for high volatility
+  
+# Signal timing windows (hours)
+signal_expiry_hours:
+  sentiment: 24                   # Sentiment signals expire in 24 hours
+  economic: 48                    # Economic event signals expire in 48 hours
+  volatility: 72                  # Volatility signals expire in 72 hours
+  seasonal: 168                  # Seasonal signals expire in 1 week
+  sector: 24                     # Sector signals expire in 24 hours
+  
+# Risk management
+risk_management:
+  max_concurrent_signals: 5      # Maximum number of concurrent temporal signals
+  confidence_threshold: 0.6     # Minimum confidence to accept signal
+  conflict_resolution: "highest_confidence"  # How to resolve conflicting signals
+  
+# Data source configuration
+data_sources:
+  market_indicators:
+    vix:
+      source: "yahoo_finance"
+      symbol: "^VIX"
+      update_frequency: "real_time"
+    spx:
+      source: "yahoo_finance"
+      symbol: "^GSPC"
+      update_frequency: "real_time"
+    tnx:
+      source: "yahoo_finance"
+      symbol: "^TNX"
+      update_frequency: "daily"
+    dxy:
+      source: "yahoo_finance"
+      symbol: "DX-Y.NYB"
+      update_frequency: "daily"
+      
+  economic_calendar:
+    source: "investing.com"
+    impact_levels: ["high", "medium", "low"]
+    update_frequency: "hourly"
+    
+  news_sentiment:
+    source: "news_api"
+    categories: ["technology", "financial", "economic", "political"]
+    update_frequency: "hourly"
+    
+  sector_etfs:
+    technology: "XLK"
+    financials: "XLF"
+    healthcare: "XLV"
+    energy: "XLE"
+    consumer: "XLY"
+    industrial: "XLI"
+    materials: "XLB"
+    utilities: "XLU"
+    real_estate: "XLRE"
+    communications: "XLC"
+
+# Temporal analysis parameters
+temporal_analysis:
+  performance_windows: [7, 14, 30, 90]  # Days for performance period analysis
+  correlation_threshold: 0.5              # Minimum correlation for insights
+  statistical_significance: 0.05           # P-value threshold
+  min_sample_size: 20                      # Minimum periods for analysis
+  
+# Signal weights for position sizing
+signal_weights:
+  sentiment_timing: 0.25
+  economic_event_timing: 0.30
+  volatility_regime: 0.20
+  seasonal_pattern: 0.10
+  sector_rotation: 0.10
+  historical_period: 0.05
+
+# Alert configuration
+alerts:
+  streak_monitoring:
+    enabled: true
+    winning_streak_thresholds: [3, 5, 8]
+    losing_streak_thresholds: [3, 5]
+    
+  temporal_signals:
+    enabled: true
+    high_confidence_threshold: 0.8
+    conflicting_signals_threshold: 3
+    
+  performance_anomalies:
+    enabled: true
+    deviation_threshold: 2.0  # Standard deviations
+
+# Historical patterns (from correlation analysis)
+historical_patterns:
+  strong_months: [11, 12]  # November, December
+  weak_months: [4, 5]      # April, May
+  strong_quarters: [4]    # Q4
+  weak_quarters: [2]       # Q2
+  
+  day_of_week_patterns:
+    strong_days: [1, 2, 3]  # Tuesday, Wednesday, Thursday
+    weak_days: [0, 4]       # Monday, Friday
+
+# Sector correlations (from correlation analysis)
+sector_correlations:
+  technology:
+    correlation: 0.73
+    confidence: 0.8
+    action: "increase"
+  financials:
+    correlation: -0.45
+    confidence: 0.6
+    action: "decrease"
+  healthcare:
+    correlation: 0.32
+    confidence: 0.5
+    action: "neutral"
+
+# Economic event sensitivities
+economic_sensitivities:
+  fomc_meetings:
+    pre_event_adjustment: -0.3
+    post_event_adjustment: 0.1
+    confidence: 0.7
+    
+  cpi_releases:
+    surprise_threshold: 0.02
+    positive_surprise_action: "increase"
+    negative_surprise_action: "decrease"
+    
+  employment_reports:
+    surprise_threshold: 50000  # Jobs
+    positive_surprise_action: "increase"
+    negative_surprise_action: "decrease"
+
+# Volatility regime parameters
+volatility_regimes:
+  low_volatility:
+    vix_percentile_max: 0.2
+    position_multiplier: 1.5
+    stop_loss_multiplier: 1.0
+    
+  normal_volatility:
+    vix_percentile_min: 0.2
+    vix_percentile_max: 0.8
+    position_multiplier: 1.0
+    stop_loss_multiplier: 1.25
+    
+  high_volatility:
+    vix_percentile_min: 0.8
+    position_multiplier: 0.5
+    stop_loss_multiplier: 1.5
+
+# Performance tracking
+performance_tracking:
+  track_temporal_adjustments: true
+  track_signal_accuracy: true
+  track_position_multiplier_effectiveness: true
+  reporting_frequency: "daily"
+
+# Integration settings
+integration:
+  base_strategy_override: false  # Whether temporal signals can override base strategy
+  minimum_base_signal_strength: 0.3  # Minimum base signal strength to consider
+  signal_combination_method: "weighted_average"  # How to combine temporal signals
+  
+# Backtesting parameters
+backtesting:
+  include_temporal_factors: true
+  temporal_factor_analysis: true
+  signal_decay_analysis: true
+  regime_specific_analysis: true
