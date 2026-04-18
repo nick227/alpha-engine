@@ -4,6 +4,8 @@
 
 Provide fast, read-only access to computed trading intelligence from alpha-engine to trading-platform over a **private network**.
 
+**Consumer setup (HTTP client, secrets, checklist):** see [trading-platform-alpha-engine-integration.md](./trading-platform-alpha-engine-integration.md).
+
 ## Base URL
 
 - `http://alpha-engine.internal:<PORT>`
