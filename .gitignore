@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 *.log
 *.sqlite3
+*.db
 dist/
 build/
 outputs/
