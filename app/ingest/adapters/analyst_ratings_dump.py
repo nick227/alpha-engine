@@ -23,10 +23,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, List
+from typing import Any, Iterator
 
+import numpy as np
 import pandas as pd
 
+from app.core.event_ticker_aliases import EVENT_STOCK_ALIASES, canonical_event_ticker
 from app.ingest.adapters.dump_adapter import DumpAdapter
 
 
@@ -90,14 +92,27 @@ class AnalystRatingsDumpAdapter(DumpAdapter):
                 df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce")
 
                 mask = (df["date"] >= start) & (df["date"] < end)
+                su = df["stock"].astype(str).str.strip().str.upper()
                 if symbols_upper:
-                    mask = mask & df["stock"].str.upper().isin(symbols_upper)
+                    parts: list[pd.Series] = []
+                    for sym in symbols_upper:
+                        if sym in EVENT_STOCK_ALIASES:
+                            parts.append(su.isin(EVENT_STOCK_ALIASES[sym]))
+                        else:
+                            parts.append(su == sym)
+                    tick_mask = parts[0]
+                    for q in parts[1:]:
+                        tick_mask = tick_mask | q
+                    mask = mask & tick_mask
 
-                df = df[mask]
+                df = df.loc[mask].copy()
+                if df.empty:
+                    continue
 
-                if not df.empty:
-                    df = df.rename(columns={"stock": "ticker"})
-                    yield df
+                up = df["stock"].astype(str).str.strip().str.upper()
+                df["ticker"] = np.where(up == "FB", "META", up)
+                df = df.drop(columns=["stock"])
+                yield df
 
             except Exception as e:
                 continue
