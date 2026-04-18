@@ -11,7 +11,7 @@ import sqlite3
 from typing import Any
 
 
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+def sqlite_table_exists(conn: sqlite3.Connection, name: str) -> bool:
     try:
         r = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
@@ -41,7 +41,7 @@ def build_ticker_why_panel(
     sym = str(ticker).strip().upper()
     out: dict[str, Any] = {"ticker": sym, "tenant_id": tenant_id, "candidate_queue": None, "recent_predictions": []}
 
-    if _has_table(conn, "candidate_queue"):
+    if sqlite_table_exists(conn, "candidate_queue"):
         try:
             row = conn.execute(
                 """
@@ -72,7 +72,6 @@ def build_ticker_why_panel(
         for r in rows:
             d = dict(r)
             ctx = _j(str(d.get("ranking_context_json") or ""))
-            d["ranking_context_parsed"] = ctx
             d["temporal_multiplier"] = ctx.get("temporal_multiplier")
             d["rank_score_base"] = ctx.get("rank_score_base")
             mc = ctx.get("market_context") if isinstance(ctx.get("market_context"), dict) else {}
@@ -183,7 +182,7 @@ def build_what_changed_recent(
     hours: int = 24,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"admission_runs": [], "swaps_recent": [], "candidate_touch_recent": []}
-    if _has_table(conn, "admission_metrics"):
+    if sqlite_table_exists(conn, "admission_metrics"):
         try:
             rows = conn.execute(
                 """
@@ -207,7 +206,7 @@ def build_what_changed_recent(
         except Exception:
             pass
 
-    if _has_table(conn, "candidate_queue"):
+    if sqlite_table_exists(conn, "candidate_queue"):
         try:
             rows = conn.execute(
                 """
@@ -241,7 +240,7 @@ def build_topn_quality_snapshot(
     mults: list[float] = []
     lenses: dict[str, int] = {}
     warn_ct = 0
-    if _has_table(conn, "candidate_queue"):
+    if sqlite_table_exists(conn, "candidate_queue"):
         try:
             rows = conn.execute(
                 f"""

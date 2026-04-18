@@ -50,6 +50,8 @@ Returns risers (rank improving), fallers (rank declining), new entrants / droppe
 
 **Snapshot semantics:** movers are computed **between the two most recent `ranking_snapshots` timestamps** for the tenant—not calendar days. Documented timestamps in the response identify which pair was used.
 
+**Rank direction:** lower **rank #** is better. **`rank_delta` = rank_today − rank_yesterday** (negative ⇒ improving). Each delta row should include a **`movement`** label (`↓ improving` / `↑ weakening` / `→ flat`). Responses include **`max_rank_depth`** (per-snapshot cap used when assigning rank). For multi-snapshot history charts, **`rank_norm` = rank / max_rank_depth** (~0 best, ~1 worst) keeps scales comparable.
+
 ### 3. Ticker explainability
 
 `GET /ticker/{symbol}/why?limit=10`

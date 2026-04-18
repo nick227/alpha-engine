@@ -7,7 +7,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from app.ui.middle.explainability_constants import MIN_SAMPLE_N
+from app.ui.middle.explainability_constants import DEFAULT_MAX_RANK_DEPTH, MIN_SAMPLE_N
+from app.ui.middle.explainability_read_model import sqlite_table_exists
 
 
 def _rank_delta_movement(rank_delta: int) -> str:
@@ -17,17 +18,6 @@ def _rank_delta_movement(rank_delta: int) -> str:
     if rank_delta > 0:
         return "↑ weakening"
     return "→ flat"
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    try:
-        r = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-            (name,),
-        ).fetchone()
-        return r is not None
-    except Exception:
-        return False
 
 
 def _ranks_at_timestamp(
@@ -62,7 +52,7 @@ def build_ranking_movers(
     conn: sqlite3.Connection,
     *,
     tenant_id: str,
-    max_rank_depth: int = 800,
+    max_rank_depth: int = DEFAULT_MAX_RANK_DEPTH,
     top_n: int = 20,
 ) -> dict[str, Any]:
     """
@@ -81,7 +71,7 @@ def build_ranking_movers(
         "dropped_from_latest": [],
         "all_deltas": [],
     }
-    if not _has_table(conn, "ranking_snapshots"):
+    if not sqlite_table_exists(conn, "ranking_snapshots"):
         empty["message"] = "ranking_snapshots table missing"
         return empty
     try:
@@ -228,8 +218,10 @@ def build_outcome_trend_last_n(
         return out
 
     def _wr(block: list[dict[str, Any]]) -> float:
-        ok = sum(1 for r in block if int(r.get("direction_correct") or 0))
-        return ok / len(block) if block else 0.0
+        if not block:
+            return 0.0
+        ok = sum(int(r.get("direction_correct") or 0) for r in block)
+        return ok / len(block)
 
     w1, w2 = _wr(first), _wr(second)
     out["win_rate_first_half"] = w1
@@ -250,7 +242,7 @@ def build_rank_history_series(
     tenant_id: str,
     ticker: str,
     max_snapshots: int = 10,
-    max_rank_depth: int = 800,
+    max_rank_depth: int = DEFAULT_MAX_RANK_DEPTH,
 ) -> dict[str, Any]:
     """
     Rank of one ticker across the last N distinct ranking_snapshots times (chronological for charts).
@@ -264,7 +256,7 @@ def build_rank_history_series(
         "series": [],
         "message": None,
     }
-    if not _has_table(conn, "ranking_snapshots"):
+    if not sqlite_table_exists(conn, "ranking_snapshots"):
         out["message"] = "ranking_snapshots table missing"
         return out
     try:
@@ -325,7 +317,7 @@ def build_weekly_performance_summary(
         "overall": {"n": 0, "win_rate": None, "avg_return": None, "low_sample": False},
         "by_strategy": [],
     }
-    if not _has_table(conn, "prediction_outcomes"):
+    if not sqlite_table_exists(conn, "prediction_outcomes"):
         return out
     try:
         row = conn.execute(

@@ -6,12 +6,12 @@ import pandas as pd
 import streamlit as st
 
 from app.ui.middle.dashboard_service import DashboardService
-from app.ui.middle.explainability_constants import MIN_SAMPLE_N
+from app.ui.middle.explainability_constants import DEFAULT_MAX_RANK_DEPTH, MIN_SAMPLE_N
 
 
 def _style_low_sample_rows(df: pd.DataFrame, *, n_col: str = "n"):
     """Gray background when n < MIN_SAMPLE_N (matches strategy×ticker matrix)."""
-    if n_col not in df.columns:
+    if df.empty or n_col not in df.columns:
         return df.style
     low = df[n_col].fillna(0).astype(float) < float(MIN_SAMPLE_N)
     return df.style.apply(
@@ -129,8 +129,8 @@ def explainability_main(
         if bs:
             df_bs = pd.DataFrame(bs)
             st.dataframe(_style_low_sample_rows(df_bs), use_container_width=True, hide_index=True)
-        else:
-            st.caption("No outcomes in the 7-day window.")
+        elif int(oa.get("n") or 0) > 0:
+            st.caption("No per-strategy rows for this window (check joins).")
 
         t2 = st.selectbox("Ticker (performance)", options=tickers, key="perf_t", index=_idx) if tickers else None
         if t2:
@@ -164,7 +164,9 @@ def explainability_main(
 
     with tabs[2]:
         mv = service.get_explain_ranking_movers(tenant_id=tenant_id, top_n=25)
-        mrd = int(mv.get("max_rank_depth") or 800)
+        mrd = int(mv.get("max_rank_depth") or DEFAULT_MAX_RANK_DEPTH)
+        if mv.get("message"):
+            st.info(mv["message"])
         st.info(
             "**Rank #** — **lower is better** (1 ≈ top). "
             "**rank Δ** = rank_today − rank_yesterday: "
@@ -179,8 +181,6 @@ def explainability_main(
             f"**Latest snapshot:** `{mv.get('snapshot_ts_latest')}`  \n"
             f"**Previous:** `{mv.get('snapshot_ts_previous')}`"
         )
-        if mv.get("message"):
-            st.info(mv["message"])
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Top risers (improved rank)")
