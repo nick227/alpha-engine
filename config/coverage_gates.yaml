@@ -1,0 +1,32 @@
+# Known-good coverage for raw_dumps before backfill / scheduled pipeline.
+# Keep tickers aligned with config/target_stocks.yaml unless you intentionally differ.
+version: 1
+
+tickers:
+  - AAPL
+  - MSFT
+  - SPY
+  - NVDA
+  - TSLA
+  - AMZN
+  - META
+  - AMD
+  - QQQ
+  - IWM
+
+# Required files: data/raw_dumps/fred/{SERIES}.parquet
+fred_series:
+  - FEDFUNDS
+  - T10Y2Y
+  - UNRATE
+  - CPIAUCSL
+
+# Combined row count: raw_partner_headlines + raw_analyst_ratings (META includes FB rows).
+analyst_rows_min_default: 100
+analyst_rows_min:
+  META: 50
+
+gate:
+  require_price_file: true
+  require_analyst_rows: true
+  exit_nonzero_on_failure: true

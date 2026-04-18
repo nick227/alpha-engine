@@ -1,3 +1,4 @@
+# Coverage thresholds / gate list: config/coverage_gates.yaml (keep tickers in sync when possible).
 - AAPL
 - MSFT
 - NVDA
