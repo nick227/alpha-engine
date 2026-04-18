@@ -164,6 +164,7 @@ def rank_predictions_for_date(
                 "market_context": market_ctx,
             }
 
+        config_snap = temporal_ranking_config_snapshot()
         scored: list[tuple[float, str, str]] = []
         for r in rows:
             keys = _discovery_strategy_keys(str(r["strategy_id"]), str(r["feature_snapshot_json"] or "{}"))
@@ -188,7 +189,7 @@ def rank_predictions_for_date(
                 "temporal_multiplier": round(m, 6),
                 "rank_score_base": round(rs, 6),
                 "rank_score": round(rs_adj, 6),
-                "config": temporal_ranking_config_snapshot(),
+                "config": config_snap,
             }
             conn.execute(
                 """

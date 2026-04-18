@@ -127,6 +127,7 @@ def test_rank_predictions_for_date_sets_rank_score(tmp_path) -> None:
         snap = json.loads(str(row["ranking_context_json"] or "{}"))
         assert snap.get("market_context", {}).get("vix") is not None
         assert "rank_score_base" in snap and "temporal_multiplier" in snap
+        assert snap.get("config", {}).get("pipeline_version")
     finally:
         repo2.close()
 

@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import subprocess
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PIPELINE_VERSION_CACHE: str | None = None
 
 # Set ALPHA_RANK_TEMPORAL=0 to disable multipliers (base rank only).
 _RANK_TEMPORAL = os.getenv("ALPHA_RANK_TEMPORAL", "1").strip().lower() not in ("0", "false", "no")
@@ -19,6 +23,36 @@ _RANK_TEMPORAL = os.getenv("ALPHA_RANK_TEMPORAL", "1").strip().lower() not in ("
 _VIX_FALLBACK_RANK_MULT = float(os.getenv("ALPHA_VIX_FALLBACK_RANK_MULT", "0.95"))
 
 _AUDIT_LOG = Path(os.getenv("ALPHA_MARKET_CONTEXT_AUDIT_LOG", "logs/market_context_audit.log"))
+
+
+def pipeline_version() -> str:
+    """
+    Short git SHA or ALPHA_PIPELINE_VERSION for cohort analysis across code changes.
+    Cached after first call (rank loop may invoke config snapshot many times per batch).
+    """
+    global _PIPELINE_VERSION_CACHE
+    if _PIPELINE_VERSION_CACHE is not None:
+        return _PIPELINE_VERSION_CACHE
+    env = os.getenv("ALPHA_PIPELINE_VERSION", "").strip()
+    if env:
+        _PIPELINE_VERSION_CACHE = env
+        return _PIPELINE_VERSION_CACHE
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if r.returncode == 0 and r.stdout:
+            _PIPELINE_VERSION_CACHE = r.stdout.strip()
+            return _PIPELINE_VERSION_CACHE
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    _PIPELINE_VERSION_CACHE = "unknown"
+    return _PIPELINE_VERSION_CACHE
 
 
 def _calendar_date_from_bar_ts(ts_raw: str | None) -> date | None:
@@ -193,6 +227,7 @@ def temporal_ranking_config_snapshot() -> dict[str, Any]:
     return {
         "rank_temporal_heuristics": bool(_RANK_TEMPORAL),
         "vix_fallback_rank_mult": float(_VIX_FALLBACK_RANK_MULT),
+        "pipeline_version": pipeline_version(),
     }
 
 

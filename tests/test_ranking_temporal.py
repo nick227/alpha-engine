@@ -7,7 +7,22 @@ from app.engine.ranking_temporal import (
     infer_regime,
     market_context_log_line,
     normalize_strategy_type,
+    temporal_ranking_config_snapshot,
 )
+
+
+def test_temporal_ranking_config_includes_pipeline_version() -> None:
+    cfg = temporal_ranking_config_snapshot()
+    assert "pipeline_version" in cfg
+    assert isinstance(cfg["pipeline_version"], str) and len(cfg["pipeline_version"]) >= 1
+
+
+def test_pipeline_version_env_override(monkeypatch) -> None:
+    import app.engine.ranking_temporal as rt
+
+    monkeypatch.setattr(rt, "_PIPELINE_VERSION_CACHE", None)
+    monkeypatch.setenv("ALPHA_PIPELINE_VERSION", "custom-build-99")
+    assert rt.pipeline_version() == "custom-build-99"
 
 
 def test_infer_regime() -> None:
