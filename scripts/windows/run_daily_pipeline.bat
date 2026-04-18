@@ -100,33 +100,44 @@ if %ERRORLEVEL% neq 0 (
 echo [%DATE% %TIME%] STEP 6 END: Predictions ranked >> %LOG%
 
 :: ----------------------------------------------------------------
-:: STEP 7 — Replay: score predictions whose horizon has expired
+:: STEP 7 — Persist ranking_snapshots from ranked predictions (movers / top-N read API)
 :: ----------------------------------------------------------------
-echo [%DATE% %TIME%] STEP 7 START: Replaying expired predictions >> %LOG%
-%PYTHON% run_paper_trading.py --replay >> %LOG% 2>&1
+echo [%DATE% %TIME%] STEP 7 START: ranking_snapshots from predictions >> %LOG%
+%PYTHON% -m app.engine.ranking_snapshots_from_predictions --as-of %ASOF% --db data\alpha.db --tenant-id default >> %LOG% 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [%DATE% %TIME%] STEP 7 FAILED >> %LOG%
     goto :abort
 )
-echo [%DATE% %TIME%] STEP 7 END: Replay complete >> %LOG%
+echo [%DATE% %TIME%] STEP 7 END: Ranking snapshot written >> %LOG%
 
 :: ----------------------------------------------------------------
-:: STEP 8 — Backfill any outcomes still NULL now that prices exist
+:: STEP 8 — Replay: score predictions whose horizon has expired
 :: ----------------------------------------------------------------
-echo [%DATE% %TIME%] STEP 8 START: Backfilling outcomes >> %LOG%
-%PYTHON% dev_scripts\scripts\auto_backfill_outcomes.py >> %LOG% 2>&1
+echo [%DATE% %TIME%] STEP 8 START: Replaying expired predictions >> %LOG%
+%PYTHON% run_paper_trading.py --replay >> %LOG% 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [%DATE% %TIME%] STEP 8 FAILED >> %LOG%
     goto :abort
 )
-echo [%DATE% %TIME%] STEP 8 END: Backfill complete >> %LOG%
+echo [%DATE% %TIME%] STEP 8 END: Replay complete >> %LOG%
 
 :: ----------------------------------------------------------------
-:: STEP 9 — Real vs sim learning snapshot (log line; does not fail pipeline)
+:: STEP 9 — Backfill any outcomes still NULL now that prices exist
 :: ----------------------------------------------------------------
-echo [%DATE% %TIME%] STEP 9 START: Learning feedback report >> %LOG%
+echo [%DATE% %TIME%] STEP 9 START: Backfilling outcomes >> %LOG%
+%PYTHON% dev_scripts\scripts\auto_backfill_outcomes.py >> %LOG% 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo [%DATE% %TIME%] STEP 9 FAILED >> %LOG%
+    goto :abort
+)
+echo [%DATE% %TIME%] STEP 9 END: Backfill complete >> %LOG%
+
+:: ----------------------------------------------------------------
+:: STEP 10 — Real vs sim learning snapshot (log line; does not fail pipeline)
+:: ----------------------------------------------------------------
+echo [%DATE% %TIME%] STEP 10 START: Learning feedback report >> %LOG%
 %PYTHON% -m app.analytics.learning_feedback_report --db data\alpha.db --tenant-id default >> %LOG% 2>&1
-echo [%DATE% %TIME%] STEP 9 END: Learning feedback report >> %LOG%
+echo [%DATE% %TIME%] STEP 10 END: Learning feedback report >> %LOG%
 
 :: ----------------------------------------------------------------
 :: Success

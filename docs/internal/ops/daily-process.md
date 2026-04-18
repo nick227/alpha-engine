@@ -39,9 +39,10 @@ The batch sets **`ASOF`** to today’s calendar date (`YYYY-MM-DD`) for steps th
 | **4** | Build **predicted series** from the queue (engine path) | `python -m app.engine.prediction_cli run-queue --as-of %ASOF% ...` (exit code `3` = partial ticker failures; the batch still treats the step as completed) |
 | **5** | Materialize **`predictions`** rows for discovery queue items (needed for replay/UI that read `predictions`) | `python run_paper_trading.py --materialize-discovery-predictions --materialize-date %ASOF%` |
 | **6** | **Prediction rank + trim:** set `predictions.rank_score` from confidence + strategy metrics; optional global top-N / per-strategy cap (deletes unscored rows below the cut) | `python -m app.engine.prediction_rank_sqlite --as-of %ASOF% --db data\alpha.db --tenant-id default` |
-| **7** | Replay: score expired discovery predictions | `python run_paper_trading.py --replay` |
-| **8** | Backfill outcomes where prices now allow scoring | `python dev_scripts\scripts\auto_backfill_outcomes.py` |
-| **9** | **Real vs sim** snapshot (matched `predictions` + `prediction_outcomes` + closed `trades` by `source`) | `python -m app.analytics.learning_feedback_report --db data\alpha.db --tenant-id default` (appends one line to the batch log: avg sim / real / execution gap by source; use `--json` for full rollups) |
+| **7** | **Ranking snapshot:** write `ranking_snapshots` from ranked **discovery** `predictions` (one row per ticker, best `rank_score`; powers movers / top-N read API) | `python -m app.engine.ranking_snapshots_from_predictions --as-of %ASOF% --db data\alpha.db --tenant-id default` |
+| **8** | Replay: score expired discovery predictions | `python run_paper_trading.py --replay` |
+| **9** | Backfill outcomes where prices now allow scoring | `python dev_scripts\scripts\auto_backfill_outcomes.py` |
+| **10** | **Real vs sim** snapshot (matched `predictions` + `prediction_outcomes` + closed `trades` by `source`) | `python -m app.analytics.learning_feedback_report --db data\alpha.db --tenant-id default` (appends one line to the batch log: avg sim / real / execution gap by source; use `--json` for full rollups) |
 
 **Throughput tuning (optional env vars):** `ALPHA_TARGET_SIGNALS_PER_DAY`, `ALPHA_PER_STRATEGY_CAP`, `ALPHA_MIN_DISCOVERY_CONFIDENCE`, `ALPHA_INACTIVE_STRATEGIES` (comma-separated). These feed `app.engine.threshold_queue` and the supplemental enqueue after watchlist rows.
 
@@ -58,6 +59,20 @@ After each **queue_rank_trim** / **prediction_rank** run, the CLI prints a one-l
 **CLI flags** on `discovery_cli nightly` (instead of env): `--supplement-target`, `--supplement-min-confidence`, `--supplement-per-strategy-cap`, `--no-threshold-supplement`.
 
 **Success:** The log ends with `Pipeline finished OK` and the batch exits `0`.
+
+---
+
+## 2b. Non-daily jobs (cadence guidance)
+
+These are **not** part of `run_daily_pipeline.bat`. Use a separate scheduled task or manual runs; append to a simple log (e.g. `logs\periodic_runs.log`) with date + command + exit code if you need auditability.
+
+| Job | Default depth / scope | Suggested cadence | Why |
+|-----|------------------------|-------------------|-----|
+| **Strategy backtests** | Per script / strategy | **Weekly** or **on strategy/config change** | Validates logic without paying daily latency and DB churn. |
+| **Discovery milestone (“deep soak”)** | `run_discovery_milestone.py`: **`--history-days` default 180**, **`--step-days` default 7** (weekly as-of grid), wide universe unless `--use-target-universe` | **Monthly or quarterly** for full soak; **weekly** only if you need faster queue/admission history at the cost of runtime | Replays discovery + admission over a long window so `candidate_queue` / metrics reflect history; heavier than nightly. |
+| **Target-only deep soak** | Same script with **`--use-target-universe`** | **Weekly or monthly** | Lighter run over `config\target_stocks.yaml` only. |
+
+**Persistence:** Ingestion backfills already use **`ingest_runs`** for idempotency. For periodic soak/backtest runs, a one-line append to `logs\periodic_runs.log` (or your existing job ledger pattern) is enough until you need a first-class table.
 
 ---
 
@@ -78,7 +93,7 @@ If a run crashes hard before cleanup, a **stale** `pipeline.lock` can remain and
 
 The batch also writes `pip list` to the top of each run’s section for environment auditing.
 
-**Other logs:** Application code may write structured or per-day logs under `logs\daily\`, `logs\system\`, etc. Those complement but do not replace the batch log for answering “did the scheduled job complete all nine steps?”
+**Other logs:** Application code may write structured or per-day logs under `logs\daily\`, `logs\system\`, etc. Those complement but do not replace the batch log for answering “did the scheduled job complete all ten steps?”
 
 ---
 
