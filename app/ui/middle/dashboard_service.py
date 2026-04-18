@@ -1366,3 +1366,26 @@ class DashboardService:
             for r in rankings
         ]
         return base
+
+    def get_explain_ranking_movers(self, *, tenant_id: str = "default", top_n: int = 20) -> dict[str, Any]:
+        from app.ui.middle.explainability_rank_trends import build_ranking_movers
+
+        return build_ranking_movers(self.store.conn, tenant_id=tenant_id, top_n=int(top_n))
+
+    def get_explain_outcome_trend(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str,
+        last_n: int = 10,
+    ) -> dict[str, Any]:
+        from app.ui.middle.explainability_rank_trends import build_outcome_trend_last_n
+
+        return build_outcome_trend_last_n(
+            self.store.conn, tenant_id=tenant_id, ticker=ticker, last_n=int(last_n)
+        )
+
+    def get_explain_weekly_performance(self, *, tenant_id: str = "default") -> dict[str, Any]:
+        from app.ui.middle.explainability_rank_trends import build_weekly_performance_summary
+
+        return build_weekly_performance_summary(self.store.conn, tenant_id=tenant_id)

@@ -79,6 +79,22 @@ def build_ticker_why_panel(
             d["vix_age_days"] = mc.get("vix_age_days")
             d["context_warning"] = mc.get("context_warning")
             d["vix_fallback_used"] = mc.get("vix_fallback_used")
+            rb = ctx.get("rank_score_base")
+            tm = ctx.get("temporal_multiplier")
+            rs = d.get("rank_score")
+            prod = None
+            if rb is not None and tm is not None:
+                try:
+                    prod = float(rb) * float(tm)
+                except (TypeError, ValueError):
+                    prod = None
+            d["confidence_decomposition"] = {
+                "model_confidence": d.get("confidence"),
+                "rank_score_base": rb,
+                "temporal_multiplier": tm,
+                "rank_score_after_temporal": rs,
+                "base_times_temporal": prod,
+            }
             out["recent_predictions"].append(d)
     except Exception:
         pass

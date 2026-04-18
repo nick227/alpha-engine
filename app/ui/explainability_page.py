@@ -21,7 +21,15 @@ def explainability_main(
     else:
         st.markdown("### Explainability")
 
-    tabs = st.tabs(["Why / Admission", "Performance & Matrix", "What changed", "Top-N health"])
+    tabs = st.tabs(
+        [
+            "Why / Admission",
+            "Performance & Matrix",
+            "Rank movers",
+            "What changed",
+            "Top-N health",
+        ]
+    )
 
     tickers = service.list_tickers(tenant_id=tenant_id)
     default_t = ticker if ticker and ticker in tickers else (tickers[0] if tickers else None)
@@ -47,15 +55,17 @@ def explainability_main(
             else:
                 slim = []
                 for r in rows[:15]:
+                    cd = r.get("confidence_decomposition") or {}
                     slim.append(
                         {
                             "strategy_id": r.get("strategy_id"),
                             "timestamp": r.get("timestamp"),
                             "prediction": r.get("prediction"),
-                            "confidence": r.get("confidence"),
-                            "rank_score": r.get("rank_score"),
-                            "rank_score_base": r.get("rank_score_base"),
-                            "temporal_multiplier": r.get("temporal_multiplier"),
+                            "model_confidence": cd.get("model_confidence"),
+                            "rank_score_base": cd.get("rank_score_base"),
+                            "temporal_mult": cd.get("temporal_multiplier"),
+                            "base_times_temporal": cd.get("base_times_temporal"),
+                            "rank_score": cd.get("rank_score_after_temporal"),
                             "vix_age_days": r.get("vix_age_days"),
                             "context_warning": r.get("context_warning"),
                             "vix_fallback_used": r.get("vix_fallback_used"),
@@ -63,7 +73,39 @@ def explainability_main(
                     )
                 st.dataframe(pd.DataFrame(slim), use_container_width=True, hide_index=True)
 
+            ot_n = st.slider("Outcomes for trend", 5, 10, 10, key="ot_n")
+            trend = service.get_explain_outcome_trend(
+                tenant_id=tenant_id, ticker=t, last_n=int(ot_n)
+            )
+            st.subheader("Recent outcome trend")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Trend", trend.get("trend") or "—")
+            w1 = trend.get("win_rate_first_half")
+            w2 = trend.get("win_rate_second_half")
+            c2.metric("Win rate (older half)", f"{w1:.0%}" if w1 is not None else "—")
+            c3.metric("Win rate (newer half)", f"{w2:.0%}" if w2 is not None else "—")
+            olist = trend.get("outcomes") or []
+            if olist:
+                st.dataframe(pd.DataFrame(olist), use_container_width=True, hide_index=True)
+            else:
+                st.caption("No evaluated outcomes yet for this ticker.")
+
     with tabs[1]:
+        wk = service.get_explain_weekly_performance(tenant_id=tenant_id)
+        st.subheader("Weekly performance (last 7 days, evaluated outcomes)")
+        oa = wk.get("overall") or {}
+        w1, w2, w3 = st.columns(3)
+        w1.metric("N outcomes", int(oa.get("n") or 0))
+        wr = oa.get("win_rate")
+        w2.metric("Win rate", f"{float(wr):.1%}" if wr is not None else "—")
+        ar = oa.get("avg_return")
+        w3.metric("Avg return", f"{float(ar):.3f}" if ar is not None else "—")
+        bs = wk.get("by_strategy") or []
+        if bs:
+            st.dataframe(pd.DataFrame(bs), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No outcomes in the 7-day window.")
+
         t2 = st.selectbox("Ticker (performance)", options=tickers, key="perf_t", index=_idx) if tickers else None
         if t2:
             perf = service.get_explain_per_ticker_performance(tenant_id=tenant_id, ticker=t2)
@@ -95,6 +137,49 @@ def explainability_main(
             st.caption("No matrix rows (need prediction_outcomes in lookback).")
 
     with tabs[2]:
+        mv = service.get_explain_ranking_movers(tenant_id=tenant_id, top_n=25)
+        st.caption(
+            "Compares the two latest distinct `ranking_snapshots` timestamps. "
+            "Δ = rank_today − rank_yesterday (negative = moved up)."
+        )
+        st.markdown(
+            f"**Latest snapshot:** `{mv.get('snapshot_ts_latest')}`  \n"
+            f"**Previous:** `{mv.get('snapshot_ts_previous')}`"
+        )
+        if mv.get("message"):
+            st.info(mv["message"])
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Top risers (improved rank)")
+            st.dataframe(
+                pd.DataFrame(mv.get("risers") or []),
+                use_container_width=True,
+                hide_index=True,
+            )
+        with c2:
+            st.subheader("Top fallers")
+            st.dataframe(
+                pd.DataFrame(mv.get("fallers") or []),
+                use_container_width=True,
+                hide_index=True,
+            )
+        e1, e2 = st.columns(2)
+        with e1:
+            st.subheader("New in latest snapshot")
+            st.dataframe(
+                pd.DataFrame(mv.get("new_in_latest") or []),
+                use_container_width=True,
+                hide_index=True,
+            )
+        with e2:
+            st.subheader("Dropped since previous")
+            st.dataframe(
+                pd.DataFrame(mv.get("dropped_from_latest") or []),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with tabs[3]:
         hrs = st.slider("Hours", 6, 72, 24, key="chg_h")
         ch = service.get_explain_what_changed(tenant_id=tenant_id, hours=int(hrs))
         st.subheader("Admission runs (metrics)")
@@ -104,7 +189,7 @@ def explainability_main(
         st.subheader("candidate_queue touches")
         st.dataframe(pd.DataFrame(ch.get("candidate_touch_recent") or []), use_container_width=True, hide_index=True)
 
-    with tabs[3]:
+    with tabs[4]:
         lim = st.number_input("Top N from rankings", min_value=5, max_value=50, value=20)
         q = service.get_explain_topn_quality(tenant_id=tenant_id, limit=int(lim))
         c1, c2, c3, c4 = st.columns(4)
