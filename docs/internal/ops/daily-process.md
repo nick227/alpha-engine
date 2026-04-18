@@ -74,6 +74,29 @@ These are **not** part of `run_daily_pipeline.bat`. Use a separate scheduled tas
 
 **Persistence:** Ingestion backfills already use **`ingest_runs`** for idempotency. For periodic soak/backtest runs, a one-line append to `logs\periodic_runs.log` (or your existing job ledger pattern) is enough until you need a first-class table.
 
+### Registering the discovery milestone task (Windows)
+
+1. From an elevated or normal PowerShell (current user is fine for “run when user is logged on”):
+
+```powershell
+cd C:\wamp64\www\alpha-engine-poc\scripts\windows
+.\register_discovery_milestone_task.ps1
+```
+
+2. Optional: **`-DayOfWeek Sunday`**, **`-Time "03:00"`**, **`-Force`** (replace existing task with the same name).
+
+3. The task runs **`run_discovery_milestone_scheduled.bat`**, which:
+   - uses **`milestone.lock`** (separate from **`pipeline.lock`**),
+   - writes full output to **`logs\discovery_milestone_YYYY-MM-DD.log`**,
+   - appends one line per run to **`logs\periodic_runs.log`**,
+   - respects **`ALPHA_DB_PATH`** if set (otherwise **`data\alpha.db`**, same as the daily batch).
+
+4. Verify:
+
+```bat
+schtasks /Query /TN "AlphaEngine - Discovery Milestone" /V /FO LIST
+```
+
 ---
 
 ## 3. Overlap protection
