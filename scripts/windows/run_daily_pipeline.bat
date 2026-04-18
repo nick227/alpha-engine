@@ -55,49 +55,60 @@ if %ERRORLEVEL% neq 0 (
 echo [%DATE% %TIME%] STEP 2 END: Discovery nightly complete >> %LOG%
 
 :: ----------------------------------------------------------------
-:: STEP 3 — Build predicted series from queue (engine path)
+:: STEP 3 — Global rank score + trim pending queue (competition across strategies)
 :: ----------------------------------------------------------------
-echo [%DATE% %TIME%] STEP 3 START: prediction_cli run-queue >> %LOG%
-%PYTHON% -m app.engine.prediction_cli run-queue --as-of %ASOF% --db data\alpha.db --tenant-id default --limit 400 --forecast-days 30 --ingress-days 30 >> %LOG% 2>&1
-if %ERRORLEVEL% equ 0 goto step3_ok
-if %ERRORLEVEL% equ 3 goto step3_ok
-echo [%DATE% %TIME%] STEP 3 FAILED >> %LOG%
-goto :abort
-:step3_ok
-echo [%DATE% %TIME%] STEP 3 END: Predicted series built >> %LOG%
-
-:: ----------------------------------------------------------------
-:: STEP 4 — Materialize predictions rows for replay / reporting (queue is processed after step 3)
-:: ----------------------------------------------------------------
-echo [%DATE% %TIME%] STEP 4 START: Materialize discovery predictions >> %LOG%
-%PYTHON% run_paper_trading.py --materialize-discovery-predictions --materialize-date %ASOF% >> %LOG% 2>&1
+echo [%DATE% %TIME%] STEP 3 START: queue_rank_trim >> %LOG%
+%PYTHON% -m app.engine.queue_rank_trim --as-of %ASOF% --db data\alpha.db --tenant-id default >> %LOG% 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo [%DATE% %TIME%] STEP 4 FAILED >> %LOG%
+    echo [%DATE% %TIME%] STEP 3 FAILED >> %LOG%
     goto :abort
 )
-echo [%DATE% %TIME%] STEP 4 END: Predictions materialized >> %LOG%
+echo [%DATE% %TIME%] STEP 3 END: Queue ranked and trimmed >> %LOG%
 
 :: ----------------------------------------------------------------
-:: STEP 5 — Replay: score predictions whose horizon has expired
+:: STEP 4 — Build predicted series from queue (engine path)
 :: ----------------------------------------------------------------
-echo [%DATE% %TIME%] STEP 5 START: Replaying expired predictions >> %LOG%
-%PYTHON% run_paper_trading.py --replay >> %LOG% 2>&1
+echo [%DATE% %TIME%] STEP 4 START: prediction_cli run-queue >> %LOG%
+%PYTHON% -m app.engine.prediction_cli run-queue --as-of %ASOF% --db data\alpha.db --tenant-id default --limit 400 --forecast-days 30 --ingress-days 30 >> %LOG% 2>&1
+if %ERRORLEVEL% equ 0 goto step4_ok
+if %ERRORLEVEL% equ 3 goto step4_ok
+echo [%DATE% %TIME%] STEP 4 FAILED >> %LOG%
+goto :abort
+:step4_ok
+echo [%DATE% %TIME%] STEP 4 END: Predicted series built >> %LOG%
+
+:: ----------------------------------------------------------------
+:: STEP 5 — Materialize predictions rows for replay / reporting (queue is processed after step 4)
+:: ----------------------------------------------------------------
+echo [%DATE% %TIME%] STEP 5 START: Materialize discovery predictions >> %LOG%
+%PYTHON% run_paper_trading.py --materialize-discovery-predictions --materialize-date %ASOF% >> %LOG% 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [%DATE% %TIME%] STEP 5 FAILED >> %LOG%
     goto :abort
 )
-echo [%DATE% %TIME%] STEP 5 END: Replay complete >> %LOG%
+echo [%DATE% %TIME%] STEP 5 END: Predictions materialized >> %LOG%
 
 :: ----------------------------------------------------------------
-:: STEP 6 — Backfill any outcomes still NULL now that prices exist
+:: STEP 6 — Replay: score predictions whose horizon has expired
 :: ----------------------------------------------------------------
-echo [%DATE% %TIME%] STEP 6 START: Backfilling outcomes >> %LOG%
-%PYTHON% dev_scripts\scripts\auto_backfill_outcomes.py >> %LOG% 2>&1
+echo [%DATE% %TIME%] STEP 6 START: Replaying expired predictions >> %LOG%
+%PYTHON% run_paper_trading.py --replay >> %LOG% 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [%DATE% %TIME%] STEP 6 FAILED >> %LOG%
     goto :abort
 )
-echo [%DATE% %TIME%] STEP 6 END: Backfill complete >> %LOG%
+echo [%DATE% %TIME%] STEP 6 END: Replay complete >> %LOG%
+
+:: ----------------------------------------------------------------
+:: STEP 7 — Backfill any outcomes still NULL now that prices exist
+:: ----------------------------------------------------------------
+echo [%DATE% %TIME%] STEP 7 START: Backfilling outcomes >> %LOG%
+%PYTHON% dev_scripts\scripts\auto_backfill_outcomes.py >> %LOG% 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo [%DATE% %TIME%] STEP 7 FAILED >> %LOG%
+    goto :abort
+)
+echo [%DATE% %TIME%] STEP 7 END: Backfill complete >> %LOG%
 
 :: ----------------------------------------------------------------
 :: Success

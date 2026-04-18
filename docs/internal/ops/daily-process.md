@@ -35,12 +35,15 @@ The batch sets **`ASOF`** to today’s calendar date (`YYYY-MM-DD`) for steps th
 |------|---------|---------------------------|
 | **1** | Download / refresh price bars | `python dev_scripts\scripts\download_prices_daily.py` |
 | **2** | Discovery CLI **nightly**: candidates, watchlist promotion, `prediction_queue`, outcomes, stats, plus **threshold-based** multi-strategy enqueue | `python -m app.discovery.discovery_cli nightly --db data\alpha.db --tenant-id default` |
-| **3** | Build **predicted series** from the queue (engine path) | `python -m app.engine.prediction_cli run-queue --as-of %ASOF% ...` (exit code `3` = partial ticker failures; the batch still treats the step as completed) |
-| **4** | Materialize **`predictions`** rows for discovery queue items (needed for replay/UI that read `predictions`) | `python run_paper_trading.py --materialize-discovery-predictions --materialize-date %ASOF%` |
-| **5** | Replay: score expired discovery predictions | `python run_paper_trading.py --replay` |
-| **6** | Backfill outcomes where prices now allow scoring | `python dev_scripts\scripts\auto_backfill_outcomes.py` |
+| **3** | **Global rank + trim** pending queue rows (merit score, then keep top N across all strategies) | `python -m app.engine.queue_rank_trim --as-of %ASOF% --db data\alpha.db --tenant-id default` |
+| **4** | Build **predicted series** from the queue (engine path) | `python -m app.engine.prediction_cli run-queue --as-of %ASOF% ...` (exit code `3` = partial ticker failures; the batch still treats the step as completed) |
+| **5** | Materialize **`predictions`** rows for discovery queue items (needed for replay/UI that read `predictions`) | `python run_paper_trading.py --materialize-discovery-predictions --materialize-date %ASOF%` |
+| **6** | Replay: score expired discovery predictions | `python run_paper_trading.py --replay` |
+| **7** | Backfill outcomes where prices now allow scoring | `python dev_scripts\scripts\auto_backfill_outcomes.py` |
 
 **Throughput tuning (optional env vars):** `ALPHA_TARGET_SIGNALS_PER_DAY`, `ALPHA_PER_STRATEGY_CAP`, `ALPHA_MIN_DISCOVERY_CONFIDENCE`, `ALPHA_INACTIVE_STRATEGIES` (comma-separated). These feed `app.engine.threshold_queue` and the supplemental enqueue after watchlist rows.
+
+**Global competition after step 2:** `ALPHA_GLOBAL_TOP_N` (default **120**) sets how many pending rows survive step 3; each row gets `rank_score` in `metadata_json` from confidence, raw score, and latest `discovery_stats` **candidate_strategy** metrics (win rate, avg return for horizon 5d / window 30d).
 
 **CLI flags** on `discovery_cli nightly` (instead of env): `--supplement-target`, `--supplement-min-confidence`, `--supplement-per-strategy-cap`, `--no-threshold-supplement`.
 
@@ -65,7 +68,7 @@ If a run crashes hard before cleanup, a **stale** `pipeline.lock` can remain and
 
 The batch also writes `pip list` to the top of each run’s section for environment auditing.
 
-**Other logs:** Application code may write structured or per-day logs under `logs\daily\`, `logs\system\`, etc. Those complement but do not replace the batch log for answering “did the scheduled job complete all six steps?”
+**Other logs:** Application code may write structured or per-day logs under `logs\daily\`, `logs\system\`, etc. Those complement but do not replace the batch log for answering “did the scheduled job complete all seven steps?”
 
 ---
 
