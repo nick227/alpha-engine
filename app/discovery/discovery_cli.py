@@ -151,6 +151,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=5,
         help="Max admitted per market_cap_bucket (existing+new); use -1 to disable (default: 5)",
     )
+    admit.add_argument(
+        "--no-overrule",
+        action="store_true",
+        help="Disable at-cap swaps for high-potential eligibles",
+    )
+    admit.add_argument(
+        "--overrule-min-multiplier",
+        type=float,
+        default=0.78,
+        help="Min multiplier_score for overrule candidates when at cap (default: 0.78)",
+    )
+    admit.add_argument(
+        "--overrule-min-discovery",
+        type=float,
+        default=0.72,
+        help="Min discovery_score for overrule candidates when at cap (default: 0.72)",
+    )
+    admit.add_argument(
+        "--max-overrule-swaps",
+        type=int,
+        default=3,
+        help="Max demote+admit swaps per run when at cap (default: 3)",
+    )
 
     promo = sub.add_parser("promote", help="Select high-conviction (overlap + persistence) and write watchlist + prediction_queue")
     promo.add_argument("--date", required=True, help="As-of date (YYYY-MM-DD)")
@@ -217,6 +240,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     nightly.add_argument("--supplement-min-confidence", type=float, default=0.42)
     nightly.add_argument("--supplement-per-strategy-cap", type=int, default=22)
+
+    nightly.add_argument(
+        "--no-admission",
+        action="store_true",
+        help="Skip diversity admission + at-cap overrule after discovery",
+    )
+    nightly.add_argument("--admission-max", type=int, default=20, help="Max admitted dynamic tickers (default: 20)")
+    nightly.add_argument("--admission-per-lens", type=int, default=4)
+    nightly.add_argument(
+        "--admission-per-mcap",
+        type=int,
+        default=5,
+        help="Per mcap bucket cap; -1 disables (default: 5)",
+    )
+    nightly.add_argument("--admission-no-overrule", action="store_true", help="Disable at-cap overrule swaps")
+    nightly.add_argument("--admission-overrule-min-mult", type=float, default=0.78)
+    nightly.add_argument("--admission-overrule-min-disc", type=float, default=0.72)
+    nightly.add_argument("--admission-max-overrule-swaps", type=int, default=3)
 
     return p
 
@@ -314,6 +355,10 @@ def main(argv: list[str] | None = None) -> int:
                 max_admitted=int(args.max_admitted),
                 per_lens_cap=int(args.per_lens_cap),
                 per_mcap_cap=mcap_arg,
+                overrule_at_cap=not bool(args.no_overrule),
+                overrule_min_multiplier=float(args.overrule_min_multiplier),
+                overrule_min_discovery_score=float(args.overrule_min_discovery),
+                max_overrule_swaps=int(args.max_overrule_swaps),
             )
             print(json.dumps(out, indent=2))
             return 0
@@ -485,6 +530,26 @@ def main(argv: list[str] | None = None) -> int:
                 symbols=None,
             )
 
+            admission_summary: dict[str, Any] = {}
+            if not bool(args.no_admission):
+                mcap_a = int(args.admission_per_mcap)
+                mcap_a_arg = None if mcap_a < 0 else mcap_a
+                repo_ad = AlphaRepository(db_path=str(args.db))
+                try:
+                    admission_summary = run_diversity_admission(
+                        repo_ad,
+                        tenant_id=str(args.tenant_id),
+                        max_admitted=int(args.admission_max),
+                        per_lens_cap=int(args.admission_per_lens),
+                        per_mcap_cap=mcap_a_arg,
+                        overrule_at_cap=not bool(args.admission_no_overrule),
+                        overrule_min_multiplier=float(args.admission_overrule_min_mult),
+                        overrule_min_discovery_score=float(args.admission_overrule_min_disc),
+                        max_overrule_swaps=int(args.admission_max_overrule_swaps),
+                    )
+                finally:
+                    repo_ad.close()
+
             # 2) Promote
             promote_window_days = int(args.promote_window_days)
             promote_min_overlap = int(args.promote_min_overlap)
@@ -609,6 +674,7 @@ def main(argv: list[str] | None = None) -> int:
                             "pending": int(pq_pending),
                         },
                         "threshold_supplement": supplement_summary,
+                        "admission": admission_summary,
                         "watchlist_size": len(wl),
                         "stats_rows": len(all_rows),
                         "outcomes_scope": str(args.outcomes_scope),
