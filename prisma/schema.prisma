@@ -125,6 +125,7 @@ model Prediction {
   trendStrength        String?
   scoredOutcomeId     String?
   scoredAt            DateTime?
+  rankScore           Float?   @map("rank_score")
 
   strategy      Strategy          @relation(fields: [strategyId], references: [id])
   scoredEvent   ScoredEvent       @relation(fields: [scoredEventId], references: [id])

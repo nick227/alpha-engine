@@ -89,26 +89,37 @@ if %ERRORLEVEL% neq 0 (
 echo [%DATE% %TIME%] STEP 5 END: Predictions materialized >> %LOG%
 
 :: ----------------------------------------------------------------
-:: STEP 6 — Replay: score predictions whose horizon has expired
+:: STEP 6 — Rank predictions (rank_score + optional global top-N / per-strategy cap)
 :: ----------------------------------------------------------------
-echo [%DATE% %TIME%] STEP 6 START: Replaying expired predictions >> %LOG%
-%PYTHON% run_paper_trading.py --replay >> %LOG% 2>&1
+echo [%DATE% %TIME%] STEP 6 START: prediction_rank_sqlite >> %LOG%
+%PYTHON% -m app.engine.prediction_rank_sqlite --as-of %ASOF% --db data\alpha.db --tenant-id default >> %LOG% 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [%DATE% %TIME%] STEP 6 FAILED >> %LOG%
     goto :abort
 )
-echo [%DATE% %TIME%] STEP 6 END: Replay complete >> %LOG%
+echo [%DATE% %TIME%] STEP 6 END: Predictions ranked >> %LOG%
 
 :: ----------------------------------------------------------------
-:: STEP 7 — Backfill any outcomes still NULL now that prices exist
+:: STEP 7 — Replay: score predictions whose horizon has expired
 :: ----------------------------------------------------------------
-echo [%DATE% %TIME%] STEP 7 START: Backfilling outcomes >> %LOG%
-%PYTHON% dev_scripts\scripts\auto_backfill_outcomes.py >> %LOG% 2>&1
+echo [%DATE% %TIME%] STEP 7 START: Replaying expired predictions >> %LOG%
+%PYTHON% run_paper_trading.py --replay >> %LOG% 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [%DATE% %TIME%] STEP 7 FAILED >> %LOG%
     goto :abort
 )
-echo [%DATE% %TIME%] STEP 7 END: Backfill complete >> %LOG%
+echo [%DATE% %TIME%] STEP 7 END: Replay complete >> %LOG%
+
+:: ----------------------------------------------------------------
+:: STEP 8 — Backfill any outcomes still NULL now that prices exist
+:: ----------------------------------------------------------------
+echo [%DATE% %TIME%] STEP 8 START: Backfilling outcomes >> %LOG%
+%PYTHON% dev_scripts\scripts\auto_backfill_outcomes.py >> %LOG% 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo [%DATE% %TIME%] STEP 8 FAILED >> %LOG%
+    goto :abort
+)
+echo [%DATE% %TIME%] STEP 8 END: Backfill complete >> %LOG%
 
 :: ----------------------------------------------------------------
 :: Success

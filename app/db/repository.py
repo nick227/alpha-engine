@@ -124,7 +124,8 @@ class AlphaRepository:
             regime TEXT,
             trend_strength TEXT,
             scored_outcome_id TEXT,
-            scored_at TEXT
+            scored_at TEXT,
+            rank_score REAL
         );
 
         CREATE TABLE IF NOT EXISTS prediction_outcomes (
@@ -709,6 +710,13 @@ class AlphaRepository:
         if ec_cols and "alpha_strategy" not in ec_cols:
             try:
                 self.conn.execute("ALTER TABLE efficiency_champions ADD COLUMN alpha_strategy REAL DEFAULT 0.0;")
+            except Exception:
+                pass
+
+        pred_cols = cols("predictions")
+        if pred_cols and "rank_score" not in pred_cols:
+            try:
+                self.conn.execute("ALTER TABLE predictions ADD COLUMN rank_score REAL;")
             except Exception:
                 pass
 
