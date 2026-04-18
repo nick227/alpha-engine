@@ -534,7 +534,10 @@ class EngineReadStore:
                     llm_prediction TEXT,
                     engine_decision TEXT,
                     llm_status TEXT,
-                    llm_agrees INTEGER
+                    llm_agrees INTEGER,
+                    prediction_id TEXT,
+                    broker_order_id TEXT,
+                    source TEXT
                 );
                 """
             )
@@ -559,6 +562,9 @@ class EngineReadStore:
                 ("engine_decision", "ALTER TABLE trades ADD COLUMN engine_decision TEXT;"),
                 ("llm_status", "ALTER TABLE trades ADD COLUMN llm_status TEXT;"),
                 ("llm_agrees", "ALTER TABLE trades ADD COLUMN llm_agrees INTEGER;"),
+                ("prediction_id", "ALTER TABLE trades ADD COLUMN prediction_id TEXT;"),
+                ("broker_order_id", "ALTER TABLE trades ADD COLUMN broker_order_id TEXT;"),
+                ("source", "ALTER TABLE trades ADD COLUMN source TEXT;"),
             ):
                 if cols and col not in cols:
                     self.conn.execute(ddl)

@@ -338,7 +338,10 @@ class AlphaRepository:
              llm_prediction TEXT,
              engine_decision TEXT,
              llm_status TEXT,
-             llm_agrees INTEGER
+             llm_agrees INTEGER,
+             prediction_id TEXT,
+             broker_order_id TEXT,
+             source TEXT
          );
 
         CREATE TABLE IF NOT EXISTS positions (
@@ -680,12 +683,22 @@ class AlphaRepository:
             ("engine_decision", "TEXT"),
             ("llm_status", "TEXT"),
             ("llm_agrees", "INTEGER"),
+            ("prediction_id", "TEXT"),
+            ("broker_order_id", "TEXT"),
+            ("source", "TEXT"),
         ]:
             if t_cols and col not in t_cols:
                 try:
                     self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {col_type};")
                 except Exception:
                     pass
+
+        try:
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_trades_prediction_id ON trades(tenant_id, prediction_id);"
+            )
+        except Exception:
+            pass
 
         # strategies additions
         s_cols = cols("strategies")
@@ -1678,12 +1691,12 @@ class AlphaRepository:
         return datetime.now(timezone.utc).isoformat()
 
     def save_trade(self, trade_data: Dict[str, Any], tenant_id: str = "default") -> str:
-        """Save a trade to the database."""
+        """Save a trade to the database (links to predictions when prediction_id set)."""
         trade_id = trade_data.get("id") or str(uuid4())
         self.conn.execute("""
             INSERT OR REPLACE INTO trades 
-            (id, tenant_id, ticker, direction, quantity, entry_price, exit_price, pnl, status, mode, strategy_id, timestamp, analysis, llm_prediction, engine_decision, llm_status, llm_agrees)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, tenant_id, ticker, direction, quantity, entry_price, exit_price, pnl, status, mode, strategy_id, timestamp, analysis, llm_prediction, engine_decision, llm_status, llm_agrees, prediction_id, broker_order_id, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_id,
             tenant_id,
@@ -1702,6 +1715,9 @@ class AlphaRepository:
             trade_data.get("engine_decision"),
             trade_data.get("llm_status"),
             trade_data.get("llm_agrees"),
+            trade_data.get("prediction_id"),
+            trade_data.get("broker_order_id"),
+            trade_data.get("source"),
         ))
         self.conn.commit()
         return trade_id

@@ -165,7 +165,26 @@ class TradeLifecycleManager:
         self.price_subscribers: Dict[str, List[Callable]] = {}
         
         logger.info(f"Trade lifecycle manager initialized with provider: {getattr(provider, 'name', 'None')}")
-    
+
+    def _execution_source(self, trade: Trade) -> str:
+        """Broker / execution path for learning joins (alpaca vs simulated vs manual)."""
+        prov = (getattr(self.provider, "name", "") or "").lower()
+        if "alpaca" in prov:
+            return "alpaca"
+        if (trade.mode or "").lower() == "manual":
+            return "manual"
+        return "paper"
+
+    def _trade_persist_extras(self, trade: Trade) -> Dict[str, Any]:
+        snap = trade.signal_snapshot or {}
+        oid = snap.get("broker_order_id") or snap.get("order_id")
+        pid = (trade.prediction_id or "").strip()
+        return {
+            "prediction_id": pid if pid else None,
+            "broker_order_id": str(oid) if oid else None,
+            "source": self._execution_source(trade),
+        }
+
     def create_trade_from_signal(
         self,
         signal_id: str,
@@ -323,7 +342,10 @@ class TradeLifecycleManager:
                     direction=trade.direction,
                     order_type=trade.order_type
                 )
-                
+                oid = order_result.get("id") if isinstance(order_result, dict) else None
+                if oid:
+                    trade.signal_snapshot["broker_order_id"] = str(oid)
+
                 # Update with actual fill data from provider if possible
                 execution_price = order_result.get("average_fill_price", execution_price)
                 filled_quantity = order_result.get("filled_quantity", qty)
@@ -365,7 +387,8 @@ class TradeLifecycleManager:
                     "llm_prediction": trade.llm_prediction,
                     "engine_decision": trade.signal_snapshot.get("engine_decision"),
                     "llm_status": trade.signal_snapshot.get("llm_status"),
-                    "llm_agrees": trade.signal_snapshot.get("llm_agrees")
+                    "llm_agrees": trade.signal_snapshot.get("llm_agrees"),
+                    **self._trade_persist_extras(trade),
                 })
                 self.repository.upsert_position({
                     "ticker": trade.ticker,
@@ -757,7 +780,8 @@ class TradeLifecycleManager:
                     "llm_prediction": trade.llm_prediction,
                     "engine_decision": trade.signal_snapshot.get("engine_decision"),
                     "llm_status": trade.signal_snapshot.get("llm_status"),
-                    "llm_agrees": trade.signal_snapshot.get("llm_agrees")
+                    "llm_agrees": trade.signal_snapshot.get("llm_agrees"),
+                    **self._trade_persist_extras(trade),
                 })
             except Exception as e:
                 logger.error(f"Failed to persist trade close to repository: {e}")

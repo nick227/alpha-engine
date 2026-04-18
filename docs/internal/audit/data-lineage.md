@@ -36,6 +36,7 @@ flowchart LR
 - **DB schema (runtime)**:
   - Ingestion tables are created/extended by `app/ingest/event_store.py`
   - Core engine tables are created by `app/db/repository.py`
+  - Table **`trades`**: execution history; optional **`prediction_id`**, **`broker_order_id`**, **`source`** (`alpaca` \| `paper` \| `manual`) link fills to `predictions` for real vs simulated learning
   - Replay tables (raw/scored/mra/predictions/outcomes/signals) are created/extended by `app/ingest/replay_engine.py`
 - **Prisma schema (optional tooling)**: `prisma/schema.prisma` exists in the repo but is not currently referenced by Python runtime imports
 - **Exports** (demo runner): `outputs/` created by `scripts/demo_run.py`
