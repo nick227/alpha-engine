@@ -1389,3 +1389,19 @@ class DashboardService:
         from app.ui.middle.explainability_rank_trends import build_weekly_performance_summary
 
         return build_weekly_performance_summary(self.store.conn, tenant_id=tenant_id)
+
+    def get_explain_rank_history(
+        self,
+        *,
+        tenant_id: str = "default",
+        ticker: str,
+        max_snapshots: int = 10,
+    ) -> dict[str, Any]:
+        from app.ui.middle.explainability_rank_trends import build_rank_history_series
+
+        return build_rank_history_series(
+            self.store.conn,
+            tenant_id=tenant_id,
+            ticker=ticker,
+            max_snapshots=int(max_snapshots),
+        )

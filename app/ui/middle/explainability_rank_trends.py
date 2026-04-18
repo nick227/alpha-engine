@@ -7,6 +7,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from app.ui.middle.explainability_constants import MIN_SAMPLE_N
+
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     try:
@@ -167,6 +169,11 @@ def build_outcome_trend_last_n(
     out: dict[str, Any] = {
         "ticker": sym,
         "last_n": n,
+        "min_sample_threshold": MIN_SAMPLE_N,
+        "n_actual": 0,
+        "low_sample": True,
+        "half_first_n": 0,
+        "half_second_n": 0,
         "outcomes": [],
         "win_rate_first_half": None,
         "win_rate_second_half": None,
@@ -188,13 +195,22 @@ def build_outcome_trend_last_n(
         return out
 
     if len(rows) < 4:
+        out["n_actual"] = len(rows)
         return out
 
     chrono = list(reversed([dict(r) for r in rows]))
     out["outcomes"] = chrono
+    out["n_actual"] = len(chrono)
 
     first = chrono[:half]
     second = chrono[half:]
+    out["half_first_n"] = len(first)
+    out["half_second_n"] = len(second)
+    out["low_sample"] = (
+        len(chrono) < MIN_SAMPLE_N
+        or len(first) < MIN_SAMPLE_N
+        or len(second) < MIN_SAMPLE_N
+    )
     if not first or not second:
         return out
 
@@ -215,6 +231,63 @@ def build_outcome_trend_last_n(
     return out
 
 
+def build_rank_history_series(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    ticker: str,
+    max_snapshots: int = 10,
+    max_rank_depth: int = 800,
+) -> dict[str, Any]:
+    """
+    Rank of one ticker across the last N distinct ranking_snapshots times (chronological for charts).
+    """
+    sym = str(ticker).strip().upper()
+    out: dict[str, Any] = {
+        "ticker": sym,
+        "max_snapshots": int(max_snapshots),
+        "series": [],
+        "message": None,
+    }
+    if not _has_table(conn, "ranking_snapshots"):
+        out["message"] = "ranking_snapshots table missing"
+        return out
+    try:
+        ts_rows = conn.execute(
+            """
+            SELECT DISTINCT timestamp FROM ranking_snapshots
+            WHERE tenant_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (tenant_id, int(max_snapshots)),
+        ).fetchall()
+    except Exception:
+        return out
+    if not ts_rows:
+        out["message"] = "No ranking snapshots"
+        return out
+    chronological = list(reversed([str(r["timestamp"]) for r in ts_rows]))
+    series: list[dict[str, Any]] = []
+    for ts in chronological:
+        ranks = _ranks_at_timestamp(
+            conn, tenant_id=tenant_id, ts=ts, max_depth=max_rank_depth
+        )
+        if sym in ranks:
+            series.append(
+                {
+                    "snapshot_ts": ts,
+                    "rank": ranks[sym]["rank"],
+                    "score": ranks[sym]["score"],
+                    "conviction": ranks[sym]["conviction"],
+                }
+            )
+        else:
+            series.append({"snapshot_ts": ts, "rank": None, "score": None, "conviction": None})
+    out["series"] = series
+    return out
+
+
 def build_weekly_performance_summary(
     conn: sqlite3.Connection,
     *,
@@ -223,7 +296,8 @@ def build_weekly_performance_summary(
     """Aggregated evaluated outcomes in the last 7 days."""
     out: dict[str, Any] = {
         "window_days": 7,
-        "overall": {"n": 0, "win_rate": None, "avg_return": None},
+        "min_sample_threshold": MIN_SAMPLE_N,
+        "overall": {"n": 0, "win_rate": None, "avg_return": None, "low_sample": False},
         "by_strategy": [],
     }
     if not _has_table(conn, "prediction_outcomes"):
@@ -242,10 +316,12 @@ def build_weekly_performance_summary(
             (tenant_id,),
         ).fetchone()
         if row:
+            n_o = int(row["n"] or 0)
             out["overall"] = {
-                "n": int(row["n"] or 0),
+                "n": n_o,
                 "win_rate": float(row["win_rate"]) if row["win_rate"] is not None else None,
                 "avg_return": float(row["avg_return"]) if row["avg_return"] is not None else None,
+                "low_sample": 0 < n_o < MIN_SAMPLE_N,
             }
     except Exception:
         pass
@@ -265,7 +341,12 @@ def build_weekly_performance_summary(
             """,
             (tenant_id,),
         ).fetchall()
-        out["by_strategy"] = [dict(r) for r in rows]
+        out["by_strategy"] = []
+        for r in rows:
+            d = dict(r)
+            n_s = int(d.get("n") or 0)
+            d["low_sample"] = n_s < MIN_SAMPLE_N
+            out["by_strategy"].append(d)
     except Exception:
         pass
     return out

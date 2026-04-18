@@ -6,6 +6,18 @@ import pandas as pd
 import streamlit as st
 
 from app.ui.middle.dashboard_service import DashboardService
+from app.ui.middle.explainability_constants import MIN_SAMPLE_N
+
+
+def _style_low_sample_rows(df: pd.DataFrame, *, n_col: str = "n"):
+    """Gray background when n < MIN_SAMPLE_N (matches strategy×ticker matrix)."""
+    if n_col not in df.columns:
+        return df.style
+    low = df[n_col].fillna(0).astype(float) < float(MIN_SAMPLE_N)
+    return df.style.apply(
+        lambda row: ["background-color: #e8e8e8" if bool(low.loc[row.name]) else ""] * len(row),
+        axis=1,
+    )
 
 
 def explainability_main(
@@ -78,6 +90,12 @@ def explainability_main(
                 tenant_id=tenant_id, ticker=t, last_n=int(ot_n)
             )
             st.subheader("Recent outcome trend")
+            if trend.get("low_sample"):
+                st.warning(
+                    f"Low sample: need at least **{MIN_SAMPLE_N}** outcomes per total window and each half "
+                    f"(have n={trend.get('n_actual')}, halves {trend.get('half_first_n')}/"
+                    f"{trend.get('half_second_n')}). Treat trend as noisy."
+                )
             c1, c2, c3 = st.columns(3)
             c1.metric("Trend", trend.get("trend") or "—")
             w1 = trend.get("win_rate_first_half")
@@ -94,6 +112,13 @@ def explainability_main(
         wk = service.get_explain_weekly_performance(tenant_id=tenant_id)
         st.subheader("Weekly performance (last 7 days, evaluated outcomes)")
         oa = wk.get("overall") or {}
+        if oa.get("low_sample"):
+            st.warning(
+                f"Weekly aggregate is low sample (n={oa.get('n')} < **{MIN_SAMPLE_N}**). "
+                "Win rate / return are noisy."
+            )
+        elif int(oa.get("n") or 0) == 0:
+            st.caption("No evaluated outcomes in the 7-day window.")
         w1, w2, w3 = st.columns(3)
         w1.metric("N outcomes", int(oa.get("n") or 0))
         wr = oa.get("win_rate")
@@ -102,7 +127,8 @@ def explainability_main(
         w3.metric("Avg return", f"{float(ar):.3f}" if ar is not None else "—")
         bs = wk.get("by_strategy") or []
         if bs:
-            st.dataframe(pd.DataFrame(bs), use_container_width=True, hide_index=True)
+            df_bs = pd.DataFrame(bs)
+            st.dataframe(_style_low_sample_rows(df_bs), use_container_width=True, hide_index=True)
         else:
             st.caption("No outcomes in the 7-day window.")
 
@@ -114,7 +140,7 @@ def explainability_main(
                 st.caption(f"best: {block.get('best_strategy')} | worst: {block.get('worst_strategy')}")
                 df = pd.DataFrame(block.get("by_strategy") or [])
                 if not df.empty:
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(_style_low_sample_rows(df), use_container_width=True, hide_index=True)
                 else:
                     st.caption("No outcomes in window.")
 
@@ -123,7 +149,7 @@ def explainability_main(
         mx = service.get_explain_strategy_ticker_matrix(tenant_id=tenant_id, tickers=None, lookback_days=int(lb))
         if mx:
             dfm = pd.DataFrame(mx)
-            dfm["low_sample"] = dfm["n"].fillna(0) < 5
+            dfm["low_sample"] = dfm["n"].fillna(0) < MIN_SAMPLE_N
             disp = dfm.drop(columns=["low_sample"])
             styler = disp.style.apply(
                 lambda row: [
@@ -178,6 +204,33 @@ def explainability_main(
                 use_container_width=True,
                 hide_index=True,
             )
+
+        st.subheader("Rank persistence (last snapshots)")
+        st.caption(
+            f"Uses up to 10 distinct `ranking_snapshots` times already in the DB (no extra storage). "
+            f"Lower rank # is better. Gray rows in tables elsewhere = n < {MIN_SAMPLE_N}."
+        )
+        rh_t = st.selectbox(
+            "Ticker (rank history)",
+            options=tickers,
+            key="rh_ticker",
+            index=_idx,
+        ) if tickers else None
+        if rh_t:
+            hist = service.get_explain_rank_history(tenant_id=tenant_id, ticker=rh_t, max_snapshots=10)
+            if hist.get("message"):
+                st.info(hist["message"])
+            srows = hist.get("series") or []
+            if srows:
+                dfh = pd.DataFrame(srows)
+                st.dataframe(dfh, use_container_width=True, hide_index=True)
+                chart = dfh.dropna(subset=["rank"])
+                if len(chart) >= 2:
+                    st.line_chart(chart.set_index("snapshot_ts")["rank"])
+                elif len(chart) == 1:
+                    st.caption("Only one snapshot includes this ticker at current depth — add runs for a trend line.")
+            else:
+                st.caption("No series rows.")
 
     with tabs[3]:
         hrs = st.slider("Hours", 6, 72, 24, key="chg_h")
