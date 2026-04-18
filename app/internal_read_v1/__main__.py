@@ -6,6 +6,13 @@ import os
 
 import uvicorn
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 if __name__ == "__main__":
     port = int(os.environ.get("INTERNAL_READ_PORT", "8090"))
     uvicorn.run(
