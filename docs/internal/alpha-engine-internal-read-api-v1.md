@@ -133,14 +133,32 @@ Path prefix `/v1` is optional. **Behavior:** breaking changes require either a *
 
 **Package:** `app/internal_read_v1` — FastAPI adapter over `DashboardService` (same read models as the Streamlit UI).
 
-**Run (loopback only):**
+**Run locally (Windows):**
 
-```bat
-set ALPHA_DB_PATH=data\alpha.db
-set INTERNAL_READ_KEY=your-shared-secret
-set INTERNAL_READ_PORT=8090
-.\.venv\Scripts\python.exe -m uvicorn app.internal_read_v1.app:app --host 127.0.0.1 --port %INTERNAL_READ_PORT%
+```powershell
+.\scripts\start_internal_read_api.ps1
 ```
+
+Or: `.\.venv\Scripts\python.exe -m app.internal_read_v1` from repo root (`.env` is loaded by `__main__`).
+
+**Run locally (Linux / macOS):**
+
+```bash
+chmod +x scripts/start_internal_read_api.sh
+./scripts/start_internal_read_api.sh
+```
+
+**Environment:**
+
+| Variable | Default | Notes |
+|----------|---------|--------|
+| `ALPHA_DB_PATH` | `data/alpha.db` | Same DB your daily jobs update. |
+| `INTERNAL_READ_KEY` | (none) | Required for production; use `INTERNAL_READ_INSECURE=1` only for local dev. |
+| `INTERNAL_READ_HOST` | `127.0.0.1` | **Railway / public process:** set to `0.0.0.0` so the platform can route traffic. |
+| `INTERNAL_READ_PORT` | `8090` | Optional explicit port. |
+| `PORT` | — | Used if `INTERNAL_READ_PORT` unset (e.g. **Railway** injects `PORT`). |
+
+**Railway / production:** deploy this service as a long-running process (see repo `Procfile`). Set `INTERNAL_READ_HOST=0.0.0.0`, `ALPHA_DB_PATH` to your persisted volume path, and `INTERNAL_READ_KEY`. Scheduled ingestion remains a **separate** job (cron / Railway cron / Task Scheduler); this service only **reads** the DB and serves HTTP to trading-platform.
 
 **Local dev without a key (insecure):** `set INTERNAL_READ_INSECURE=1` — requests without `X-Internal-Key` are accepted; **do not use in production.**
 

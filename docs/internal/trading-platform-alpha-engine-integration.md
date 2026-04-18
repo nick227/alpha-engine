@@ -28,8 +28,9 @@ alpha-engine (writes DB, serves read API)     trading-platform (your app)
 |-------------|------------------|
 | Local (same machine) | `http://127.0.0.1:8090` |
 | Custom port | `http://127.0.0.1:<INTERNAL_READ_PORT>` |
+| Hosted (e.g. Railway private service) | Base URL and port from operators (`INTERNAL_READ_HOST` / `PORT` on the server) |
 
-Default listen port on the alpha-engine side is **8090** (`INTERNAL_READ_PORT`). **Coordinate the port** with whoever runs alpha-engine so your config matches.
+Default listen port on the alpha-engine side is **8090** (`INTERNAL_READ_PORT`). **Coordinate the port** with whoever runs alpha-engine so your config matches. Alpha-engine operators start the read API with `scripts/start_internal_read_api.ps1` (Windows) or `scripts/start_internal_read_api.sh` (Unix / Railway); see [alpha-engine-internal-read-api-v1.md](./alpha-engine-internal-read-api-v1.md).
 
 ---
 
