@@ -164,9 +164,16 @@ def explainability_main(
 
     with tabs[2]:
         mv = service.get_explain_ranking_movers(tenant_id=tenant_id, top_n=25)
+        mrd = int(mv.get("max_rank_depth") or 800)
+        st.info(
+            "**Rank #** — **lower is better** (1 ≈ top). "
+            "**rank Δ** = rank_today − rank_yesterday: "
+            "**negative ⇒ ↓ improving** (rank # went down); "
+            "**positive ⇒ ↑ weakening** (rank # went up). "
+            f"Ranks are computed within the top **{mrd}** names per snapshot."
+        )
         st.caption(
-            "Compares the two latest distinct `ranking_snapshots` timestamps. "
-            "Δ = rank_today − rank_yesterday (negative = moved up)."
+            "Compares the two latest distinct `ranking_snapshots` timestamps."
         )
         st.markdown(
             f"**Latest snapshot:** `{mv.get('snapshot_ts_latest')}`  \n"
@@ -208,7 +215,8 @@ def explainability_main(
         st.subheader("Rank persistence (last snapshots)")
         st.caption(
             f"Uses up to 10 distinct `ranking_snapshots` times already in the DB (no extra storage). "
-            f"Lower rank # is better. Gray rows in tables elsewhere = n < {MIN_SAMPLE_N}."
+            f"**rank_norm** = rank / max_depth (≈ **0 best**, **1 worst**). "
+            f"Line **down** = improving. Gray rows elsewhere = n < {MIN_SAMPLE_N}."
         )
         rh_t = st.selectbox(
             "Ticker (rank history)",
@@ -224,9 +232,10 @@ def explainability_main(
             if srows:
                 dfh = pd.DataFrame(srows)
                 st.dataframe(dfh, use_container_width=True, hide_index=True)
-                chart = dfh.dropna(subset=["rank"])
+                chart = dfh.dropna(subset=["rank_norm"])
                 if len(chart) >= 2:
-                    st.line_chart(chart.set_index("snapshot_ts")["rank"])
+                    st.caption("Chart: **rank_norm** (0 ≈ best, 1 ≈ worst within max depth).")
+                    st.line_chart(chart.set_index("snapshot_ts")["rank_norm"])
                 elif len(chart) == 1:
                     st.caption("Only one snapshot includes this ticker at current depth — add runs for a trend line.")
             else:

@@ -10,6 +10,15 @@ from typing import Any
 from app.ui.middle.explainability_constants import MIN_SAMPLE_N
 
 
+def _rank_delta_movement(rank_delta: int) -> str:
+    """Lower rank # = better. Negative delta ⇒ rank # went down ⇒ improving."""
+    if rank_delta < 0:
+        return "↓ improving"
+    if rank_delta > 0:
+        return "↑ weakening"
+    return "→ flat"
+
+
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     try:
         r = conn.execute(
@@ -58,11 +67,13 @@ def build_ranking_movers(
 ) -> dict[str, Any]:
     """
     Compare the two most recent distinct ranking_snapshots timestamps.
-    rank_delta = rank_today - rank_yesterday (negative = moved up / improved).
+    rank_delta = rank_today - rank_yesterday (negative ⇒ rank # lower ⇒ improving).
+    Each delta row includes `movement`: ↓ improving / ↑ weakening / → flat.
     """
     empty: dict[str, Any] = {
         "snapshot_ts_latest": None,
         "snapshot_ts_previous": None,
+        "max_rank_depth": int(max_rank_depth),
         "message": None,
         "risers": [],
         "fallers": [],
@@ -118,6 +129,7 @@ def build_ranking_movers(
                     "rank_today": r_today,
                     "rank_yesterday": r_prev,
                     "rank_delta": rank_delta,
+                    "movement": _rank_delta_movement(rank_delta),
                     "score_today": rt["score"],
                     "score_yesterday": rp["score"],
                 }
@@ -146,6 +158,7 @@ def build_ranking_movers(
     return {
         "snapshot_ts_latest": ts_today,
         "snapshot_ts_previous": ts_prev,
+        "max_rank_depth": int(max_rank_depth),
         "message": None,
         "risers": risers,
         "fallers": fallers,
@@ -243,9 +256,11 @@ def build_rank_history_series(
     Rank of one ticker across the last N distinct ranking_snapshots times (chronological for charts).
     """
     sym = str(ticker).strip().upper()
+    mrd = int(max_rank_depth)
     out: dict[str, Any] = {
         "ticker": sym,
         "max_snapshots": int(max_snapshots),
+        "max_rank_depth": mrd,
         "series": [],
         "message": None,
     }
@@ -274,16 +289,26 @@ def build_rank_history_series(
             conn, tenant_id=tenant_id, ts=ts, max_depth=max_rank_depth
         )
         if sym in ranks:
+            rk = int(ranks[sym]["rank"])
             series.append(
                 {
                     "snapshot_ts": ts,
-                    "rank": ranks[sym]["rank"],
+                    "rank": rk,
+                    "rank_norm": round(rk / float(mrd), 6) if mrd > 0 else None,
                     "score": ranks[sym]["score"],
                     "conviction": ranks[sym]["conviction"],
                 }
             )
         else:
-            series.append({"snapshot_ts": ts, "rank": None, "score": None, "conviction": None})
+            series.append(
+                {
+                    "snapshot_ts": ts,
+                    "rank": None,
+                    "rank_norm": None,
+                    "score": None,
+                    "conviction": None,
+                }
+            )
     out["series"] = series
     return out
 
