@@ -561,6 +561,21 @@ class AlphaRepository:
 
         CREATE INDEX IF NOT EXISTS idx_prediction_jobs_recent
           ON prediction_jobs(tenant_id, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS candidate_queue (
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            ticker TEXT NOT NULL,
+            status TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            signal_count INTEGER NOT NULL DEFAULT 0,
+            rejection_reason TEXT,
+            PRIMARY KEY (tenant_id, ticker),
+            CHECK (status IN ('seen', 'recurring', 'shortlisted', 'admitted', 'rejected'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_candidate_queue_status
+          ON candidate_queue(tenant_id, status);
         """
         self.conn.executescript(schema)
         self._ensure_additive_schema()
@@ -1378,6 +1393,18 @@ class AlphaRepository:
             (*params, int(limit)),
         ).fetchall()
         return [str(r["ticker"]) for r in rows]
+
+    def list_admitted_candidate_tickers(self, tenant_id: str = "default") -> list[str]:
+        """Tickers in candidate_queue with status admitted (dynamic universe)."""
+        rows = self.conn.execute(
+            """
+            SELECT ticker FROM candidate_queue
+            WHERE tenant_id = ? AND status = ?
+            ORDER BY ticker ASC
+            """,
+            (tenant_id, "admitted"),
+        ).fetchall()
+        return sorted({str(r["ticker"]).strip().upper() for r in rows if r["ticker"]})
 
     def get_rolling_predictions(
         self,

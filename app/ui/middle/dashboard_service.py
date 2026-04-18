@@ -19,6 +19,7 @@ from app.ui.middle.engine_read_store import (
     SeriesPointRow,
     PredictionScoreRow,
 )
+from app.core.active_universe import get_active_universe_tickers
 from app.core.target_stocks import get_target_stocks, get_target_stocks_registry, load_target_stock_specs
 
 
@@ -223,12 +224,10 @@ class DashboardService:
         return self.store.list_tenants()
 
     def list_tickers(self, *, tenant_id: str = "default") -> list[str]:
-        """Get available tickers for the specified tenant"""
+        """Active universe: static (YAML) ∪ candidate_queue status=admitted."""
         try:
-            # Try tenant-aware target stocks first
-            return get_target_stocks(tenant_id=tenant_id)
+            return get_active_universe_tickers(tenant_id=tenant_id, sqlite_conn=self.store.conn)
         except Exception:
-            # Fallback to store-based ticker listing
             return self.store.list_tickers(tenant_id=tenant_id)
 
     def list_discovery_dates(self, *, tenant_id: str = "default", limit: int = 120) -> list[str]:

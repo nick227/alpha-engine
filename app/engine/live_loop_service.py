@@ -12,7 +12,8 @@ from app.core.repository import Repository
 from app.core.types import RawEvent
 from app.core.price_context import build_price_context_for_event
 from app.core.bars import BarsCache, bar_window_for_events, build_bars_provider
-from app.core.target_stocks import get_target_stocks, get_target_stocks_registry
+from app.core.active_universe import get_active_universe_tickers
+from app.core.target_stocks import get_target_stocks_registry
 from app.engine.champion_state import load_active_champion_configs, refresh_active_champions_from_ranked
 from app.engine.runner import run_pipeline
 from app.engine.strategy_store import bootstrap_strategies_from_experiments, load_active_strategy_configs_from_db
@@ -41,7 +42,7 @@ class LiveLoopService:
 
         # Target Stocks: canonical universe (fails fast if empty).
         reg = get_target_stocks_registry()
-        targets = get_target_stocks(asof=now)
+        targets = get_active_universe_tickers(asof=now, repository=repo)
         targets_set = set(targets)
 
         # Ingest new raw events from a simple inbox file.

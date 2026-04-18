@@ -9,7 +9,7 @@ sys.path.append(os.getcwd())
 from app.core.types import RawEvent
 from app.runtime.pipeline import AlphaPipeline
 from app.db.repository import AlphaRepository
-from app.core.target_stocks import get_target_stocks
+from app.core.active_universe import get_active_universe_tickers
 
 def verify():
     print("--- Starting Ranking Feature Verification ---")
@@ -22,7 +22,7 @@ def verify():
     pipeline = AlphaPipeline(repository=repo)
     
     # 1. Create mock events for some target stocks
-    tickers = get_target_stocks()
+    tickers = get_active_universe_tickers(repository=repo)
     print(f"Target Universe: {tickers}")
     
     raw_events = []

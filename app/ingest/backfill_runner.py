@@ -24,7 +24,8 @@ from app.core.repository import Repository
 from app.core.time_utils import to_utc_datetime, normalize_timestamp
 from app.core.bars import BarsCache, bar_window_for_events, build_bars_provider, FallbackBarsProvider
 from app.core.price_context import build_price_contexts_from_bars_multi, default_benchmark_tickers
-from app.core.target_stocks import get_target_stocks, get_target_stocks_registry
+from app.core.active_universe import get_active_universe_tickers
+from app.core.target_stocks import get_target_stocks_registry
 from app.core.macro.config import load_macro_series_specs
 from app.core.macro.yfinance_series import fetch_and_build_macro_features
 from app.core.company_profiles.yfinance_profiles import ensure_yfinance_company_profiles
@@ -341,11 +342,12 @@ async def _fetch_slice(
     extractor: Extractor,
     *,
     cache_handle: dict[str, Any] | None = None,
+    universe_db_path: str | Path | None = None,
 ) -> SliceFetchResult:
     # Optional shortcut: allow sources.yaml to opt into the canonical universe.
     try:
         if isinstance(getattr(spec, "symbols", None), str) and str(getattr(spec, "symbols", "")).strip().upper() == "TARGET_STOCKS":
-            targets = get_target_stocks(asof=start_date)
+            targets = get_active_universe_tickers(asof=start_date, db_path=universe_db_path)
             if hasattr(spec, "model_copy"):
                 spec = spec.model_copy(update={"symbols": targets})
             elif hasattr(spec, "copy"):
@@ -595,7 +597,7 @@ class BackfillRunner:
         # One-time per-run company profile hydration (best-effort).
         # Uses the canonical target stocks universe and writes to data/company_profiles/*.json.
         try:
-            tickers = get_target_stocks(asof=start_time)
+            tickers = get_active_universe_tickers(asof=start_time, db_path=self.store.db_path)
             await ensure_yfinance_company_profiles(tickers, cache_handle=self._fetch_cache)
         except Exception:
             pass
@@ -725,6 +727,7 @@ class BackfillRunner:
                             self.key_manager,
                             self.extractor,
                             cache_handle=self._fetch_cache,
+                            universe_db_path=str(self.store.db_path),
                         )
                     )
 
@@ -765,7 +768,7 @@ class BackfillRunner:
                 except Exception:
                     active_sources = set()
                 try:
-                    allowed = set(get_target_stocks(asof=current_end))
+                    allowed = set(get_active_universe_tickers(asof=current_end, db_path=self.store.db_path))
                 except Exception:
                     allowed = set()
                 tickers_seen: set[str] = set()
@@ -1208,7 +1211,7 @@ class BackfillRunner:
             raw_events: list[RawEvent] = []
             macro_snapshot: dict[str, float] = self._macro_snapshot_for_slice(asof=slice_end)
             try:
-                allowed = set(get_target_stocks(asof=slice_end))
+                allowed = set(get_active_universe_tickers(asof=slice_end, db_path=self.store.db_path))
             except Exception:
                 allowed = set()
             company_name_map: dict[str, str] | None = None
@@ -1320,7 +1323,7 @@ class BackfillRunner:
                 tickers = sorted({t for re in raw_events for t in (re.tickers or []) if t})
                 ensure_universe = str(os.getenv("BACKFILL_ENSURE_TARGET_UNIVERSE_BARS", "false")).lower() == "true"
                 if ensure_universe and reg is not None:
-                    targets = get_target_stocks(asof=slice_end)
+                    targets = get_active_universe_tickers(asof=slice_end, db_path=self.store.db_path)
                 else:
                     targets = tickers
                 include_benchmarks = str(os.getenv("BACKFILL_INCLUDE_BENCHMARK_BARS", "false")).lower() == "true"

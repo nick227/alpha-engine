@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional
 from dataclasses import asdict
 
 from app.core.types import TargetRanking, SignalScore
-from app.core.target_stocks import get_target_stocks
+from app.core.active_universe import get_active_universe_tickers
 from app.db.repository import AlphaRepository
 
 
@@ -117,7 +117,7 @@ class RankingEngine:
         """
         Compute rankings for all enabled Target Stocks.
         """
-        tickers = get_target_stocks()
+        tickers = get_active_universe_tickers(repository=self.repository)
         if not tickers:
             return []
 

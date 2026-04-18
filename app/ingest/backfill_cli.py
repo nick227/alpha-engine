@@ -6,6 +6,7 @@ from app.ingest.backfill_runner import BackfillRunner
 from app.ingest.event_store import EventStore
 from app.core.time_utils import normalize_timestamp, to_utc_datetime
 from app.ingest.validator import validate_sources_yaml
+from app.core.active_universe import get_active_universe_tickers
 from app.core.target_stocks import (
     add_target_stock,
     get_target_stocks_registry,
@@ -92,6 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="List the canonical Target Stocks universe",
     )
     lts.add_argument("--asof", default=None, help="Optional as-of timestamp/date (YYYY-MM-DD or ISO)")
+    lts.add_argument("--db", default="data/alpha.db", help="SQLite DB path for admitted candidates (default: data/alpha.db)")
 
     # Command: add-target-stock
     ats = subparsers.add_parser("add-target-stock", help="Add or update a Target Stock", description="Add or update a Target Stock")
@@ -783,6 +785,8 @@ async def main(argv: list[str] | None = None) -> int:
             print(f"{r.symbol}  ({', '.join(flags)})")
         print()
         print(f"target_universe_version: {reg.target_universe_version}")
+        au = get_active_universe_tickers(asof=asof, db_path=str(args.db))
+        print(f"active_universe (static ∪ admitted): {', '.join(au)}")
         return 0
     elif args.command == "add-target-stock":
         v = add_target_stock(

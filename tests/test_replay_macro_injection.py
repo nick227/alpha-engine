@@ -70,7 +70,10 @@ def test_replay_injects_macro_snapshot_into_price_context(monkeypatch, tmp_path)
 
     monkeypatch.setattr(runner.store, "get_events_chronological", lambda *a, **k: [tick])
     monkeypatch.setattr(runner, "_bars_cache", lambda: _FakeBarsCache())
-    monkeypatch.setattr("app.ingest.backfill_runner.get_target_stocks", lambda asof=None: ["NVDA"])
+    monkeypatch.setattr(
+        "app.ingest.backfill_runner.get_active_universe_tickers",
+        lambda **kwargs: ["NVDA"],
+    )
     monkeypatch.setattr(
         runner,
         "_macro_snapshot_for_slice",

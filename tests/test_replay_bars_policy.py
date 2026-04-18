@@ -72,7 +72,7 @@ def test_replay_uses_slice_end_for_bars_policy_now(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(runner.store, "get_events_chronological", lambda *a, **k: [evt])
 
-    monkeypatch.setattr(br, "get_target_stocks", lambda asof=None: ["AAPL", "MSFT", "NVDA"])
+    monkeypatch.setattr(br, "get_active_universe_tickers", lambda **kwargs: ["AAPL", "MSFT", "NVDA"])
     monkeypatch.setenv("BACKFILL_ENSURE_TARGET_UNIVERSE_BARS", "false")
 
     fake = _FakeBarsCache()

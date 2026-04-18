@@ -13,7 +13,7 @@ from app.engine.reaper_engine import should_reap
 from app.engine.runner import _strategy_track
 from app.engine.strategy_store import bootstrap_strategies_from_experiments, load_active_strategy_configs_from_db
 from app.engine.champion_state import set_active_champion
-from app.core.target_stocks import get_target_stocks
+from app.core.active_universe import get_active_universe_tickers
 
 
 class OptimizerLoopService:
@@ -117,7 +117,7 @@ class OptimizerLoopService:
         max_ts = max_dt.isoformat().replace("+00:00", "Z")
         tickers = sorted({(evt.tickers[0] if evt.tickers else "") for evt in raw_events} - {""})
         try:
-            allowed = set(get_target_stocks(asof=now))
+            allowed = set(get_active_universe_tickers(asof=now, repository=repo))
             tickers = [t for t in tickers if t in allowed]
         except Exception:
             tickers = []
