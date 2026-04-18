@@ -41,6 +41,7 @@ The batch sets **`ASOF`** to today’s calendar date (`YYYY-MM-DD`) for steps th
 | **6** | **Prediction rank + trim:** set `predictions.rank_score` from confidence + strategy metrics; optional global top-N / per-strategy cap (deletes unscored rows below the cut) | `python -m app.engine.prediction_rank_sqlite --as-of %ASOF% --db data\alpha.db --tenant-id default` |
 | **7** | Replay: score expired discovery predictions | `python run_paper_trading.py --replay` |
 | **8** | Backfill outcomes where prices now allow scoring | `python dev_scripts\scripts\auto_backfill_outcomes.py` |
+| **9** | **Real vs sim** snapshot (matched `predictions` + `prediction_outcomes` + closed `trades` by `source`) | `python -m app.analytics.learning_feedback_report --db data\alpha.db --tenant-id default` (appends one line to the batch log: avg sim / real / execution gap by source; use `--json` for full rollups) |
 
 **Throughput tuning (optional env vars):** `ALPHA_TARGET_SIGNALS_PER_DAY`, `ALPHA_PER_STRATEGY_CAP`, `ALPHA_MIN_DISCOVERY_CONFIDENCE`, `ALPHA_INACTIVE_STRATEGIES` (comma-separated). These feed `app.engine.threshold_queue` and the supplemental enqueue after watchlist rows.
 
@@ -77,7 +78,7 @@ If a run crashes hard before cleanup, a **stale** `pipeline.lock` can remain and
 
 The batch also writes `pip list` to the top of each run’s section for environment auditing.
 
-**Other logs:** Application code may write structured or per-day logs under `logs\daily\`, `logs\system\`, etc. Those complement but do not replace the batch log for answering “did the scheduled job complete all eight steps?”
+**Other logs:** Application code may write structured or per-day logs under `logs\daily\`, `logs\system\`, etc. Those complement but do not replace the batch log for answering “did the scheduled job complete all nine steps?”
 
 ---
 

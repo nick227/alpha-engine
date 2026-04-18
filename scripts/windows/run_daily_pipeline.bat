@@ -122,6 +122,13 @@ if %ERRORLEVEL% neq 0 (
 echo [%DATE% %TIME%] STEP 8 END: Backfill complete >> %LOG%
 
 :: ----------------------------------------------------------------
+:: STEP 9 — Real vs sim learning snapshot (log line; does not fail pipeline)
+:: ----------------------------------------------------------------
+echo [%DATE% %TIME%] STEP 9 START: Learning feedback report >> %LOG%
+%PYTHON% -m app.analytics.learning_feedback_report --db data\alpha.db --tenant-id default >> %LOG% 2>&1
+echo [%DATE% %TIME%] STEP 9 END: Learning feedback report >> %LOG%
+
+:: ----------------------------------------------------------------
 :: Success
 :: ----------------------------------------------------------------
 echo [%DATE% %TIME%] Pipeline finished OK >> %LOG%

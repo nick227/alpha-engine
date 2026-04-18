@@ -4,6 +4,7 @@ Consolidates all repository operations into a single class
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 from app.core.types import TargetRanking
+
+logger = logging.getLogger(__name__)
 
 
 class AlphaRepository:
@@ -1693,6 +1696,14 @@ class AlphaRepository:
     def save_trade(self, trade_data: Dict[str, Any], tenant_id: str = "default") -> str:
         """Save a trade to the database (links to predictions when prediction_id set)."""
         trade_id = trade_data.get("id") or str(uuid4())
+        src = (trade_data.get("source") or "").strip().lower()
+        if src and src != "manual" and not (trade_data.get("prediction_id") or "").strip():
+            logger.warning(
+                "Trade missing prediction_id (source=%s, trade_id=%s, ticker=%s)",
+                src,
+                trade_id,
+                trade_data.get("ticker"),
+            )
         self.conn.execute("""
             INSERT OR REPLACE INTO trades 
             (id, tenant_id, ticker, direction, quantity, entry_price, exit_price, pnl, status, mode, strategy_id, timestamp, analysis, llm_prediction, engine_decision, llm_status, llm_agrees, prediction_id, broker_order_id, source)
