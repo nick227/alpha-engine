@@ -64,6 +64,8 @@ After each **queue_rank_trim** / **prediction_rank** run, the CLI prints a one-l
 
 ## 2b. Non-daily jobs (cadence guidance)
 
+**See also:** [window-and-memory-decisions.md](window-and-memory-decisions.md) — decision matrix (knobs, metrics, tables, retune cadence) and “discovery memory” vs other layers.
+
 These are **not** part of `run_daily_pipeline.bat`. Use a separate scheduled task or manual runs; append to a simple log (e.g. `logs\periodic_runs.log`) with date + command + exit code if you need auditability.
 
 | Job | Default depth / scope | Suggested cadence | Why |
