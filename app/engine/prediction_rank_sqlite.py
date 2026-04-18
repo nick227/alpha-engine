@@ -1,7 +1,8 @@
 """
 Persist rank_score on SQLite `predictions` using StrategyPerformance, StrategyStability,
 and Strategy.live_score — complements queue_rank_trim (pre-build) with post-materialization
-ranking grounded in DB metrics.
+ranking grounded in DB metrics. Final score is multiplied by `ranking_temporal.apply_temporal_adjustment`
+(VIX / month heuristics) before sort and trim.
 
 Discovery predictions use synthetic strategy_id values (e.g. silent_compounder_v1_paper);
 we resolve performance/stability by trying full id and normalized discovery base name.
@@ -16,6 +17,7 @@ import sqlite3
 from typing import Any
 
 from app.db.repository import AlphaRepository
+from app.engine.ranking_temporal import apply_temporal_adjustment, build_market_context
 
 DEFAULT_TOP_N = int(os.getenv("ALPHA_PREDICTION_TOP_N", "120"))
 DEFAULT_MAX_PER_STRATEGY = int(os.getenv("ALPHA_PREDICTION_MAX_PER_STRATEGY", "10"))
@@ -145,12 +147,15 @@ def rank_predictions_for_date(
             (tenant_id, mode_filter, as_of_date),
         ).fetchall()
 
+        market_ctx = build_market_context(conn, tenant_id=tenant_id, as_of_date=as_of_date)
+
         if not rows:
             return {
                 "as_of_date": as_of_date,
                 "updated": 0,
                 "trimmed": 0,
                 "pending_rows": 0,
+                "market_context": market_ctx,
             }
 
         scored: list[tuple[float, str, str]] = []
@@ -167,12 +172,15 @@ def rank_predictions_for_date(
                 live_score=live,
                 stability_score=stab,
             )
+            temporal_key = keys[-1] if len(keys) > 1 else keys[0]
+            m = apply_temporal_adjustment(str(temporal_key), market_ctx)
+            rs_adj = rs * m
             conn.execute(
                 "UPDATE predictions SET rank_score = ? WHERE id = ?",
-                (round(rs, 6), str(r["id"])),
+                (round(rs_adj, 6), str(r["id"])),
             )
             cap_key = keys[-1] if len(keys) > 1 else keys[0]
-            scored.append((rs, str(r["id"]), cap_key))
+            scored.append((rs_adj, str(r["id"]), cap_key))
 
         conn.commit()
 
@@ -210,6 +218,7 @@ def rank_predictions_for_date(
             "pending_rows": len(scored),
             "global_top_n": int(global_top_n),
             "max_per_strategy": int(max_per_strategy),
+            "market_context": market_ctx,
         }
     finally:
         repo.close()

@@ -14,6 +14,7 @@ import sqlite3
 from typing import Any
 
 from app.db.repository import AlphaRepository
+from app.engine.ranking_temporal import apply_temporal_adjustment, build_market_context
 
 # Default matches typical daily capacity for run-queue limit.
 DEFAULT_GLOBAL_TOP_N = int(os.getenv("ALPHA_GLOBAL_TOP_N", "120"))
@@ -110,6 +111,7 @@ def rank_trim_pending_queue(
             window_days=stats_window_days,
             horizon_days=stats_horizon_days,
         )
+        market_ctx = build_market_context(conn, tenant_id=tenant_id, as_of_date=as_of_date)
 
         rows = conn.execute(
             """
@@ -129,6 +131,7 @@ def rank_trim_pending_queue(
                 "kept": 0,
                 "deleted": 0,
                 "global_top_n": int(global_top_n),
+                "market_context": market_ctx,
             }
 
         scored: list[tuple[float, int, dict[str, Any], str, str]] = []
@@ -136,8 +139,12 @@ def rank_trim_pending_queue(
             meta = json.loads(str(r["metadata_json"] or "{}"))
             if not isinstance(meta, dict):
                 meta = {}
-            rank = compute_rank_score(meta, strategy_stats)
+            rank_base = compute_rank_score(meta, strategy_stats)
+            strat_for_temporal = str(meta.get("strategy") or meta.get("strategy_id") or "").strip()
+            m = apply_temporal_adjustment(strat_for_temporal, market_ctx)
+            rank = rank_base * m
             meta["rank_score"] = round(rank, 6)
+            meta["temporal_multiplier"] = round(m, 6)
             scored.append((rank, int(r["rowid"]), meta, str(r["symbol"]).upper(), str(r["source"])))
 
         scored.sort(key=lambda t: -t[0])
@@ -177,6 +184,7 @@ def rank_trim_pending_queue(
             "deleted": len(to_delete),
             "global_top_n": int(global_top_n),
             "strategy_stats_keys": sorted(strategy_stats.keys()),
+            "market_context": market_ctx,
         }
     finally:
         repo.close()
