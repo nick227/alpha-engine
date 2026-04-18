@@ -8,11 +8,17 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any
 
 # Set ALPHA_RANK_TEMPORAL=0 to disable multipliers (base rank only).
 _RANK_TEMPORAL = os.getenv("ALPHA_RANK_TEMPORAL", "1").strip().lower() not in ("0", "false", "no")
+
+# When VIX is missing from DB, scale rank by this (default 0.95). Set to 1.0 to disable.
+_VIX_FALLBACK_RANK_MULT = float(os.getenv("ALPHA_VIX_FALLBACK_RANK_MULT", "0.95"))
+
+_AUDIT_LOG = Path(os.getenv("ALPHA_MARKET_CONTEXT_AUDIT_LOG", "logs/market_context_audit.log"))
 
 
 def _calendar_date_from_bar_ts(ts_raw: str | None) -> date | None:
@@ -156,25 +162,60 @@ def apply_temporal_adjustment(strategy_key: str, context: dict[str, Any]) -> flo
     """
     Multiplier applied to base rank score. Safe defaults — no hard filters.
     strategy_key: discovery strategy id or type (normalized internally).
+    Applies a small penalty when vix_fallback_used (even if temporal heuristics are off).
     """
-    if not _RANK_TEMPORAL:
-        return 1.0
-    st = normalize_strategy_type(strategy_key)
-    vix = float(context.get("vix") or 20.0)
-    month = int(context.get("month") or 0)
-
     m = 1.0
+    if _RANK_TEMPORAL:
+        st = normalize_strategy_type(strategy_key)
+        vix = float(context.get("vix") or 20.0)
+        month = int(context.get("month") or 0)
 
-    if vix > 30.0:
-        if st in ("mean_reversion", "vol_crush"):
-            m *= 0.7
-        if st in ("breakout", "volatility_breakout"):
-            m *= 1.2
+        if vix > 30.0:
+            if st in ("mean_reversion", "vol_crush"):
+                m *= 0.7
+            if st in ("breakout", "volatility_breakout"):
+                m *= 1.2
 
-    if vix < 15.0 and st == "silent_compounder":
-        m *= 1.15
+        if vix < 15.0 and st == "silent_compounder":
+            m *= 1.15
 
-    if month == 9:
-        m *= 0.9
+        if month == 9:
+            m *= 0.9
+
+    if context.get("vix_fallback_used"):
+        m *= _VIX_FALLBACK_RANK_MULT
 
     return m
+
+
+def market_context_log_line(ctx: dict[str, Any]) -> str:
+    """One-line human summary for pipeline logs (Step 3 / Step 6)."""
+    vix = ctx.get("vix")
+    reg = str(ctx.get("regime") or "?")
+    age = ctx.get("vix_age_days")
+    warn = bool(ctx.get("context_warning", False))
+    if age is None:
+        age_s = "n/a"
+    else:
+        age_s = f"{int(age)}d"
+    vix_s = f"{float(vix):.1f}" if vix is not None else "?"
+    return f"Market Context: VIX={vix_s} | Regime={reg} | Age={age_s} | Warning={warn}"
+
+
+def append_market_context_audit(step: str, ctx: dict[str, Any]) -> None:
+    """
+    Append one TSV line for tracking warning rate (grep / scripts over logs/market_context_audit.log).
+    Columns: iso_utc, step, context_warning, vix_fallback_used, vix, vix_age_days
+    """
+    try:
+        _AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        cw = bool(ctx.get("context_warning", False))
+        fb = bool(ctx.get("vix_fallback_used", False))
+        vix = ctx.get("vix")
+        age = ctx.get("vix_age_days")
+        line = f"{iso}\t{step}\t{cw}\t{fb}\t{vix}\t{age}\n"
+        with _AUDIT_LOG.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass

@@ -17,7 +17,12 @@ import sqlite3
 from typing import Any
 
 from app.db.repository import AlphaRepository
-from app.engine.ranking_temporal import apply_temporal_adjustment, build_market_context
+from app.engine.ranking_temporal import (
+    append_market_context_audit,
+    apply_temporal_adjustment,
+    build_market_context,
+    market_context_log_line,
+)
 
 DEFAULT_TOP_N = int(os.getenv("ALPHA_PREDICTION_TOP_N", "120"))
 DEFAULT_MAX_PER_STRATEGY = int(os.getenv("ALPHA_PREDICTION_MAX_PER_STRATEGY", "10"))
@@ -246,6 +251,9 @@ def main(argv: list[str] | None = None) -> int:
         max_per_strategy=int(args.max_per_strategy),
     )
     print(json.dumps(out, indent=2))
+    mc = out.get("market_context") or {}
+    print(market_context_log_line(mc), flush=True)
+    append_market_context_audit("prediction_rank_sqlite", mc)
     return 0
 
 

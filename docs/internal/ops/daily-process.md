@@ -50,6 +50,8 @@ The batch sets **`ASOF`** to today’s calendar date (`YYYY-MM-DD`) for steps th
 
 **Temporal rank modifier (steps 3 and 6):** `ALPHA_RANK_TEMPORAL` (default **on**; set `0` to disable) applies a lightweight VIX/month multiplier to rank scores after the base score is computed (`app/engine/ranking_temporal.py`). VIX is read from `price_bars` (`^VIX`, `1d`) on or before `ASOF`. The JSON summary and queue `metadata_json` include **`market_context`**: `vix`, `regime`, `vix_timestamp`, `vix_fallback_used`, `vix_age_days`, **`context_warning`** (true if fallback or VIX bar older than one calendar day vs `ASOF`).
 
+After each **queue_rank_trim** / **prediction_rank** run, the CLI prints a one-line summary (e.g. `Market Context: VIX=18.4 | Regime=normal | Age=0d | Warning=false`) and appends a TSV row to **`logs/market_context_audit.log`** (UTC timestamp, step name, `context_warning`, `vix_fallback_used`, `vix`, `vix_age_days`) for tracking warning rates. Override path with **`ALPHA_MARKET_CONTEXT_AUDIT_LOG`**. When VIX is missing, rank is also scaled by **`ALPHA_VIX_FALLBACK_RANK_MULT`** (default **0.95**; set **1.0** to disable).
+
 **CLI flags** on `discovery_cli nightly` (instead of env): `--supplement-target`, `--supplement-min-confidence`, `--supplement-per-strategy-cap`, `--no-threshold-supplement`.
 
 **Success:** The log ends with `Pipeline finished OK` and the batch exits `0`.

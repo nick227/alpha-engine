@@ -14,7 +14,12 @@ import sqlite3
 from typing import Any
 
 from app.db.repository import AlphaRepository
-from app.engine.ranking_temporal import apply_temporal_adjustment, build_market_context
+from app.engine.ranking_temporal import (
+    append_market_context_audit,
+    apply_temporal_adjustment,
+    build_market_context,
+    market_context_log_line,
+)
 
 # Default matches typical daily capacity for run-queue limit.
 DEFAULT_GLOBAL_TOP_N = int(os.getenv("ALPHA_GLOBAL_TOP_N", "120"))
@@ -213,6 +218,9 @@ def main(argv: list[str] | None = None) -> int:
         stats_horizon_days=int(args.stats_horizon),
     )
     print(json.dumps(summary, indent=2))
+    mc = summary.get("market_context") or {}
+    print(market_context_log_line(mc), flush=True)
+    append_market_context_audit("queue_rank_trim", mc)
     return 0
 
 

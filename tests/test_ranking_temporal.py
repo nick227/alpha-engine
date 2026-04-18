@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from app.engine.ranking_temporal import (
+    append_market_context_audit,
     apply_temporal_adjustment,
     build_market_context,
     infer_regime,
+    market_context_log_line,
     normalize_strategy_type,
 )
 
@@ -19,20 +21,32 @@ def test_normalize_strategy_type() -> None:
     assert normalize_strategy_type("discovery_volatility_breakout") == "volatility_breakout"
 
 
+def test_market_context_log_line() -> None:
+    s = market_context_log_line(
+        {
+            "vix": 18.4,
+            "regime": "normal",
+            "vix_age_days": 0,
+            "context_warning": False,
+        }
+    )
+    assert "VIX=18.4" in s and "Regime=normal" in s and "Age=0d" in s and "Warning=False" in s
+
+
 def test_apply_temporal_high_vix_breakout_boost() -> None:
-    ctx = {"vix": 32.0, "regime": "high", "sentiment": "neutral", "month": 4}
+    ctx = {"vix": 32.0, "regime": "high", "sentiment": "neutral", "month": 4, "vix_fallback_used": False}
     m = apply_temporal_adjustment("volatility_breakout", ctx)
     assert abs(m - 1.2) < 1e-9
 
 
 def test_apply_temporal_low_vix_silent_compounder() -> None:
-    ctx = {"vix": 12.0, "regime": "low", "sentiment": "neutral", "month": 4}
+    ctx = {"vix": 12.0, "regime": "low", "sentiment": "neutral", "month": 4, "vix_fallback_used": False}
     m = apply_temporal_adjustment("silent_compounder", ctx)
     assert abs(m - 1.15) < 1e-9
 
 
 def test_apply_temporal_september_dampener() -> None:
-    ctx = {"vix": 20.0, "regime": "normal", "sentiment": "neutral", "month": 9}
+    ctx = {"vix": 20.0, "regime": "normal", "sentiment": "neutral", "month": 9, "vix_fallback_used": False}
     m = apply_temporal_adjustment("silent_compounder", ctx)
     assert abs(m - 0.9) < 1e-9
 
@@ -41,8 +55,29 @@ def test_apply_temporal_disabled_flag(monkeypatch) -> None:
     import app.engine.ranking_temporal as rt
 
     monkeypatch.setattr(rt, "_RANK_TEMPORAL", False)
-    ctx = {"vix": 32.0, "regime": "high", "sentiment": "neutral", "month": 4}
+    ctx = {"vix": 32.0, "regime": "high", "sentiment": "neutral", "month": 4, "vix_fallback_used": False}
     assert rt.apply_temporal_adjustment("volatility_breakout", ctx) == 1.0
+
+
+def test_apply_temporal_vix_fallback_penalty(monkeypatch) -> None:
+    import app.engine.ranking_temporal as rt
+
+    monkeypatch.setattr(rt, "_RANK_TEMPORAL", False)
+    ctx = {"vix": 20.0, "month": 4, "vix_fallback_used": True}
+    assert abs(rt.apply_temporal_adjustment("anything", ctx) - 0.95) < 1e-9
+
+
+def test_append_market_context_audit(tmp_path, monkeypatch) -> None:
+    import app.engine.ranking_temporal as rt
+
+    log = tmp_path / "audit.tsv"
+    monkeypatch.setattr(rt, "_AUDIT_LOG", log)
+    append_market_context_audit(
+        "queue_rank_trim",
+        {"context_warning": True, "vix_fallback_used": False, "vix": 18.0, "vix_age_days": 0},
+    )
+    text = log.read_text(encoding="utf-8")
+    assert "queue_rank_trim" in text and "\tTrue\tFalse\t18.0\t0" in text
 
 
 def test_build_market_context_uses_vix_from_db(tmp_path) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from app.ui.middle.market_context_banner import render_market_context_strip
 from app.ui.shell.chat_panel import render_chat_panel
 from app.ui.shell.nav import ROUTES, get_route, set_route
 
@@ -35,6 +36,8 @@ def render_top_bar(*, filters: dict) -> str:
         """,
         unsafe_allow_html=True,
     )
+
+    render_market_context_strip()
 
     nav_col, context_col, chat_col = st.columns([7, 4, 2])
     with nav_col:
