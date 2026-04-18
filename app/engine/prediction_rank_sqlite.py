@@ -22,6 +22,7 @@ from app.engine.ranking_temporal import (
     apply_temporal_adjustment,
     build_market_context,
     market_context_log_line,
+    temporal_ranking_config_snapshot,
 )
 
 DEFAULT_TOP_N = int(os.getenv("ALPHA_PREDICTION_TOP_N", "120"))
@@ -180,9 +181,22 @@ def rank_predictions_for_date(
             temporal_key = keys[-1] if len(keys) > 1 else keys[0]
             m = apply_temporal_adjustment(str(temporal_key), market_ctx)
             rs_adj = rs * m
+            ranking_snap: dict[str, Any] = {
+                "as_of_date": as_of_date,
+                "market_context": market_ctx,
+                "strategy_key_for_temporal": str(temporal_key),
+                "temporal_multiplier": round(m, 6),
+                "rank_score_base": round(rs, 6),
+                "rank_score": round(rs_adj, 6),
+                "config": temporal_ranking_config_snapshot(),
+            }
             conn.execute(
-                "UPDATE predictions SET rank_score = ? WHERE id = ?",
-                (round(rs_adj, 6), str(r["id"])),
+                """
+                UPDATE predictions
+                SET rank_score = ?, ranking_context_json = ?
+                WHERE id = ?
+                """,
+                (round(rs_adj, 6), json.dumps(ranking_snap, sort_keys=True), str(r["id"])),
             )
             cap_key = keys[-1] if len(keys) > 1 else keys[0]
             scored.append((rs_adj, str(r["id"]), cap_key))

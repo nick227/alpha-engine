@@ -119,9 +119,14 @@ def test_rank_predictions_for_date_sets_rank_score(tmp_path) -> None:
 
     repo2 = AlphaRepository(db_path=str(db_path))
     try:
-        row = repo2.conn.execute("SELECT rank_score FROM predictions WHERE id='p1'").fetchone()
+        row = repo2.conn.execute(
+            "SELECT rank_score, ranking_context_json FROM predictions WHERE id='p1'"
+        ).fetchone()
         assert row is not None and row["rank_score"] is not None
         assert float(row["rank_score"]) > 0.0
+        snap = json.loads(str(row["ranking_context_json"] or "{}"))
+        assert snap.get("market_context", {}).get("vix") is not None
+        assert "rank_score_base" in snap and "temporal_multiplier" in snap
     finally:
         repo2.close()
 

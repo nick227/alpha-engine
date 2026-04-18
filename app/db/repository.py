@@ -125,7 +125,8 @@ class AlphaRepository:
             trend_strength TEXT,
             scored_outcome_id TEXT,
             scored_at TEXT,
-            rank_score REAL
+            rank_score REAL,
+            ranking_context_json TEXT
         );
 
         CREATE TABLE IF NOT EXISTS prediction_outcomes (
@@ -717,6 +718,11 @@ class AlphaRepository:
         if pred_cols and "rank_score" not in pred_cols:
             try:
                 self.conn.execute("ALTER TABLE predictions ADD COLUMN rank_score REAL;")
+            except Exception:
+                pass
+        if pred_cols and "ranking_context_json" not in pred_cols:
+            try:
+                self.conn.execute("ALTER TABLE predictions ADD COLUMN ranking_context_json TEXT;")
             except Exception:
                 pass
 

@@ -188,6 +188,14 @@ def apply_temporal_adjustment(strategy_key: str, context: dict[str, Any]) -> flo
     return m
 
 
+def temporal_ranking_config_snapshot() -> dict[str, Any]:
+    """Flags and multipliers at rank time — store with prediction for later A/B analysis."""
+    return {
+        "rank_temporal_heuristics": bool(_RANK_TEMPORAL),
+        "vix_fallback_rank_mult": float(_VIX_FALLBACK_RANK_MULT),
+    }
+
+
 def market_context_log_line(ctx: dict[str, Any]) -> str:
     """One-line human summary for pipeline logs (Step 3 / Step 6)."""
     vix = ctx.get("vix")

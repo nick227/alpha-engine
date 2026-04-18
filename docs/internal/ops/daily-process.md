@@ -52,6 +52,8 @@ The batch sets **`ASOF`** to today’s calendar date (`YYYY-MM-DD`) for steps th
 
 After each **queue_rank_trim** / **prediction_rank** run, the CLI prints a one-line summary (e.g. `Market Context: VIX=18.4 | Regime=normal | Age=0d | Warning=false`) and appends a TSV row to **`logs/market_context_audit.log`** (UTC timestamp, step name, `context_warning`, `vix_fallback_used`, `vix`, `vix_age_days`) for tracking warning rates. Override path with **`ALPHA_MARKET_CONTEXT_AUDIT_LOG`**. When VIX is missing, rank is also scaled by **`ALPHA_VIX_FALLBACK_RANK_MULT`** (default **0.95**; set **1.0** to disable).
 
+**Audit trail on predictions:** Step 6 persists **`ranking_context_json`** on each ranked `predictions` row (full `market_context`, base vs final score, temporal multiplier, and config flags) so later analysis (e.g. outcomes vs `context_warning`) does not depend on log files alone.
+
 **CLI flags** on `discovery_cli nightly` (instead of env): `--supplement-target`, `--supplement-min-confidence`, `--supplement-per-strategy-cap`, `--no-threshold-supplement`.
 
 **Success:** The log ends with `Pipeline finished OK` and the batch exits `0`.
