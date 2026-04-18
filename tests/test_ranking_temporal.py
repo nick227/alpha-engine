@@ -37,7 +37,7 @@ def test_apply_temporal_september_dampener() -> None:
     assert abs(m - 0.9) < 1e-9
 
 
-def test_apply_temporal_disabled_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_apply_temporal_disabled_flag(monkeypatch) -> None:
     import app.engine.ranking_temporal as rt
 
     monkeypatch.setattr(rt, "_RANK_TEMPORAL", False)
@@ -70,5 +70,53 @@ def test_build_market_context_uses_vix_from_db(tmp_path) -> None:
         assert ctx["vix"] == 18.0
         assert ctx["regime"] == "normal"
         assert ctx["month"] == 4
+        assert ctx["vix_timestamp"] == "2026-04-16"
+        assert ctx["vix_fallback_used"] is False
+        assert ctx["vix_age_days"] == 1
+        assert ctx["context_warning"] is False
+    finally:
+        repo2.close()
+
+
+def test_build_market_context_fallback_when_no_vix_bar(tmp_path) -> None:
+    from app.db.repository import AlphaRepository
+
+    db_path = tmp_path / "empty.db"
+    repo = AlphaRepository(db_path=str(db_path))
+    try:
+        ctx = build_market_context(repo.conn, tenant_id="default", as_of_date="2026-04-17")
+        assert ctx["vix"] == 20.0
+        assert ctx["vix_fallback_used"] is True
+        assert ctx["vix_timestamp"] is None
+        assert ctx["vix_age_days"] is None
+        assert ctx["context_warning"] is True
+    finally:
+        repo.close()
+
+
+def test_build_market_context_stale_vix_bar_warns(tmp_path) -> None:
+    from app.db.repository import AlphaRepository
+
+    db_path = tmp_path / "stale.db"
+    repo = AlphaRepository(db_path=str(db_path))
+    try:
+        conn = repo.conn
+        conn.execute(
+            """
+            INSERT INTO price_bars
+              (tenant_id, ticker, timeframe, timestamp, open, high, low, close, volume)
+            VALUES
+              ('default', '^VIX', '1d', '2026-04-14T00:00:00Z', 20, 20, 20, 20, 1e6)
+            """,
+        )
+        conn.commit()
+    finally:
+        repo.close()
+
+    repo2 = AlphaRepository(db_path=str(db_path))
+    try:
+        ctx = build_market_context(repo2.conn, tenant_id="default", as_of_date="2026-04-17")
+        assert ctx["vix_age_days"] == 3
+        assert ctx["context_warning"] is True
     finally:
         repo2.close()

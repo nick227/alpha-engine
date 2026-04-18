@@ -145,6 +145,7 @@ def rank_trim_pending_queue(
             rank = rank_base * m
             meta["rank_score"] = round(rank, 6)
             meta["temporal_multiplier"] = round(m, 6)
+            meta["market_context"] = market_ctx
             scored.append((rank, int(r["rowid"]), meta, str(r["symbol"]).upper(), str(r["source"])))
 
         scored.sort(key=lambda t: -t[0])

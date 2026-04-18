@@ -48,7 +48,7 @@ The batch sets **`ASOF`** to today’s calendar date (`YYYY-MM-DD`) for steps th
 
 **Post-materialize competition (step 6):** `ALPHA_PREDICTION_TOP_N` (default **120**) and `ALPHA_PREDICTION_MAX_PER_STRATEGY` (default **10**) control SQLite `predictions.rank_score` persistence and optional trimming after materialization (complements step 3; uses `strategy_performance`, `strategy_stability`, and `strategies.live_score`). Use `--no-trim` to only populate `rank_score` without deleting rows.
 
-**Temporal rank modifier (steps 3 and 6):** `ALPHA_RANK_TEMPORAL` (default **on**; set `0` to disable) applies a lightweight VIX/month multiplier to rank scores after the base score is computed (`app/engine/ranking_temporal.py`). VIX is read from `price_bars` (`^VIX`, `1d`) on or before `ASOF`.
+**Temporal rank modifier (steps 3 and 6):** `ALPHA_RANK_TEMPORAL` (default **on**; set `0` to disable) applies a lightweight VIX/month multiplier to rank scores after the base score is computed (`app/engine/ranking_temporal.py`). VIX is read from `price_bars` (`^VIX`, `1d`) on or before `ASOF`. The JSON summary and queue `metadata_json` include **`market_context`**: `vix`, `regime`, `vix_timestamp`, `vix_fallback_used`, `vix_age_days`, **`context_warning`** (true if fallback or VIX bar older than one calendar day vs `ASOF`).
 
 **CLI flags** on `discovery_cli nightly` (instead of env): `--supplement-target`, `--supplement-min-confidence`, `--supplement-per-strategy-cap`, `--no-threshold-supplement`.
 

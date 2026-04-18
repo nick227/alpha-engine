@@ -15,16 +15,31 @@ from typing import Any
 _RANK_TEMPORAL = os.getenv("ALPHA_RANK_TEMPORAL", "1").strip().lower() not in ("0", "false", "no")
 
 
-def fetch_vix_close_on_or_before(
+def _calendar_date_from_bar_ts(ts_raw: str | None) -> date | None:
+    if not ts_raw:
+        return None
+    s = str(ts_raw).strip()
+    if len(s) >= 10:
+        try:
+            return date.fromisoformat(s[:10])
+        except ValueError:
+            pass
+    return None
+
+
+def fetch_vix_row_on_or_before(
     conn: sqlite3.Connection,
     *,
     tenant_id: str,
     as_of_date: str,
-) -> float | None:
-    """Latest daily ^VIX close on or before as_of_date (calendar)."""
+) -> tuple[float, str] | None:
+    """
+    Latest daily ^VIX bar on or before as_of_date.
+    Returns (close, timestamp raw string from DB) or None if missing.
+    """
     row = conn.execute(
         """
-        SELECT close FROM price_bars
+        SELECT close, timestamp FROM price_bars
         WHERE tenant_id = ?
           AND ticker = '^VIX'
           AND timeframe = '1d'
@@ -36,7 +51,19 @@ def fetch_vix_close_on_or_before(
     ).fetchone()
     if not row or row["close"] is None:
         return None
-    return float(row["close"])
+    ts = str(row["timestamp"] or "")
+    return (float(row["close"]), ts)
+
+
+def fetch_vix_close_on_or_before(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    as_of_date: str,
+) -> float | None:
+    """Latest daily ^VIX close on or before as_of_date (calendar)."""
+    got = fetch_vix_row_on_or_before(conn, tenant_id=tenant_id, as_of_date=as_of_date)
+    return None if got is None else got[0]
 
 
 def infer_regime(vix: float) -> str:
@@ -66,27 +93,63 @@ def build_market_context(
     vix_override: float | None = None,
 ) -> dict[str, Any]:
     """
-    Thin snapshot for ranking adjustments.
-    If VIX is missing in DB, uses 20.0 and regime "normal" (neutral default).
+    Thin snapshot for ranking adjustments and FE trust signals.
+    If VIX is missing in DB, uses 20.0 and regime "normal" (neutral default);
+    sets vix_fallback_used and context_warning.
     """
-    vix = float(vix_override) if vix_override is not None else fetch_vix_close_on_or_before(conn, tenant_id=tenant_id, as_of_date=as_of_date)
-    if vix is None:
-        vix = 20.0
+    vix_fallback_used = False
+    vix_ts_raw: str | None = None
+    vix_bar_day: date | None = None
+
+    try:
+        as_of_day = date.fromisoformat(as_of_date[:10])
+    except ValueError:
+        as_of_day = date.today()
+
+    if vix_override is not None:
+        vix = float(vix_override)
+        vix_bar_day = as_of_day
+        vix_ts_iso = as_of_day.isoformat()
+    else:
+        row = fetch_vix_row_on_or_before(conn, tenant_id=tenant_id, as_of_date=as_of_date)
+        if row is None:
+            vix = 20.0
+            vix_fallback_used = True
+            vix_ts_iso = ""
+        else:
+            vix, vix_ts_raw = row
+            vix_bar_day = _calendar_date_from_bar_ts(vix_ts_raw)
+            vix_ts_iso = vix_bar_day.isoformat() if vix_bar_day else (vix_ts_raw[:10] if vix_ts_raw and len(vix_ts_raw) >= 10 else "")
+
     reg = infer_regime(vix)
     try:
-        y, m, _ = as_of_date.split("-", 2)
+        _y, m, _ = as_of_date.split("-", 2)
         month = int(m)
     except (ValueError, IndexError):
         month = date.today().month
     sent = (sentiment or "neutral").strip().lower()
     if sent not in ("positive", "neutral", "negative"):
         sent = "neutral"
-    return {
+
+    vix_age_days: int | None = None
+    if vix_fallback_used or not vix_bar_day:
+        vix_age_days = None
+    else:
+        vix_age_days = (as_of_day - vix_bar_day).days
+
+    context_warning = bool(vix_fallback_used or (vix_age_days is not None and vix_age_days > 1))
+
+    out: dict[str, Any] = {
         "vix": vix,
         "regime": reg,
         "sentiment": sent,
         "month": month,
+        "vix_timestamp": vix_ts_iso if vix_ts_iso else None,
+        "vix_fallback_used": vix_fallback_used,
+        "vix_age_days": vix_age_days,
+        "context_warning": context_warning,
     }
+    return out
 
 
 def apply_temporal_adjustment(strategy_key: str, context: dict[str, Any]) -> float:
