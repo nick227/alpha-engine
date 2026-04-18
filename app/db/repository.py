@@ -586,6 +586,24 @@ class AlphaRepository:
 
         CREATE INDEX IF NOT EXISTS idx_candidate_queue_status
           ON candidate_queue(tenant_id, status);
+
+        CREATE TABLE IF NOT EXISTS admission_metrics (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            run_at TEXT NOT NULL,
+            newly_admitted_count INTEGER NOT NULL DEFAULT 0,
+            overrule_swap_count INTEGER NOT NULL DEFAULT 0,
+            overrule_detail_json TEXT NOT NULL DEFAULT '[]',
+            thresholds_json TEXT NOT NULL DEFAULT '{}',
+            admitted_total INTEGER NOT NULL DEFAULT 0,
+            avg_multiplier_admitted REAL,
+            avg_multiplier_recurring REAL,
+            avg_multiplier_rejected REAL,
+            lens_admitted_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_admission_metrics_tenant_run
+          ON admission_metrics(tenant_id, run_at DESC);
         """
         self.conn.executescript(schema)
         self._ensure_additive_schema()
@@ -766,6 +784,31 @@ class AlphaRepository:
                 self.conn.execute("ALTER TABLE predictions ADD COLUMN ranking_context_json TEXT;")
             except Exception:
                 pass
+
+        try:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS admission_metrics (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
+                    run_at TEXT NOT NULL,
+                    newly_admitted_count INTEGER NOT NULL DEFAULT 0,
+                    overrule_swap_count INTEGER NOT NULL DEFAULT 0,
+                    overrule_detail_json TEXT NOT NULL DEFAULT '[]',
+                    thresholds_json TEXT NOT NULL DEFAULT '{}',
+                    admitted_total INTEGER NOT NULL DEFAULT 0,
+                    avg_multiplier_admitted REAL,
+                    avg_multiplier_recurring REAL,
+                    avg_multiplier_rejected REAL,
+                    lens_admitted_json TEXT NOT NULL DEFAULT '{}'
+                );
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_admission_metrics_tenant_run ON admission_metrics(tenant_id, run_at DESC);"
+            )
+        except Exception:
+            pass
 
         cq_cols = cols("candidate_queue")
         if cq_cols:

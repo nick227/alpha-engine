@@ -14,7 +14,7 @@ from app.discovery.outcomes import compute_candidate_outcomes, compute_watchlist
 from app.discovery.promotion import select_high_conviction, watchlist_to_queue_rows, watchlist_to_repo_rows
 from app.discovery.runner import format_summary_json, run_discovery
 from app.discovery.stats import compute_discovery_stats, stats_to_repo_rows
-from app.discovery.admission import run_diversity_admission
+from app.discovery.admission import fetch_admission_metrics_recent, run_diversity_admission
 
 
 def _parse_date(s: str) -> date:
@@ -112,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python -m app.discovery.discovery_cli sync-fundamentals --symbols AAPL,MSFT\n"
             "  python -m app.discovery.discovery_cli run --date 2026-04-12 --top 50 --min-adv 2000000\n"
             "  python -m app.discovery.discovery_cli admit-candidates --max-admitted 20\n"
+            "  python -m app.discovery.discovery_cli admission-metrics --limit 14\n"
         ),
     )
     sub = p.add_subparsers(dest="command", required=True)
@@ -174,6 +175,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=3,
         help="Max demote+admit swaps per run when at cap (default: 3)",
     )
+    admit.add_argument(
+        "--no-record-metrics",
+        action="store_true",
+        help="Skip writing admission_metrics row",
+    )
+
+    mtr = sub.add_parser(
+        "admission-metrics",
+        help="Print recent admission_metrics rows (swaps, avg mult by status, lens mix)",
+    )
+    mtr.add_argument("--db", default="data/alpha.db")
+    mtr.add_argument("--tenant-id", default="default")
+    mtr.add_argument("--limit", type=int, default=30)
 
     promo = sub.add_parser("promote", help="Select high-conviction (overlap + persistence) and write watchlist + prediction_queue")
     promo.add_argument("--date", required=True, help="As-of date (YYYY-MM-DD)")
@@ -359,8 +373,18 @@ def main(argv: list[str] | None = None) -> int:
                 overrule_min_multiplier=float(args.overrule_min_multiplier),
                 overrule_min_discovery_score=float(args.overrule_min_discovery),
                 max_overrule_swaps=int(args.max_overrule_swaps),
+                record_metrics=not bool(args.no_record_metrics),
             )
             print(json.dumps(out, indent=2))
+            return 0
+        finally:
+            repo.close()
+
+    if args.command == "admission-metrics":
+        repo = AlphaRepository(db_path=str(args.db))
+        try:
+            rows = fetch_admission_metrics_recent(repo, tenant_id=str(args.tenant_id), limit=int(args.limit))
+            print(json.dumps(rows, indent=2))
             return 0
         finally:
             repo.close()

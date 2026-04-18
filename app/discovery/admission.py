@@ -8,9 +8,115 @@ When at cap, optional overrule swaps weakest admitted for high-potential eligibl
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from uuid import uuid4
 
 from app.db.repository import AlphaRepository
+
+
+def _avg_multiplier_for_status(repo: AlphaRepository, tenant_id: str, status: str) -> float | None:
+    row = repo.conn.execute(
+        """
+        SELECT AVG(multiplier_score) AS a
+        FROM candidate_queue
+        WHERE tenant_id = ? AND status = ? AND multiplier_score IS NOT NULL
+        """,
+        (tenant_id, status),
+    ).fetchone()
+    if row is None or row["a"] is None:
+        return None
+    return float(row["a"])
+
+
+def _lens_distribution_admitted(repo: AlphaRepository, tenant_id: str) -> dict[str, int]:
+    rows = repo.conn.execute(
+        """
+        SELECT COALESCE(NULLIF(TRIM(discovery_lens), ''), 'unknown') AS lens, COUNT(*) AS n
+        FROM candidate_queue
+        WHERE tenant_id = ? AND status = 'admitted'
+        GROUP BY COALESCE(NULLIF(TRIM(discovery_lens), ''), 'unknown')
+        """,
+        (tenant_id,),
+    ).fetchall()
+    return {str(r["lens"]): int(r["n"] or 0) for r in rows}
+
+
+def _record_admission_metrics(
+    repo: AlphaRepository,
+    tenant_id: str,
+    out: dict[str, Any],
+    *,
+    max_admitted: int,
+    overrule_min_multiplier: float,
+    overrule_min_discovery_score: float,
+    max_overrule_swaps: int,
+) -> None:
+    """Append one row to admission_metrics for tuning (swaps/day, lens mix, mult by status)."""
+    try:
+        overrule = out.get("overrule") if isinstance(out.get("overrule"), dict) else {}
+        swaps = overrule.get("swaps") if isinstance(overrule.get("swaps"), list) else []
+        n_swaps = int(overrule.get("count") or len(swaps))
+        row_ct = repo.conn.execute(
+            "SELECT COUNT(*) AS n FROM candidate_queue WHERE tenant_id = ? AND status = 'admitted'",
+            (tenant_id,),
+        ).fetchone()
+        admitted_total = int(row_ct["n"] if row_ct else 0)
+        thresholds = {
+            "max_admitted": int(max_admitted),
+            "overrule_min_multiplier": float(overrule_min_multiplier),
+            "overrule_min_discovery_score": float(overrule_min_discovery_score),
+            "max_overrule_swaps": int(max_overrule_swaps),
+        }
+        repo.conn.execute(
+            """
+            INSERT INTO admission_metrics (
+              id, tenant_id, run_at, newly_admitted_count, overrule_swap_count,
+              overrule_detail_json, thresholds_json, admitted_total,
+              avg_multiplier_admitted, avg_multiplier_recurring, avg_multiplier_rejected,
+              lens_admitted_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                str(uuid4()),
+                tenant_id,
+                repo.now_iso(),
+                int(out.get("count") or len(out.get("newly_admitted") or [])),
+                n_swaps,
+                json.dumps(swaps, separators=(",", ":")),
+                json.dumps(thresholds, separators=(",", ":")),
+                admitted_total,
+                _avg_multiplier_for_status(repo, tenant_id, "admitted"),
+                _avg_multiplier_for_status(repo, tenant_id, "recurring"),
+                _avg_multiplier_for_status(repo, tenant_id, "rejected"),
+                json.dumps(_lens_distribution_admitted(repo, tenant_id), separators=(",", ":")),
+            ),
+        )
+        repo.conn.commit()
+    except Exception:
+        return
+
+
+def fetch_admission_metrics_recent(
+    repo: AlphaRepository,
+    *,
+    tenant_id: str = "default",
+    limit: int = 90,
+) -> list[dict[str, Any]]:
+    """Last N admission runs (for dashboards / tuning)."""
+    rows = repo.conn.execute(
+        """
+        SELECT id, run_at, newly_admitted_count, overrule_swap_count, overrule_detail_json,
+               thresholds_json, admitted_total, avg_multiplier_admitted, avg_multiplier_recurring,
+               avg_multiplier_rejected, lens_admitted_json
+        FROM admission_metrics
+        WHERE tenant_id = ?
+        ORDER BY run_at DESC
+        LIMIT ?
+        """,
+        (tenant_id, int(limit)),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def _sort_key(r: dict[str, Any]) -> tuple[float, float, str]:
@@ -152,6 +258,7 @@ def run_diversity_admission(
     overrule_min_multiplier: float = 0.78,
     overrule_min_discovery_score: float = 0.72,
     max_overrule_swaps: int = 3,
+    record_metrics: bool = True,
 ) -> dict[str, Any]:
     """
     Promote eligible rows to admitted until the dynamic cap is reached.
@@ -265,24 +372,37 @@ def run_diversity_admission(
             max_overrule_swaps=max_overrule_swaps,
         )
 
-    if not selected and slots > 0:
-        return {
-            "ok": True,
-            "slots": slots,
-            "newly_admitted": [],
-            "reason": "no_eligible",
-            "max_admitted": int(max_admitted),
-            "already_admitted_before": n_admitted,
-            "overrule": overrule,
-        }
-
     row2 = repo.conn.execute(
         "SELECT COUNT(*) AS n FROM candidate_queue WHERE tenant_id = ? AND status = ?",
         (tenant_id, "admitted"),
     ).fetchone()
     n_after = int(row2["n"] if row2 else 0)
 
-    out: dict[str, Any] = {
+    if not selected and slots > 0:
+        out: dict[str, Any] = {
+            "ok": True,
+            "slots": slots,
+            "newly_admitted": [],
+            "count": 0,
+            "reason": "no_eligible",
+            "max_admitted": int(max_admitted),
+            "already_admitted_before": n_admitted,
+            "admitted_after": n_after,
+            "overrule": overrule,
+        }
+        if record_metrics:
+            _record_admission_metrics(
+                repo,
+                tenant_id,
+                out,
+                max_admitted=max_admitted,
+                overrule_min_multiplier=overrule_min_multiplier,
+                overrule_min_discovery_score=overrule_min_discovery_score,
+                max_overrule_swaps=max_overrule_swaps,
+            )
+        return out
+
+    out = {
         "ok": True,
         "slots": slots,
         "newly_admitted": selected,
@@ -294,4 +414,14 @@ def run_diversity_admission(
     }
     if slots == 0 and not selected:
         out["reason"] = "at_cap"
+    if record_metrics:
+        _record_admission_metrics(
+            repo,
+            tenant_id,
+            out,
+            max_admitted=max_admitted,
+            overrule_min_multiplier=overrule_min_multiplier,
+            overrule_min_discovery_score=overrule_min_discovery_score,
+            max_overrule_swaps=max_overrule_swaps,
+        )
     return out

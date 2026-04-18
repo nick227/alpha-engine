@@ -71,6 +71,8 @@ def test_diversity_admission_per_lens_and_cap(tmp_path) -> None:
             "SELECT COUNT(*) AS n FROM candidate_queue WHERE status='admitted'"
         ).fetchone()["n"]
         assert int(n) == 3
+        mrows = repo.conn.execute("SELECT COUNT(*) AS n FROM admission_metrics").fetchone()["n"]
+        assert int(mrows) >= 1
     finally:
         repo.close()
 
