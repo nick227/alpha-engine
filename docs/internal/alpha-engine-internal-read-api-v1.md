@@ -26,7 +26,7 @@ When configured server-side, requests without a valid key are rejected. This is 
 
 | Endpoint | Parameters |
 |----------|------------|
-| `GET /ranking/top` | `limit` (default server-defined, e.g. 50), `as_of` (`YYYY-MM-DD`) — as-of date for the ranking snapshot |
+| `GET /ranking/top` | `limit` (default 50), `tenant_id` (default `default`). **`as_of` not in v1** — latest snapshot only (see below). |
 | `GET /ranking/movers` | `limit` (e.g. default 50) |
 | `GET /ticker/{symbol}/why` | `limit` (e.g. default 10) — caps embedded lists such as recent predictions |
 | `GET /ticker/{symbol}/performance` | `window` (e.g. `30d` — rolling window label; server maps to supported windows) |
@@ -38,9 +38,11 @@ Explicit params avoid hardcoded behavior and reduce accidental breaking changes 
 
 ### 1. Top rankings
 
-`GET /ranking/top?limit=50&as_of=YYYY-MM-DD`
+`GET /ranking/top?limit=50&tenant_id=default`
 
-Returns ranked tickers, `rank_score`, minimal metadata.
+Returns ranked tickers from the **latest** `ranking_snapshots` batch (`score`, `conviction`, `attribution`, `regime`, `timestamp`).
+
+**v1 behavior:** **latest snapshot only.** Do not pass `as_of`; historical snapshot selection may come in a later version. The JSON body includes `as_of: null` and `as_of_note` explaining this.
 
 ### 2. Ranking movers
 
@@ -127,13 +129,22 @@ Path prefix `/v1` is optional. **Behavior:** breaking changes require either a *
 
 ## Implementation notes
 
-Thin HTTP layer (e.g. FastAPI) calling:
+**Package:** `app/internal_read_v1` — FastAPI adapter over `DashboardService` (same read models as the Streamlit UI).
 
-- `EngineReadStore`
-- `explainability_read_model`
-- `explainability_rank_trends`
+**Run (loopback only):**
 
-Runs alongside alpha-engine.
+```bat
+set ALPHA_DB_PATH=data\alpha.db
+set INTERNAL_READ_KEY=your-shared-secret
+set INTERNAL_READ_PORT=8090
+.\.venv\Scripts\python.exe -m uvicorn app.internal_read_v1.app:app --host 127.0.0.1 --port %INTERNAL_READ_PORT%
+```
+
+**Local dev without a key (insecure):** `set INTERNAL_READ_INSECURE=1` — requests without `X-Internal-Key` are accepted; **do not use in production.**
+
+**Health:** `GET /health` — no auth (for local probes). Other routes require `X-Internal-Key` when `INTERNAL_READ_KEY` is set.
+
+Thin stack calling `EngineReadStore` / explainability modules via `DashboardService`.
 
 ## Evolution path
 
