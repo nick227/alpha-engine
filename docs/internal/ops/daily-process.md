@@ -97,6 +97,8 @@ cd C:\wamp64\www\alpha-engine-poc\scripts\windows
 schtasks /Query /TN "AlphaEngine - Discovery Milestone" /V /FO LIST
 ```
 
+If **`Register-ScheduledTask : Access is denied`**, the task was **not** created. Open **PowerShell as Administrator** and run the same `.\register_discovery_milestone_task.ps1` command again (the script now exits with code `1` and does **not** print a false “Registered” line).
+
 ---
 
 ## 3. Overlap protection

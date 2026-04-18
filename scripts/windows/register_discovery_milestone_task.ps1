@@ -6,7 +6,8 @@
   Creates task "AlphaEngine - Discovery Milestone" running
   scripts\windows\run_discovery_milestone_scheduled.bat from the repo root.
 
-  Run PowerShell as Administrator only if you need "Run whether user is logged on or not".
+  If you see **Access is denied**, close PowerShell and run it again: **Run as administrator**
+  (Task Scheduler often requires elevation to register tasks, depending on machine policy).
 
 .EXAMPLE
   cd C:\wamp64\www\alpha-engine-poc\scripts\windows
@@ -57,11 +58,32 @@ $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $dayEnum -At $at
 $arg = "/c `"" + $bat + "`""
 $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $arg -WorkingDirectory $repoRoot
 
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
-    -Description "Alpha Engine: run_discovery_milestone.py deep soak (docs/internal/ops/daily-process.md §2b)"
+try {
+    $null = Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
+        -Description "Alpha Engine: run_discovery_milestone.py deep soak (docs/internal/ops/daily-process.md)" `
+        -ErrorAction Stop
+}
+catch {
+    Write-Host ""
+    Write-Host "Register-ScheduledTask failed: $_" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Most common fix: register from an elevated shell —" -ForegroundColor Yellow
+    Write-Host "  1. Close this window." -ForegroundColor Yellow
+    Write-Host "  2. Start Menu -> Windows PowerShell -> Right-click -> Run as administrator." -ForegroundColor Yellow
+    Write-Host "  3. cd $here" -ForegroundColor Yellow
+    Write-Host "  4. .\register_discovery_milestone_task.ps1 $(if ($Force) { '-Force' })" -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
+}
+
+$chk = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if (-not $chk) {
+    Write-Host "Register-ScheduledTask reported success but task '$TaskName' was not found." -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "Registered: $TaskName"
 Write-Host "  Command: cmd.exe $arg"
