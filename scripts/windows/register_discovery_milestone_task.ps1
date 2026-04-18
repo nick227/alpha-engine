@@ -70,7 +70,7 @@ catch {
     Write-Host ""
     Write-Host "Register-ScheduledTask failed: $_" -ForegroundColor Red
     Write-Host ""
-    Write-Host "Most common fix: register from an elevated shell —" -ForegroundColor Yellow
+    Write-Host "Most common fix: register from an elevated shell -" -ForegroundColor Yellow
     Write-Host "  1. Close this window." -ForegroundColor Yellow
     Write-Host "  2. Start Menu -> Windows PowerShell -> Right-click -> Run as administrator." -ForegroundColor Yellow
     Write-Host "  3. cd $here" -ForegroundColor Yellow
@@ -89,4 +89,4 @@ Write-Host "Registered: $TaskName"
 Write-Host "  Command: cmd.exe $arg"
 Write-Host "  WorkingDirectory: $repoRoot"
 Write-Host "  Trigger: Weekly $DayOfWeek at $Time"
-Write-Host "Query: schtasks /Query /TN `"$TaskName`" /V /FO LIST"
+Write-Host ('Query: schtasks /Query /TN "' + $TaskName + '" /V /FO LIST')
