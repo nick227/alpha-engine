@@ -14,6 +14,7 @@ from app.discovery.outcomes import compute_candidate_outcomes, compute_watchlist
 from app.discovery.promotion import select_high_conviction, watchlist_to_queue_rows, watchlist_to_repo_rows
 from app.discovery.runner import format_summary_json, run_discovery
 from app.discovery.stats import compute_discovery_stats, stats_to_repo_rows
+from app.discovery.admission import run_diversity_admission
 
 
 def _parse_date(s: str) -> date:
@@ -110,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  python -m app.discovery.discovery_cli sync-fundamentals --symbols AAPL,MSFT\n"
             "  python -m app.discovery.discovery_cli run --date 2026-04-12 --top 50 --min-adv 2000000\n"
+            "  python -m app.discovery.discovery_cli admit-candidates --max-admitted 20\n"
         ),
     )
     sub = p.add_subparsers(dest="command", required=True)
@@ -134,6 +136,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use canonical Target Stocks universe (default: true)",
     )
     r.add_argument("--symbols", default=None, help="Optional comma-separated symbols override (disables target universe)")
+
+    admit = sub.add_parser(
+        "admit-candidates",
+        help="Promote candidate_queue rows to admitted (diversity: per lens + mcap; not ranking)",
+    )
+    admit.add_argument("--db", default="data/alpha.db")
+    admit.add_argument("--tenant-id", default="default")
+    admit.add_argument("--max-admitted", type=int, default=20, help="Cap for status=admitted (default: 20)")
+    admit.add_argument("--per-lens-cap", type=int, default=4, help="Max new admits per discovery_lens per run (default: 4)")
+    admit.add_argument(
+        "--per-mcap-cap",
+        type=int,
+        default=5,
+        help="Max admitted per market_cap_bucket (existing+new); use -1 to disable (default: 5)",
+    )
 
     promo = sub.add_parser("promote", help="Select high-conviction (overlap + persistence) and write watchlist + prediction_queue")
     promo.add_argument("--date", required=True, help="As-of date (YYYY-MM-DD)")
@@ -282,6 +299,23 @@ def main(argv: list[str] | None = None) -> int:
                     tenant_id=str(args.tenant_id),
                 )
             print(json.dumps({"upserted": len(snapshots), "symbols": symbols}, indent=2))
+            return 0
+        finally:
+            repo.close()
+
+    if args.command == "admit-candidates":
+        mcap = int(args.per_mcap_cap)
+        mcap_arg = None if mcap < 0 else mcap
+        repo = AlphaRepository(db_path=str(args.db))
+        try:
+            out = run_diversity_admission(
+                repo,
+                tenant_id=str(args.tenant_id),
+                max_admitted=int(args.max_admitted),
+                per_lens_cap=int(args.per_lens_cap),
+                per_mcap_cap=mcap_arg,
+            )
+            print(json.dumps(out, indent=2))
             return 0
         finally:
             repo.close()
