@@ -81,6 +81,9 @@ def test_discovery_runner_writes_candidates(tmp_path, top_n: int) -> None:
         assert nrows > 0
         assert nrows <= 5 * min(top_n, 2)
 
+        cq = repo.conn.execute("SELECT COUNT(*) as n FROM candidate_queue").fetchone()["n"]
+        assert cq > 0
+
         strat_rows = repo.conn.execute("SELECT DISTINCT strategy_type FROM discovery_candidates").fetchall()
         got = {str(r["strategy_type"]) for r in strat_rows}
         assert got.issubset(

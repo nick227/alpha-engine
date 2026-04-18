@@ -1,7 +1,8 @@
 """
 Active trading / ranking universe: static watchlist (YAML) ∪ admitted candidates (DB).
 
-Discovery feeds candidate_queue; only status='admitted' joins the active universe.
+Discovery is wide and exploratory; it writes candidate_queue (tags, multiplier_score).
+Daily ranking uses only this active universe — not raw discovery scores.
 """
 
 from __future__ import annotations

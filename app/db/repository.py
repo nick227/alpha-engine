@@ -570,6 +570,16 @@ class AlphaRepository:
             last_seen_at TEXT NOT NULL,
             signal_count INTEGER NOT NULL DEFAULT 0,
             rejection_reason TEXT,
+            primary_strategy TEXT,
+            strategy_tags_json TEXT NOT NULL DEFAULT '[]',
+            discovery_lens TEXT,
+            discovery_score REAL,
+            price_bucket TEXT,
+            market_cap_bucket TEXT,
+            sector TEXT,
+            industry TEXT,
+            multiplier_score REAL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
             PRIMARY KEY (tenant_id, ticker),
             CHECK (status IN ('seen', 'recurring', 'shortlisted', 'admitted', 'rejected'))
         );
@@ -756,6 +766,26 @@ class AlphaRepository:
                 self.conn.execute("ALTER TABLE predictions ADD COLUMN ranking_context_json TEXT;")
             except Exception:
                 pass
+
+        cq_cols = cols("candidate_queue")
+        if cq_cols:
+            for col, col_type in [
+                ("primary_strategy", "TEXT"),
+                ("strategy_tags_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("discovery_lens", "TEXT"),
+                ("discovery_score", "REAL"),
+                ("price_bucket", "TEXT"),
+                ("market_cap_bucket", "TEXT"),
+                ("sector", "TEXT"),
+                ("industry", "TEXT"),
+                ("multiplier_score", "REAL"),
+                ("metadata_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ]:
+                if col not in cq_cols:
+                    try:
+                        self.conn.execute(f"ALTER TABLE candidate_queue ADD COLUMN {col} {col_type};")
+                    except Exception:
+                        pass
 
         # trades and positions (handled by CREATE TABLE IF NOT EXISTS in _create_schema, 
         # but if we need new columns later we add them here)
@@ -1405,6 +1435,149 @@ class AlphaRepository:
             (tenant_id, "admitted"),
         ).fetchall()
         return sorted({str(r["ticker"]).strip().upper() for r in rows if r["ticker"]})
+
+    def merge_discovery_into_candidate_queue(
+        self,
+        *,
+        tenant_id: str,
+        ticker: str,
+        strategy_type: str,
+        discovery_score: float,
+        discovery_lens: str,
+        as_of_date: str,
+        price_bucket: str | None,
+        market_cap_bucket: str | None,
+        sector: str | None,
+        industry: str | None,
+        price_percentile_252d: float | None,
+        volatility_20d: float | None,
+    ) -> None:
+        """
+        Upsert discovery hits into candidate_queue (gated pipeline; not ranking).
+
+        Preserves admitted/shortlisted; bumps seen→recurring after repeated contact.
+        multiplier_score is promotion-side only (see app.discovery.candidate_queue_tags).
+        """
+        from app.discovery.candidate_queue_tags import compute_multiplier_score, merge_strategy_tags_json
+
+        sym = str(ticker).strip().upper()
+        if not sym:
+            return
+        now = self.now_iso()
+        row = self.conn.execute(
+            """
+            SELECT status, signal_count, strategy_tags_json, multiplier_score, discovery_score,
+                   sector, industry, price_bucket, market_cap_bucket
+            FROM candidate_queue
+            WHERE tenant_id = ? AND ticker = ?
+            """,
+            (tenant_id, sym),
+        ).fetchone()
+        if row and str(row["status"] or "") == "rejected":
+            return
+
+        prev_tags = str(row["strategy_tags_json"]) if row and row["strategy_tags_json"] is not None else None
+        tags_json = merge_strategy_tags_json(
+            prev_tags,
+            strategy_type=str(strategy_type),
+            score=float(discovery_score),
+            discovery_lens=str(discovery_lens),
+            as_of_date=str(as_of_date),
+        )
+        next_count = int((row["signal_count"] if row else 0) or 0) + 1
+
+        mult = compute_multiplier_score(
+            price_percentile_252d=price_percentile_252d,
+            volatility_20d=volatility_20d,
+            signal_count=next_count,
+        )
+        if row and row["multiplier_score"] is not None:
+            mult = max(float(row["multiplier_score"]), mult)
+
+        best_score = float(discovery_score)
+        if row and row["discovery_score"] is not None:
+            best_score = max(best_score, float(row["discovery_score"]))
+
+        pb = price_bucket if price_bucket is not None else (str(row["price_bucket"]) if row and row["price_bucket"] else None)
+        mcb = market_cap_bucket if market_cap_bucket is not None else (
+            str(row["market_cap_bucket"]) if row and row["market_cap_bucket"] else None
+        )
+        sec = sector if sector is not None else (str(row["sector"]) if row and row["sector"] else None)
+        ind = industry if industry is not None else (str(row["industry"]) if row and row["industry"] else None)
+
+        cur_status = str(row["status"] or "seen") if row else "seen"
+        if cur_status in ("admitted", "shortlisted"):
+            new_status = cur_status
+        elif next_count >= 3:
+            new_status = "recurring"
+        else:
+            new_status = "seen"
+
+        if not row:
+            self.conn.execute(
+                """
+                INSERT INTO candidate_queue (
+                  tenant_id, ticker, status, first_seen_at, last_seen_at, signal_count,
+                  rejection_reason, primary_strategy, strategy_tags_json, discovery_lens, discovery_score,
+                  price_bucket, market_cap_bucket, sector, industry, multiplier_score, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tenant_id,
+                    sym,
+                    new_status,
+                    now,
+                    now,
+                    next_count,
+                    None,
+                    str(strategy_type),
+                    tags_json,
+                    str(discovery_lens),
+                    best_score,
+                    pb,
+                    mcb,
+                    sec,
+                    ind,
+                    mult,
+                    "{}",
+                ),
+            )
+        else:
+            self.conn.execute(
+                """
+                UPDATE candidate_queue SET
+                  last_seen_at = ?,
+                  signal_count = ?,
+                  status = ?,
+                  primary_strategy = ?,
+                  strategy_tags_json = ?,
+                  discovery_lens = ?,
+                  discovery_score = ?,
+                  price_bucket = ?,
+                  market_cap_bucket = ?,
+                  sector = ?,
+                  industry = ?,
+                  multiplier_score = ?
+                WHERE tenant_id = ? AND ticker = ?
+                """,
+                (
+                    now,
+                    next_count,
+                    new_status,
+                    str(strategy_type),
+                    tags_json,
+                    str(discovery_lens),
+                    best_score,
+                    pb,
+                    mcb,
+                    sec,
+                    ind,
+                    mult,
+                    tenant_id,
+                    sym,
+                ),
+            )
+        self.conn.commit()
 
     def get_rolling_predictions(
         self,

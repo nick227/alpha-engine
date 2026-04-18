@@ -13,10 +13,41 @@ from app.core.environment import build_env_snapshot_v3
 from app.core.environment_v3 import bucket_env_v3
 from app.discovery.feature_snapshot import build_feature_snapshot
 from app.discovery.strategies import STRATEGIES, score_candidates, to_repo_rows
-from app.discovery.types import FeatureRow
 from app.discovery.industry_filter import get_industry_universe
 from app.discovery.adaptive_industry import get_industry_adaptive_configs
 from app.discovery.adaptive_selection import select_adaptive_config, enable_adaptive_globally
+from app.discovery.candidate_queue_tags import tag_fields_from_feature_row
+from app.discovery.lenses import default_lens_for_strategy
+from app.discovery.types import DiscoveryCandidate, FeatureRow
+
+
+def _push_top_to_candidate_queue(
+    repo: AlphaRepository,
+    *,
+    tenant_id: str,
+    as_of_date: str,
+    strategy: str,
+    top: list[DiscoveryCandidate],
+    features: dict[str, FeatureRow],
+) -> None:
+    """Merge strategy tops into candidate_queue (gated; does not touch ranking)."""
+    lens = default_lens_for_strategy(strategy)
+    for c in top:
+        tf = tag_fields_from_feature_row(features.get(c.symbol))
+        repo.merge_discovery_into_candidate_queue(
+            tenant_id=tenant_id,
+            ticker=c.symbol,
+            strategy_type=strategy,
+            discovery_score=float(c.score),
+            discovery_lens=lens,
+            as_of_date=as_of_date,
+            price_bucket=tf["price_bucket"],
+            market_cap_bucket=tf["market_cap_bucket"],
+            sector=tf["sector"],
+            industry=tf["industry"],
+            price_percentile_252d=tf["price_percentile_252d"],
+            volatility_20d=tf["volatility_20d"],
+        )
 
 
 def _insert_sniper_near_misses(
@@ -187,6 +218,13 @@ def run_discovery(
     """
     Run all discovery strategies and persist top candidates per strategy.
 
+    Universe: wide by default (all symbols in feature_snapshot / built snapshot).
+    Set use_target_universe=True to restrict scoring to config/target_stocks.yaml only.
+
+    Outputs:
+      - discovery_candidates (per-run audit)
+      - candidate_queue (gated pipeline; tags + multiplier_score; not used for daily ranking)
+
     Returns a JSON-serializable summary:
       { "as_of_date": "...", "strategies": {strategy: {"top": [...], "top_lt5": [...]}} }
     """
@@ -296,12 +334,14 @@ def run_discovery(
                     **score_gate_overrides,
                 )
                 strat_top_n = 3
+                tags_features: dict[str, FeatureRow] = features
                 if near_misses:
                     _insert_sniper_near_misses(db_path, as_of_date, near_misses)
                 print(f"  {strat}: {len(cands)} candidates, {len(near_misses)} near-misses (fear_regime={fear_regime})")
             else:
                 # Build industry-specific universe for this environment
                 industry_features = get_industry_universe(features, env_bucket)
+                tags_features = industry_features
                 print(f"  {strat}: {len(industry_features)} stocks after industry filtering")
 
                 # Get industry-aware adaptive config for this environment
@@ -334,6 +374,14 @@ def run_discovery(
 
             repo_rows = to_repo_rows(top)
             repo.upsert_discovery_candidates(as_of_date=as_of_date, candidates=repo_rows, tenant_id=tenant_id)
+            _push_top_to_candidate_queue(
+                repo,
+                tenant_id=tenant_id,
+                as_of_date=as_of_date,
+                strategy=strat,
+                top=top,
+                features=tags_features,
+            )
 
             strat_summary: dict[str, Any] = {
                 "top": [asdict(c) for c in top],
