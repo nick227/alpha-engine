@@ -22,11 +22,13 @@ import sys
 from datetime import date
 from pathlib import Path
 
-import pandas as pd
-
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+import pandas as pd
+
+from app.core.full_history_csv import resolve_full_history_csv_path
 
 DB_PATH = _ROOT / "data" / "alpha.db"
 FULL_HISTORY = _ROOT / "data" / "raw_dumps" / "full_history"
@@ -226,8 +228,8 @@ def main() -> None:
     print(f"{mode}Loading full_history/ CSVs -> tenant='{TENANT}'")
     fh_total = 0
     for sym in FULL_HISTORY_SYMBOLS:
-        path = FULL_HISTORY / f"{sym}.csv"
-        if not path.exists():
+        path = resolve_full_history_csv_path(FULL_HISTORY, sym)
+        if path is None:
             print(f"  skip  {sym:<12}  (not in full_history/)")
             continue
 
@@ -247,8 +249,8 @@ def main() -> None:
     if not args.dry_run:
         print(f"\n{mode}Copying same symbols -> tenant='{TRAIN_TENANT}'")
         for sym in FULL_HISTORY_SYMBOLS:
-            path = FULL_HISTORY / f"{sym}.csv"
-            if not path.exists():
+            path = resolve_full_history_csv_path(FULL_HISTORY, sym)
+            if path is None:
                 continue
             df = _load_full_history_csv(path)
             if df is None:

@@ -7,7 +7,8 @@
 - id: stooq_dump
   type: market
   adapter: stooq_dump
-  enabled: true
+  # Disabled until data/raw_dumps/stooq has {SYMBOL}.parquet (adapter does not read CSV).
+  enabled: false
   priority: 1
   poll: null
   weight: 1.0
@@ -80,6 +81,7 @@
       price_adj_close: "price_adj_close"
       volume: "volume"
 
+# Canonical historical analyst/news dumps: raw_*.csv only (not analyst_ratings_processed.csv).
 - id: analyst_ratings_dump
   type: news
   adapter: analyst_ratings_dump
