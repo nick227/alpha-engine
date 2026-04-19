@@ -6,7 +6,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "dashboard": ".\\\\.venv\\\\Scripts\\\\python.exe -m streamlit run app/ui/dashboard.py",
-    "read-api": ".\\\\.venv\\\\Scripts\\\\python.exe -m app.internal_read_v1",
+    "read-api": "node scripts/run_read_api.cjs",
     "dev": "npm run dashboard",
     "start": "npm run dashboard"
   },

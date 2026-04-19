@@ -141,6 +141,8 @@ Path prefix `/v1` is optional. **Behavior:** breaking changes require either a *
 
 Or: `.\.venv\Scripts\python.exe -m app.internal_read_v1` from repo root (`.env` is loaded by `__main__`).
 
+**npm:** `npm run read-api` uses `scripts/run_read_api.cjs` so **Ctrl+C** reliably stops Python and frees the listen port on Windows (plain `npm` scripts can leave the old process bound to the port).
+
 **Run locally (Linux / macOS):**
 
 ```bash
