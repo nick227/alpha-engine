@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.internal_read_v1.bars_chart import (
     build_candles_payload,
@@ -14,9 +14,8 @@ from app.internal_read_v1.bars_chart import (
     build_quote_payload,
     build_stats_payload,
     normalize_ticker,
-    parse_interval_key,
-    parse_range_key,
 )
+from app.internal_read_v1.chart_query_dep import ChartQueryParams, chart_range_interval
 from app.ui.middle.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -52,22 +51,16 @@ def api_quote(request: Request, ticker: str, tenant_id: str = "default") -> dict
 def api_history(
     request: Request,
     ticker: str,
-    rng: str | None = Query(None, alias="range"),
-    interval: str | None = None,
+    chart: Annotated[ChartQueryParams, Depends(chart_range_interval)],
     tenant_id: str = "default",
 ) -> dict[str, Any]:
     sym = normalize_ticker(ticker)
-    try:
-        rk = parse_range_key(rng)
-        ik = parse_interval_key(interval, rk)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
     return build_history_payload(
         _svc(request).store.conn,
         tenant_id=tenant_id,
         ticker=sym,
-        range_key=rk,
-        interval_key=ik,
+        range_key=chart.range_key,
+        interval_key=chart.interval_key,
         now=datetime.now(),
     )
 
@@ -91,21 +84,15 @@ def api_stats(request: Request, ticker: str, tenant_id: str = "default") -> dict
 def api_candles(
     request: Request,
     ticker: str,
-    rng: str | None = Query(None, alias="range"),
-    interval: str | None = None,
+    chart: Annotated[ChartQueryParams, Depends(chart_range_interval)],
     tenant_id: str = "default",
 ) -> dict[str, Any]:
     sym = normalize_ticker(ticker)
-    try:
-        rk = parse_range_key(rng)
-        ik = parse_interval_key(interval, rk)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
     return build_candles_payload(
         _svc(request).store.conn,
         tenant_id=tenant_id,
         ticker=sym,
-        range_key=rk,
-        interval_key=ik,
+        range_key=chart.range_key,
+        interval_key=chart.interval_key,
         now=datetime.now(),
     )
