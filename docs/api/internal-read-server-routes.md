@@ -6,7 +6,22 @@
 
 **Auth:** Header `x-internal-key: <INTERNAL_READ_KEY>` on all routes **except** `/health`, `/docs`, `/openapi.json`, `/redoc`. If `INTERNAL_READ_KEY` is unset, set `INTERNAL_READ_INSECURE=1` for local dev (allows requests without a key).
 
-**DB:** `ALPHA_DB_PATH` (default `data/alpha.db`).
+**DB:** `ALPHA_DB_PATH` (default `data/alpha.db`). **Profiles (optional):** `COMPANY_PROFILES_DIR` (default `data/company_profiles`) for `/api/company` and `marketCap` on `/api/stats`.
+
+---
+
+## Code layout (read paths)
+
+| Area | Module |
+|------|--------|
+| `range` / `interval` parsing | `app/internal_read_v1/chart_range_interval.py` |
+| Shared FastAPI `Depends` for history + candles | `app/internal_read_v1/chart_query_dep.py` (`ChartQueryParams`) |
+| OHLCV / history / candles | `app/internal_read_v1/chart_ohlcv.py` |
+| Quote, company, stats | `app/internal_read_v1/chart_market.py` |
+| Re-exports (compat) | `app/internal_read_v1/bars_chart.py` |
+| `/api` route wiring | `app/internal_read_v1/api_routes.py` |
+
+**Tests:** `tests/test_internal_read_api.py` (auth + legacy routes), `tests/test_internal_read_api_market.py` (seeded `/api/*`).
 
 ---
 
@@ -39,10 +54,12 @@
 |--------|------|----------------|
 | `GET` | `/api/tickers` | `tenant_id`, optional `q` — case-insensitive substring on symbol list |
 | `GET` | `/api/quote/{ticker}` | `tenant_id` · latest bar (prefers `1m` → `1h` → `1d`) |
-| `GET` | `/api/history/{ticker}` | `range`, `interval`, `tenant_id` · `{ ticker, range, interval, timeframe_used, points: [{ t, c }] }` |
-| `GET` | `/api/candles/{ticker}` | `range`, `interval`, `tenant_id` · OHLCV `candles[]` |
+| `GET` | `/api/history/{ticker}` | `range`, `interval`, `tenant_id` · `{ ticker, range, interval, timeframe_used, points: [{ t, c }] }` · invalid `range`/`interval` → **400** |
+| `GET` | `/api/candles/{ticker}` | `range`, `interval`, `tenant_id` · OHLCV `candles[]` · same **400** rules as history |
 | `GET` | `/api/company/{ticker}` | `tenant_id` · profile JSON + fundamentals snapshot merge |
-| `GET` | `/api/stats/{ticker}` | `tenant_id` · `price`, `dayChangePct`, `high52`, `low52`, `avgVolume` (30d avg daily), `marketCap`, `ath`, `ipoDate`, `yearsListed` |
+| `GET` | `/api/stats/{ticker}` | `tenant_id` · `price`, `dayChangePct`, `high52`, `low52`, `avgVolume` (30-session avg of daily bars), `marketCap`, `ath`, `ipoDate`, `yearsListed` |
+
+`history` and `candles` share the same query parsing (`chart_range_interval` via `Depends`).
 
 ### `/api/history` and `/api/candles` — `range`
 
@@ -50,7 +67,7 @@
 
 ### `/api/history` and `/api/candles` — `interval`
 
-Omit to use defaults (e.g. `1Y` → `1D`, `MAX` → `1Mo`). Supports values such as `1m`, `5m`, `30m`, `1h`, `1D`, `1W`, `1Mo` (see `app/internal_read_v1/bars_chart.py`).
+Omit to use defaults (e.g. `1Y` → `1D`, `MAX` → `1Mo`). Supports values such as `1m`, `5m`, `30m`, `1h`, `1D`, `1W`, `1Mo` — see `chart_range_interval.py`.
 
 ---
 
