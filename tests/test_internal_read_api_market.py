@@ -162,6 +162,15 @@ def test_api_recommendations_best(market_client: TestClient) -> None:
     row = res.json()
     assert row["ticker"] == "TST"
     assert row["mode"] == "balanced"
+    assert row["selectionPreference"] == "absolute"
+
+
+def test_api_recommendations_best_long_only(market_client: TestClient) -> None:
+    res = market_client.get("/api/recommendations/best", params={"preference": "long_only"})
+    assert res.status_code == 200
+    row = res.json()
+    assert row["selectionPreference"] == "long_only"
+    assert row["action"] in ("BUY", "SELL", "HOLD")
 
 
 def test_api_recommendations_ticker(market_client: TestClient) -> None:
@@ -174,4 +183,9 @@ def test_api_recommendations_ticker(market_client: TestClient) -> None:
 
 def test_api_recommendations_invalid_mode_400(market_client: TestClient) -> None:
     res = market_client.get("/api/recommendations/latest", params={"mode": "x"})
+    assert res.status_code == 400
+
+
+def test_api_recommendations_best_invalid_preference_400(market_client: TestClient) -> None:
+    res = market_client.get("/api/recommendations/best", params={"preference": "x"})
     assert res.status_code == 400

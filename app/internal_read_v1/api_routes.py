@@ -20,6 +20,7 @@ from app.internal_read_v1.recommendations import (
     get_recommendation_best,
     get_recommendation_for_ticker,
     get_recommendations_latest,
+    parse_best_preference,
     parse_mode,
 )
 from app.ui.middle.dashboard_service import DashboardService
@@ -124,13 +125,20 @@ def api_recommendations_latest(
 def api_recommendations_best(
     request: Request,
     mode: str = "balanced",
+    preference: str = "absolute",
     tenant_id: str = "default",
 ) -> dict[str, Any]:
     try:
         mode_key = parse_mode(mode)
+        pref_key = parse_best_preference(preference)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    row = get_recommendation_best(_svc(request).store.conn, tenant_id=tenant_id, mode=mode_key)
+    row = get_recommendation_best(
+        _svc(request).store.conn,
+        tenant_id=tenant_id,
+        mode=mode_key,
+        preference=pref_key,
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="no recommendation available")
     return row

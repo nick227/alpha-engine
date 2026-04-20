@@ -12,8 +12,10 @@ from app.internal_read_v1.chart_market import build_stats_payload
 from app.internal_read_v1.chart_symbols import normalize_ticker
 
 RecommendationMode = Literal["conservative", "balanced", "aggressive", "long_term"]
+BestPreference = Literal["absolute", "long_only"]
 
 _VALID_MODES: set[str] = {"conservative", "balanced", "aggressive", "long_term"}
+_VALID_BEST_PREFERENCES: set[str] = {"absolute", "long_only"}
 _MODE_WEIGHTS: dict[str, dict[str, float]] = {
     "conservative": {"ranking": 0.35, "consensus": 0.35, "momentum": 0.10, "admission": 0.20},
     "balanced": {"ranking": 0.30, "consensus": 0.40, "momentum": 0.20, "admission": 0.10},
@@ -61,6 +63,13 @@ def parse_mode(mode: str | None) -> RecommendationMode:
     if m not in _VALID_MODES:
         raise ValueError("invalid mode; use conservative, balanced, aggressive, or long_term")
     return m  # type: ignore[return-value]
+
+
+def parse_best_preference(value: str | None) -> BestPreference:
+    v = str(value or "absolute").strip().lower()
+    if v not in _VALID_BEST_PREFERENCES:
+        raise ValueError("invalid preference; use absolute or long_only")
+    return v  # type: ignore[return-value]
 
 
 def _latest_rankings(conn: sqlite3.Connection, *, tenant_id: str) -> dict[str, float]:
@@ -324,21 +333,48 @@ def get_recommendation_best(
     *,
     tenant_id: str,
     mode: RecommendationMode,
+    preference: BestPreference = "absolute",
 ) -> dict[str, Any] | None:
     rebuild_house_recommendations(conn, tenant_id=tenant_id, mode=mode)
-    row = conn.execute(
-        """
-        SELECT *
-        FROM house_recommendations
-        WHERE tenant_id = ? AND mode = ?
-        ORDER BY confidence DESC, score DESC
-        LIMIT 1
-        """,
-        (tenant_id, mode),
-    ).fetchone()
+    if preference == "long_only":
+        row = conn.execute(
+            """
+            SELECT *
+            FROM house_recommendations
+            WHERE tenant_id = ? AND mode = ? AND action = 'BUY'
+            ORDER BY confidence DESC, score DESC
+            LIMIT 1
+            """,
+            (tenant_id, mode),
+        ).fetchone()
+        if row is None:
+            # fallback to absolute best when no BUY exists
+            row = conn.execute(
+                """
+                SELECT *
+                FROM house_recommendations
+                WHERE tenant_id = ? AND mode = ?
+                ORDER BY confidence DESC, score DESC
+                LIMIT 1
+                """,
+                (tenant_id, mode),
+            ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM house_recommendations
+            WHERE tenant_id = ? AND mode = ?
+            ORDER BY confidence DESC, score DESC
+            LIMIT 1
+            """,
+            (tenant_id, mode),
+        ).fetchone()
     if not row:
         return None
-    return _row_to_payload(row, mode=mode)
+    payload = _row_to_payload(row, mode=mode)
+    payload["selectionPreference"] = preference
+    return payload
 
 
 def get_recommendation_for_ticker(
