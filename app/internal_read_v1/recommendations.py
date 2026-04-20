@@ -312,20 +312,48 @@ def get_recommendations_latest(
     *,
     tenant_id: str,
     mode: RecommendationMode,
+    preference: BestPreference = "absolute",
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     rebuild_house_recommendations(conn, tenant_id=tenant_id, mode=mode)
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM house_recommendations
-        WHERE tenant_id = ? AND mode = ?
-        ORDER BY confidence DESC, score DESC
-        LIMIT ?
-        """,
-        (tenant_id, mode, int(limit)),
-    ).fetchall()
-    return [_row_to_payload(r, mode=mode) for r in rows]
+    if preference == "long_only":
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM house_recommendations
+            WHERE tenant_id = ? AND mode = ? AND action = 'BUY'
+            ORDER BY confidence DESC, score DESC
+            LIMIT ?
+            """,
+            (tenant_id, mode, int(limit)),
+        ).fetchall()
+        # Fallback: if no BUY recommendations, return absolute set so list is never empty.
+        if not rows:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM house_recommendations
+                WHERE tenant_id = ? AND mode = ?
+                ORDER BY confidence DESC, score DESC
+                LIMIT ?
+                """,
+                (tenant_id, mode, int(limit)),
+            ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM house_recommendations
+            WHERE tenant_id = ? AND mode = ?
+            ORDER BY confidence DESC, score DESC
+            LIMIT ?
+            """,
+            (tenant_id, mode, int(limit)),
+        ).fetchall()
+    payload = [_row_to_payload(r, mode=mode) for r in rows]
+    for p in payload:
+        p["selectionPreference"] = preference
+    return payload
 
 
 def get_recommendation_best(

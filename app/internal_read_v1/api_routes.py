@@ -110,15 +110,23 @@ def api_recommendations_latest(
     request: Request,
     limit: int = 10,
     mode: str = "balanced",
+    preference: str = "absolute",
     tenant_id: str = "default",
 ) -> dict[str, Any]:
     try:
         mode_key = parse_mode(mode)
+        pref_key = parse_best_preference(preference)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     n = max(1, min(100, int(limit)))
-    rows = get_recommendations_latest(_svc(request).store.conn, tenant_id=tenant_id, mode=mode_key, limit=n)
-    return {"tenant_id": tenant_id, "mode": mode_key, "recommendations": rows}
+    rows = get_recommendations_latest(
+        _svc(request).store.conn,
+        tenant_id=tenant_id,
+        mode=mode_key,
+        preference=pref_key,
+        limit=n,
+    )
+    return {"tenant_id": tenant_id, "mode": mode_key, "selectionPreference": pref_key, "recommendations": rows}
 
 
 @router.get("/recommendations/best")

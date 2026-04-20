@@ -149,11 +149,27 @@ def test_api_tickers_search_msft(market_client: TestClient) -> None:
 def test_api_recommendations_latest(market_client: TestClient) -> None:
     res = market_client.get("/api/recommendations/latest", params={"limit": 5, "mode": "balanced"})
     assert res.status_code == 200
-    rows = res.json()["recommendations"]
+    body = res.json()
+    assert body["selectionPreference"] == "absolute"
+    rows = body["recommendations"]
     assert len(rows) >= 1
     assert rows[0]["ticker"] == "TST"
     assert "action" in rows[0]
     assert "confidence" in rows[0]
+    assert rows[0]["selectionPreference"] == "absolute"
+
+
+def test_api_recommendations_latest_long_only(market_client: TestClient) -> None:
+    res = market_client.get(
+        "/api/recommendations/latest",
+        params={"limit": 5, "mode": "balanced", "preference": "long_only"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["selectionPreference"] == "long_only"
+    rows = body["recommendations"]
+    assert len(rows) >= 1
+    assert rows[0]["selectionPreference"] == "long_only"
 
 
 def test_api_recommendations_best(market_client: TestClient) -> None:
@@ -188,4 +204,9 @@ def test_api_recommendations_invalid_mode_400(market_client: TestClient) -> None
 
 def test_api_recommendations_best_invalid_preference_400(market_client: TestClient) -> None:
     res = market_client.get("/api/recommendations/best", params={"preference": "x"})
+    assert res.status_code == 400
+
+
+def test_api_recommendations_latest_invalid_preference_400(market_client: TestClient) -> None:
+    res = market_client.get("/api/recommendations/latest", params={"preference": "x"})
     assert res.status_code == 400
