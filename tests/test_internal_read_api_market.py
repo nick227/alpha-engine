@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from starlette.testclient import TestClient
@@ -28,6 +29,48 @@ def _seed_price_bars(db_path: Path) -> None:
         _bar("2025-06-02T00:00:00+00:00", 110.0, high=112.0, low=108.0, volume=2e6),
     ]
     repo.save_price_bars("TST", "1d", daily, tenant_id="default")
+    repo.conn.execute(
+        """
+        INSERT OR REPLACE INTO candidate_queue
+          (tenant_id, ticker, status, first_seen_at, last_seen_at, signal_count, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("default", "TST", "admitted", "2025-06-01T00:00:00+00:00", "2025-06-02T00:00:00+00:00", 2, "{}"),
+    )
+    repo.save_consensus_signal(
+        {
+            "ticker": "TST",
+            "regime": "NORMAL",
+            "sentiment_strategy_id": "test_s",
+            "quant_strategy_id": "test_q",
+            "sentiment_score": 0.8,
+            "quant_score": 0.7,
+            "ws": 0.5,
+            "wq": 0.5,
+            "agreement_bonus": 0.0,
+            "p_final": 0.72,
+            "stability_score": 0.7,
+        },
+        tenant_id="default",
+    )
+    repo.conn.execute(
+        """
+        INSERT INTO ranking_snapshots
+          (id, tenant_id, ticker, score, conviction, attribution_json, regime, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid4()),
+            "default",
+            "TST",
+            0.55,
+            0.55,
+            "{}",
+            "NORMAL",
+            "2025-06-02T00:00:00+00:00",
+        ),
+    )
+    repo.conn.commit()
     repo.conn.close()
 
 
@@ -101,3 +144,34 @@ def test_api_tickers_search_msft(market_client: TestClient) -> None:
     assert res.status_code == 200
     tickers = res.json()["tickers"]
     assert "MSFT" in tickers
+
+
+def test_api_recommendations_latest(market_client: TestClient) -> None:
+    res = market_client.get("/api/recommendations/latest", params={"limit": 5, "mode": "balanced"})
+    assert res.status_code == 200
+    rows = res.json()["recommendations"]
+    assert len(rows) >= 1
+    assert rows[0]["ticker"] == "TST"
+    assert "action" in rows[0]
+    assert "confidence" in rows[0]
+
+
+def test_api_recommendations_best(market_client: TestClient) -> None:
+    res = market_client.get("/api/recommendations/best")
+    assert res.status_code == 200
+    row = res.json()
+    assert row["ticker"] == "TST"
+    assert row["mode"] == "balanced"
+
+
+def test_api_recommendations_ticker(market_client: TestClient) -> None:
+    res = market_client.get("/api/recommendations/TST", params={"mode": "conservative"})
+    assert res.status_code == 200
+    row = res.json()
+    assert row["ticker"] == "TST"
+    assert row["mode"] == "conservative"
+
+
+def test_api_recommendations_invalid_mode_400(market_client: TestClient) -> None:
+    res = market_client.get("/api/recommendations/latest", params={"mode": "x"})
+    assert res.status_code == 400

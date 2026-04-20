@@ -16,6 +16,12 @@ from app.internal_read_v1.bars_chart import (
     normalize_ticker,
 )
 from app.internal_read_v1.chart_query_dep import ChartQueryParams, chart_range_interval
+from app.internal_read_v1.recommendations import (
+    get_recommendation_best,
+    get_recommendation_for_ticker,
+    get_recommendations_latest,
+    parse_mode,
+)
 from app.ui.middle.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -96,3 +102,55 @@ def api_candles(
         interval_key=chart.interval_key,
         now=datetime.now(),
     )
+
+
+@router.get("/recommendations/latest")
+def api_recommendations_latest(
+    request: Request,
+    limit: int = 10,
+    mode: str = "balanced",
+    tenant_id: str = "default",
+) -> dict[str, Any]:
+    try:
+        mode_key = parse_mode(mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    n = max(1, min(100, int(limit)))
+    rows = get_recommendations_latest(_svc(request).store.conn, tenant_id=tenant_id, mode=mode_key, limit=n)
+    return {"tenant_id": tenant_id, "mode": mode_key, "recommendations": rows}
+
+
+@router.get("/recommendations/best")
+def api_recommendations_best(
+    request: Request,
+    mode: str = "balanced",
+    tenant_id: str = "default",
+) -> dict[str, Any]:
+    try:
+        mode_key = parse_mode(mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    row = get_recommendation_best(_svc(request).store.conn, tenant_id=tenant_id, mode=mode_key)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no recommendation available")
+    return row
+
+
+@router.get("/recommendations/{ticker}")
+def api_recommendations_ticker(
+    request: Request,
+    ticker: str,
+    mode: str = "balanced",
+    tenant_id: str = "default",
+) -> dict[str, Any]:
+    try:
+        mode_key = parse_mode(mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    sym = normalize_ticker(ticker)
+    row = get_recommendation_for_ticker(
+        _svc(request).store.conn, tenant_id=tenant_id, mode=mode_key, ticker=sym
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="no recommendation for ticker")
+    return row

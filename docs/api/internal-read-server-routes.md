@@ -58,8 +58,13 @@
 | `GET` | `/api/candles/{ticker}` | `range`, `interval`, `tenant_id` · OHLCV `candles[]` · same **400** rules as history |
 | `GET` | `/api/company/{ticker}` | `tenant_id` · profile JSON + fundamentals snapshot merge |
 | `GET` | `/api/stats/{ticker}` | `tenant_id` · `price`, `dayChangePct`, `high52`, `low52`, `avgVolume` (30-session avg of daily bars), `marketCap`, `ath`, `ipoDate`, `yearsListed` |
+| `GET` | `/api/recommendations/latest` | `tenant_id`, `limit` (1–100), `mode` (`conservative` \| `balanced` \| `aggressive` \| `long_term`) |
+| `GET` | `/api/recommendations/best` | `tenant_id`, `mode` · single highest-conviction house recommendation |
+| `GET` | `/api/recommendations/{ticker}` | `tenant_id`, `mode` · per-ticker house verdict |
 
 `history` and `candles` share the same query parsing (`chart_range_interval` via `Depends`).
+
+`recommendations/*` are built from a house model layer (`app/internal_read_v1/recommendations.py`) that combines ranking snapshots, consensus signals, momentum (`dayChangePct`), and candidate admission state into a final recommendation object.
 
 ### `/api/history` and `/api/candles` — `range`
 
@@ -80,6 +85,9 @@ GET /api/history/NVDA?range=1Y&interval=1D
 GET /api/stats/NVDA
 GET /api/company/NVDA
 GET /api/candles/NVDA?range=3M&interval=1D
+GET /api/recommendations/latest?limit=10&mode=balanced
+GET /api/recommendations/best?mode=balanced
+GET /api/recommendations/NVDA?mode=conservative
 ```
 
 ```http
