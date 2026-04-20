@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.internal_read_v1.api_routes import router as api_router
 from app.ui.middle.dashboard_service import DashboardService, RankingView
 
 _ENV_INSECURE = "INTERNAL_READ_INSECURE"
@@ -84,6 +85,8 @@ class _InternalKeyMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=401, content={"error": "unauthorized"})
         return await call_next(request)
 
+
+app.include_router(api_router)
 
 app.add_middleware(_InternalKeyMiddleware)
 
