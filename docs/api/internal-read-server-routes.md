@@ -1,0 +1,71 @@
+# Internal read server — route inventory
+
+**Stack:** FastAPI (`app/internal_read_v1`), not Fastify; this list uses a terse route-table style for quick porting to Node/Fastify clients.
+
+**Run:** `python -m app.internal_read_v1` or `npm run read-api` · default `127.0.0.1:8090` (`INTERNAL_READ_PORT` / `PORT`).
+
+**Auth:** Header `x-internal-key: <INTERNAL_READ_KEY>` on all routes **except** `/health`, `/docs`, `/openapi.json`, `/redoc`. If `INTERNAL_READ_KEY` is unset, set `INTERNAL_READ_INSECURE=1` for local dev (allows requests without a key).
+
+**DB:** `ALPHA_DB_PATH` (default `data/alpha.db`).
+
+---
+
+## Core
+
+| Method | Path | Query / notes |
+|--------|------|----------------|
+| `GET` | `/health` | No auth. `{ status, db_path }` |
+| `GET` | `/docs` | Swagger UI |
+| `GET` | `/openapi.json` | OpenAPI schema |
+| `GET` | `/redoc` | ReDoc |
+
+---
+
+## Rankings & explainability
+
+| Method | Path | Query / notes |
+|--------|------|----------------|
+| `GET` | `/ranking/top` | `limit` (1–500, default 50), `tenant_id` |
+| `GET` | `/ranking/movers` | `limit` (1–200, default 50), `tenant_id` |
+| `GET` | `/ticker/{symbol}/why` | `limit` (1–100, default 10), `tenant_id` · 404 if no queue + no predictions |
+| `GET` | `/ticker/{symbol}/performance` | `window` optional `30d` \| `60d` \| `90d`, `tenant_id` |
+| `GET` | `/admission/changes` | `hours` (1–168, default 24), `tenant_id` |
+
+---
+
+## Market / chart API (`/api`)
+
+| Method | Path | Query / notes |
+|--------|------|----------------|
+| `GET` | `/api/tickers` | `tenant_id`, optional `q` — case-insensitive substring on symbol list |
+| `GET` | `/api/quote/{ticker}` | `tenant_id` · latest bar (prefers `1m` → `1h` → `1d`) |
+| `GET` | `/api/history/{ticker}` | `range`, `interval`, `tenant_id` · `{ ticker, range, interval, timeframe_used, points: [{ t, c }] }` |
+| `GET` | `/api/candles/{ticker}` | `range`, `interval`, `tenant_id` · OHLCV `candles[]` |
+| `GET` | `/api/company/{ticker}` | `tenant_id` · profile JSON + fundamentals snapshot merge |
+| `GET` | `/api/stats/{ticker}` | `tenant_id` · `price`, `dayChangePct`, `high52`, `low52`, `avgVolume` (30d avg daily), `marketCap`, `ath`, `ipoDate`, `yearsListed` |
+
+### `/api/history` and `/api/candles` — `range`
+
+`1D` · `1W` · `1M` · `3M` · `1Y` · `5Y` · `MAX` (aliases e.g. `1y`, `1mo` for month *range*).
+
+### `/api/history` and `/api/candles` — `interval`
+
+Omit to use defaults (e.g. `1Y` → `1D`, `MAX` → `1Mo`). Supports values such as `1m`, `5m`, `30m`, `1h`, `1D`, `1W`, `1Mo` (see `app/internal_read_v1/bars_chart.py`).
+
+---
+
+## Quick examples (base `http://127.0.0.1:8090`)
+
+```http
+GET /api/tickers?q=aap
+GET /api/quote/NVDA
+GET /api/history/NVDA?range=1Y&interval=1D
+GET /api/stats/NVDA
+GET /api/company/NVDA
+GET /api/candles/NVDA?range=3M&interval=1D
+```
+
+```http
+GET /ranking/top?limit=20
+GET /ticker/NVDA/why
+```
