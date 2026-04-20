@@ -27,8 +27,15 @@ def _svc(request: Request) -> DashboardService:
 
 
 @router.get("/tickers")
-def api_tickers(request: Request, tenant_id: str = "default") -> dict[str, Any]:
+def api_tickers(
+    request: Request,
+    tenant_id: str = "default",
+    q: str | None = None,
+) -> dict[str, Any]:
     tickers = _svc(request).list_tickers(tenant_id=tenant_id)
+    if q is not None and str(q).strip():
+        needle = str(q).strip().lower()
+        tickers = [t for t in tickers if needle in str(t).lower()]
     return {"tenant_id": tenant_id, "tickers": tickers}
 
 

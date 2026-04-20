@@ -328,6 +328,56 @@ def _first_bar_date(conn: sqlite3.Connection, *, tenant_id: str, ticker: str) ->
     return to_utc_datetime(row[0]).strftime("%Y-%m-%d")
 
 
+def _avg_daily_volume(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    ticker: str,
+    now: datetime,
+    sessions: int = 30,
+) -> float | None:
+    rows = conn.execute(
+        """
+        SELECT volume FROM price_bars
+        WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND timestamp <= ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+        """,
+        (tenant_id, ticker, now.isoformat(), int(sessions)),
+    ).fetchall()
+    if not rows:
+        return None
+    vols = [float(r["volume"]) for r in rows if r["volume"] is not None]
+    if not vols:
+        return None
+    return float(sum(vols) / len(vols))
+
+
+def _day_change_pct_daily(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    ticker: str,
+    now: datetime,
+) -> float | None:
+    rows = conn.execute(
+        """
+        SELECT close FROM price_bars
+        WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND timestamp <= ?
+        ORDER BY timestamp DESC
+        LIMIT 2
+        """,
+        (tenant_id, ticker, now.isoformat()),
+    ).fetchall()
+    if len(rows) < 2:
+        return None
+    last = float(rows[0]["close"])
+    prev = float(rows[1]["close"])
+    if prev == 0:
+        return None
+    return (last / prev - 1.0) * 100.0
+
+
 def build_stats_payload(
     conn: sqlite3.Connection,
     *,
@@ -370,11 +420,29 @@ def build_stats_payload(
             years_listed = max(0, (now - ipo_d).days // 365)
         except Exception:
             years_listed = None
+
+    day_pct = _day_change_pct_daily(conn, tenant_id=tenant_id, ticker=ticker, now=now)
+    avg_vol = _avg_daily_volume(conn, tenant_id=tenant_id, ticker=ticker, now=now, sessions=30)
+    mc = prof.get("marketCap")
+    market_cap: int | float | None
+    if mc is None:
+        market_cap = None
+    elif isinstance(mc, (int, float)):
+        market_cap = int(mc) if isinstance(mc, float) and mc == int(mc) else mc
+    else:
+        try:
+            market_cap = float(mc)
+        except (TypeError, ValueError):
+            market_cap = None
+
     return {
         "ticker": ticker,
         "price": round(price, 4),
+        "dayChangePct": None if day_pct is None else round(day_pct, 4),
         "high52": round(high52, 4),
         "low52": round(low52, 4),
+        "avgVolume": None if avg_vol is None else round(avg_vol, 2),
+        "marketCap": market_cap,
         "ath": round(ath, 4),
         "ipoDate": ipo_raw,
         "yearsListed": years_listed,
