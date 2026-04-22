@@ -23,6 +23,7 @@ from app.internal_read_v1.recommendations import (
     parse_best_preference,
     parse_mode,
 )
+from app.internal_read_v1.regime_read import build_regime_payload
 from app.ui.middle.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -103,6 +104,15 @@ def api_candles(
         interval_key=chart.interval_key,
         now=datetime.now(),
     )
+
+
+@router.get("/regime/{ticker}")
+def api_regime(request: Request, ticker: str, tenant_id: str = "default") -> dict[str, Any]:
+    sym = normalize_ticker(ticker)
+    out = build_regime_payload(_svc(request).store.conn, tenant_id=tenant_id, ticker=sym)
+    if out is None:
+        raise HTTPException(status_code=422, detail="insufficient_history")
+    return out
 
 
 @router.get("/recommendations/latest")
