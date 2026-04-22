@@ -24,6 +24,16 @@ from app.internal_read_v1.recommendations import (
     parse_mode,
 )
 from app.internal_read_v1.regime_read import build_regime_payload
+from app.internal_read_v1.intelligence_read import (
+    get_consensus_signals,
+    get_prediction_run_latest,
+    get_regime_performance,
+    get_strategy_stability,
+    get_system_heartbeat,
+    get_ticker_accuracy,
+    get_ticker_attribution,
+    list_strategies_catalog,
+)
 from app.ui.middle.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -115,6 +125,86 @@ def api_regime(request: Request, ticker: str, tenant_id: str = "default") -> dic
     return out
 
 
+@router.get("/strategies/catalog")
+def api_strategies_catalog(
+    request: Request,
+    tenant_id: str = "default",
+    status: str | None = None,
+    track: str | None = None,
+    active_only: bool = True,
+    limit: int = 100,
+) -> dict[str, Any]:
+    n = max(1, min(500, limit))
+    return list_strategies_catalog(
+        _svc(request).store.conn,
+        tenant_id=tenant_id,
+        status=status,
+        track=track,
+        active_only=active_only,
+        limit=n,
+    )
+
+
+@router.get("/strategies/{strategy_id}/stability")
+def api_strategy_stability(request: Request, strategy_id: str, tenant_id: str = "default") -> dict[str, Any]:
+    out = get_strategy_stability(_svc(request).store.conn, tenant_id=tenant_id, strategy_id=strategy_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="strategy stability not found")
+    return out
+
+
+@router.get("/performance/regime")
+def api_performance_regime(request: Request, tenant_id: str = "default") -> dict[str, Any]:
+    return get_regime_performance(_svc(request).store.conn, tenant_id=tenant_id)
+
+
+@router.get("/consensus/signals")
+def api_consensus_signals(
+    request: Request,
+    tenant_id: str = "default",
+    limit: int = 50,
+    min_p_final: float | None = None,
+    ticker: str | None = None,
+) -> dict[str, Any]:
+    n = max(1, min(500, limit))
+    return get_consensus_signals(
+        _svc(request).store.conn,
+        tenant_id=tenant_id,
+        limit=n,
+        min_p_final=min_p_final,
+        ticker=ticker,
+    )
+
+
+@router.get("/ticker/{symbol}/attribution")
+def api_ticker_attribution(
+    request: Request, symbol: str, tenant_id: str = "default", limit: int = 20
+) -> dict[str, Any]:
+    n = max(1, min(200, limit))
+    return get_ticker_attribution(_svc(request).store.conn, tenant_id=tenant_id, symbol=symbol, limit=n)
+
+
+@router.get("/ticker/{symbol}/accuracy")
+def api_ticker_accuracy(request: Request, symbol: str, tenant_id: str = "default") -> dict[str, Any]:
+    return get_ticker_accuracy(_svc(request).store.conn, tenant_id=tenant_id, symbol=symbol)
+
+
+@router.get("/system/heartbeat")
+def api_system_heartbeat(request: Request, tenant_id: str = "default", limit: int = 200) -> dict[str, Any]:
+    n = max(1, min(1000, limit))
+    return get_system_heartbeat(_svc(request).store.conn, tenant_id=tenant_id, limit=n)
+
+
+@router.get("/predictions/runs/latest")
+def api_prediction_runs_latest(
+    request: Request, tenant_id: str = "default", timeframe: str | None = None
+) -> dict[str, Any]:
+    out = get_prediction_run_latest(_svc(request).store.conn, tenant_id=tenant_id, timeframe=timeframe)
+    if out is None:
+        raise HTTPException(status_code=404, detail="no prediction runs")
+    return out
+
+
 @router.get("/recommendations/latest")
 def api_recommendations_latest(
     request: Request,
@@ -128,7 +218,7 @@ def api_recommendations_latest(
         pref_key = parse_best_preference(preference)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    n = max(1, min(100, int(limit)))
+    n = max(1, min(100, limit))
     rows = get_recommendations_latest(
         _svc(request).store.conn,
         tenant_id=tenant_id,
