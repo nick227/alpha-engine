@@ -7,6 +7,7 @@ from pathlib import Path
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from types import SimpleNamespace
 from uuid import uuid4
@@ -615,6 +616,44 @@ def _load_app_or_skip():
     return app
 
 
+def _runtime_identity(db_path: str) -> list[str]:
+    db_file = Path(db_path)
+    db_exists = db_file.exists()
+    db_mtime = "missing"
+    db_size = "missing"
+    if db_exists:
+        st = db_file.stat()
+        db_mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        db_size = str(st.st_size)
+
+    commit = "unknown"
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            text=True,
+            encoding="utf-8",
+        ).strip()
+    except Exception:
+        pass
+
+    pipeline_script = Path("scripts/windows/run_daily_pipeline.bat")
+    script_mtime = "missing"
+    if pipeline_script.exists():
+        st = pipeline_script.stat()
+        script_mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    return [
+        "runtime identity (environment alignment):",
+        f"db_path: {db_file.resolve()}",
+        f"db_exists: {'yes' if db_exists else 'no'}",
+        f"db_modified_utc: {db_mtime}",
+        f"db_size_bytes: {db_size}",
+        f"git_commit: {commit}",
+        f"pipeline_script: {pipeline_script.as_posix()}",
+        f"pipeline_script_mtime_utc: {script_mtime}",
+    ]
+
+
 def test_data_health_critical_surfaces_pass(data_health_client: TestClient) -> None:
     # Tier 0: root-cause / fail-early checks
     heartbeat_res = data_health_client.get("/api/system/heartbeat")
@@ -720,6 +759,8 @@ def test_data_health_critical_surfaces_pass(data_health_client: TestClient) -> N
         f"recommendations/latest: {len(rec_rows)} rows",
         f"ranking/top: {len(ranking_rows)} rows",
         "AAPL quote: present",
+        "",
+        *_runtime_identity(str(db_path)),
         "",
         "quality:",
         f"runStatus: {run.get('runStatus')}",
