@@ -52,6 +52,17 @@ Also:
 - **Tenant mismatch**: bars and reads both use `tenant_id='default'` in the downloader and read API paths reviewed.
 - **Stale filter in health report**: reconciliation uses a 7-day fresh window on **latest `1d` bar**; the gap was missing rows, not the window alone.
 
+## Downstream funnel (same report)
+
+Once bars cover the universe, zero or thin rankings usually mean **discovery → queue → predictions → ranking_snapshots**. The Data Health artifact (`reports/data-health-latest.txt`) includes a **pipeline funnel (warehouse)** section:
+
+- **candidate_queue** counts by status (`admitted`, `shortlisted`, …)
+- **predictions** row counts (all time and last 7 days) and distinct tickers (7d)
+- **Latest ranking_snapshots** batch size vs `/ranking/top` response rows
+- **house_recommendations** (`balanced`) vs **`/api/recommendations/latest`** rows
+
+Use the **full funnel incident sentence** and **likely bottleneck** line to decide whether to re-run discovery, queue trim, prediction_cli, prediction_rank_sqlite, or ranking_snapshots_from_predictions.
+
 ## Residual risks
 
 - **yfinance** batch failures or rate limits: downloader logs `got data for X/Y`; retry or smaller batches if needed.
