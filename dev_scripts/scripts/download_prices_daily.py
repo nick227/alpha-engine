@@ -1,8 +1,20 @@
 """
 Daily Price Downloader
 
-Fetches OHLCV bars from Yahoo Finance for all symbols in feature_snapshot
-and writes them directly into price_bars (tenant_id='default').
+Fetches OHLCV bars from Yahoo Finance for the **active trading universe** by
+default: ``config/target_stocks.yaml`` ∪ ``candidate_queue`` (admitted) — see
+``get_active_universe_tickers`` in ``app.core.active_universe``.
+
+**Why this change:** the old implementation used only ``feature_snapshot``. In
+empty or small DBs, that starved the watchlist. In large DBs, that table can
+hold thousands of symbols; unioning it for *every* daily run is slow and
+triggers rate limits. The product’s read API and ranking coverage are defined
+off the **active universe**, so the daily job should target that set.
+
+Optional: ``--include-feature-snapshot`` adds all distinct ``feature_snapshot``
+symbols (legacy / ML backfill style).
+
+Writes into ``price_bars`` (tenant_id='default').
 
 Incremental: only downloads from the day after each symbol's last bar.
 Batch mode: yfinance multi-ticker downloads to minimize API calls.
@@ -17,8 +29,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -30,19 +44,42 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DB_PATH = ROOT / "data" / "alpha.db"
+_DB_ENV = (os.environ.get("ALPHA_DB_PATH") or "").strip()
+DB_PATH = Path(_DB_ENV) if _DB_ENV else (ROOT / "data" / "alpha.db")
 TENANT_ID = "default"
 TIMEFRAME = "1d"
-CHUNK_SIZE = 100        # symbols per yfinance batch request
+# Smaller batches reduce Yahoo "Too Many Requests" failures on multi-symbol calls.
+CHUNK_SIZE = 12        # symbols per yfinance batch request
 DEFAULT_LOOKBACK = 30   # days to fetch for symbols with no existing bars
 MIN_LOOKBACK = 2        # always fetch at least this many days back (catches today)
 
 
-def _get_symbols(conn: sqlite3.Connection) -> list[str]:
-    rows = conn.execute(
-        "SELECT DISTINCT symbol FROM feature_snapshot ORDER BY symbol"
-    ).fetchall()
-    return [str(r[0]).upper() for r in rows]
+def _get_symbols(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str = TENANT_ID,
+    include_feature_snapshot: bool = False,
+) -> list[str]:
+    """Symbols to refresh: active universe, optionally plus feature_snapshot."""
+    from app.core.active_universe import get_active_universe_tickers
+
+    symbols: set[str] = set()
+    for s in get_active_universe_tickers(tenant_id=tenant_id, sqlite_conn=conn):
+        t = str(s).strip().upper()
+        if t:
+            symbols.add(t)
+    if include_feature_snapshot:
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT TRIM(symbol) AS symbol FROM feature_snapshot WHERE symbol IS NOT NULL AND TRIM(symbol) != ''"
+            ).fetchall()
+            for r in rows:
+                sym = str(r["symbol"] if isinstance(r, sqlite3.Row) else r[0]).strip().upper()
+                if sym:
+                    symbols.add(sym)
+        except sqlite3.OperationalError:
+            pass
+    return sorted(symbols)
 
 
 def _get_last_bar_dates(
@@ -197,13 +234,16 @@ def run_download(
     symbols: list[str] | None = None,
     force_days: int | None = None,
     dry_run: bool = False,
+    include_feature_snapshot: bool = False,
 ) -> dict[str, Any]:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=5000;")
 
-    all_symbols = symbols or _get_symbols(conn)
+    all_symbols = symbols or _get_symbols(
+        conn, tenant_id=tenant_id, include_feature_snapshot=include_feature_snapshot
+    )
     print(f"Symbols to update: {len(all_symbols)}")
 
     last_dates = _get_last_bar_dates(conn, all_symbols, tenant_id)
@@ -253,6 +293,8 @@ def run_download(
 
         # Process in chunks to respect yfinance limits
         for chunk_start in range(0, len(group_symbols), CHUNK_SIZE):
+            if chunk_start > 0:
+                time.sleep(2.5)
             chunk = group_symbols[chunk_start : chunk_start + CHUNK_SIZE]
             chunk_num = chunk_start // CHUNK_SIZE + 1
             total_chunks = (len(group_symbols) + CHUNK_SIZE - 1) // CHUNK_SIZE
@@ -260,6 +302,12 @@ def run_download(
             print(f"  chunk {chunk_num}/{total_chunks} ({len(chunk)} symbols) ... ", end="", flush=True)
 
             batch_data = _fetch_batch(chunk, start, today)
+            if len(batch_data) < len(chunk):
+                time.sleep(5.0)
+                retry = _fetch_batch(chunk, start, today)
+                for k, v in retry.items():
+                    if k not in batch_data:
+                        batch_data[k] = v
             hits = len(batch_data)
             misses = len(chunk) - hits
 
@@ -286,6 +334,11 @@ def main() -> int:
     p.add_argument("--days", type=int, default=None, help="Force fetch last N days for all symbols")
     p.add_argument("--symbols", default=None, help="Comma-separated list of specific symbols")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument(
+        "--include-feature-snapshot",
+        action="store_true",
+        help="Also download every symbol in feature_snapshot (can be thousands; not for routine daily runs).",
+    )
     args = p.parse_args()
 
     syms = [s.strip().upper() for s in args.symbols.split(",")] if args.symbols else None
@@ -296,6 +349,7 @@ def main() -> int:
         symbols=syms,
         force_days=args.days,
         dry_run=args.dry_run,
+        include_feature_snapshot=args.include_feature_snapshot,
     )
     return 0
 
