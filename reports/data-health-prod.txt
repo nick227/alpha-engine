@@ -1,11 +1,11 @@
 DATA HEALTH PROD: PASS
-Generated: 2026-04-23 07:01 UTC
+Generated: 2026-04-23 07:07 UTC
 
 runtime identity:
 db_path: C:\wamp64\www\alpha-engine-poc\data\alpha.db
 db_modified_utc: 2026-04-23 06:32:39 UTC
 db_size_bytes: 5931966464
-git_commit: 81cb402
+git_commit: 459e2e8
 pipeline_script: scripts/windows/run_daily_pipeline.bat
 pipeline_script_mtime_utc: 2026-04-23 07:00:51 UTC
 
@@ -21,8 +21,8 @@ recommendations_unique_tickers: 10
 megacap_share_pct: 10.0
 
 upstream run signals:
-runStatus: FAILED
-runQuality: 0.3
-coverageRatio: 0.4884
+runStatus: DEGRADED
+runQuality: 0.8
+coverageRatio: 0.9767
 
 top_missing_fresh_bars: AMED

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
+from app.core.active_universe import get_active_universe_tickers
+from app.core.pipeline_gates import fresh_bar_coverage
 from app.internal_read_v1.chart_symbols import normalize_ticker
 
 
@@ -17,6 +20,18 @@ def _loads_list(raw: str | None) -> list[Any]:
         return parsed if isinstance(parsed, list) else []
     except Exception:
         return []
+
+
+def _parse_iso_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def list_strategies_catalog(
@@ -294,6 +309,131 @@ def get_prediction_run_latest(conn: sqlite3.Connection, *, tenant_id: str, timef
         ).fetchone()
     if not row:
         return None
+    ingress_start = _parse_iso_dt(str(row["ingress_start"]))
+    ingress_end = _parse_iso_dt(str(row["ingress_end"]))
+    prediction_start = _parse_iso_dt(str(row["prediction_start"]))
+    prediction_end = _parse_iso_dt(str(row["prediction_end"]))
+    now = datetime.now(timezone.utc)
+
+    ingest_latency_sec = (
+        max(0, int((ingress_end - ingress_start).total_seconds()))
+        if ingress_start and ingress_end
+        else None
+    )
+    predict_latency_sec = (
+        max(0, int((prediction_end - prediction_start).total_seconds()))
+        if prediction_start and prediction_end
+        else None
+    )
+    staleness_minutes = (
+        max(0, int((now - prediction_end).total_seconds() / 60)) if prediction_end else None
+    )
+
+    latest_consensus = conn.execute(
+        "SELECT MAX(created_at) AS ts FROM consensus_signals WHERE tenant_id = ?",
+        (tenant_id,),
+    ).fetchone()
+    latest_consensus_dt = (
+        _parse_iso_dt(str(latest_consensus["ts"])) if latest_consensus and latest_consensus["ts"] else None
+    )
+    consensus_staleness_minutes = (
+        max(0, int((now - latest_consensus_dt).total_seconds() / 60))
+        if latest_consensus_dt
+        else None
+    )
+
+    expected_universe_count = len(get_active_universe_tickers(tenant_id=tenant_id, sqlite_conn=conn))
+    ranking_count_row = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM ranking_snapshots
+        WHERE tenant_id = ?
+          AND timestamp = (SELECT MAX(timestamp) FROM ranking_snapshots WHERE tenant_id = ?)
+        """,
+        (tenant_id, tenant_id),
+    ).fetchone()
+    ranking_universe_count = (
+        int(ranking_count_row["n"]) if ranking_count_row and ranking_count_row["n"] is not None else 0
+    )
+    prediction_batch_coverage_ratio = (
+        float(ranking_universe_count) / float(expected_universe_count)
+        if expected_universe_count > 0
+        else 1.0
+    )
+    _fresh_n, _universe_n, fresh_coverage_ratio = fresh_bar_coverage(conn, tenant_id=tenant_id)
+
+    pred_7d = 0
+    try:
+        pred_7d_row = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM predictions
+            WHERE tenant_id = ? AND timestamp >= datetime('now', '-7 day')
+            """,
+            (tenant_id,),
+        ).fetchone()
+        pred_7d = int(pred_7d_row["n"] or 0) if pred_7d_row else 0
+    except sqlite3.OperationalError:
+        pred_7d = 0
+
+    rec_unique = 0
+    try:
+        rec_unique_row = conn.execute(
+            """
+            SELECT COUNT(DISTINCT ticker) AS n
+            FROM house_recommendations
+            WHERE tenant_id = ? AND mode = 'balanced'
+            """,
+            (tenant_id,),
+        ).fetchone()
+        rec_unique = int(rec_unique_row["n"] or 0) if rec_unique_row else 0
+    except sqlite3.OperationalError:
+        rec_unique = 0
+
+    degraded_reasons: list[str] = []
+    if staleness_minutes is not None and staleness_minutes > 1440:
+        degraded_reasons.append("STALE_PREDICTION_RUN")
+    if consensus_staleness_minutes is not None and consensus_staleness_minutes > 1440:
+        degraded_reasons.append("STALE_CONSENSUS")
+    if ingest_latency_sec is not None and ingest_latency_sec > 1800:
+        degraded_reasons.append("INGRESS_LATENCY_HIGH")
+    if predict_latency_sec is not None and predict_latency_sec > 900:
+        degraded_reasons.append("PREDICTION_LATENCY_HIGH")
+    if fresh_coverage_ratio < 0.9:
+        degraded_reasons.append("LOW_BAR_COVERAGE")
+    if fresh_coverage_ratio < 0.5:
+        degraded_reasons.append("LOW_UNIVERSE_COVERAGE")
+    if pred_7d == 0:
+        degraded_reasons.append("PREDICTION_PIPELINE_INACTIVE")
+    if ranking_universe_count < 10:
+        degraded_reasons.append("RANKING_BREADTH_THIN")
+    if rec_unique < 5:
+        degraded_reasons.append("RECOMMENDATION_DIVERSITY_THIN")
+
+    run_quality = 1.0
+    penalties = {
+        "STALE_PREDICTION_RUN": 0.35,
+        "STALE_CONSENSUS": 0.20,
+        "INGRESS_LATENCY_HIGH": 0.10,
+        "PREDICTION_LATENCY_HIGH": 0.10,
+        "LOW_BAR_COVERAGE": 0.20,
+        "LOW_UNIVERSE_COVERAGE": 0.30,
+        "PREDICTION_PIPELINE_INACTIVE": 0.40,
+        "RANKING_BREADTH_THIN": 0.10,
+        "RECOMMENDATION_DIVERSITY_THIN": 0.10,
+    }
+    for code in degraded_reasons:
+        run_quality -= penalties.get(code, 0.0)
+    run_quality = max(0.0, min(1.0, round(run_quality, 4)))
+
+    severe_codes = {"LOW_UNIVERSE_COVERAGE", "PREDICTION_PIPELINE_INACTIVE"}
+    if any(code in severe_codes for code in degraded_reasons):
+        run_status = "FAILED"
+    elif degraded_reasons:
+        run_status = "DEGRADED"
+    else:
+        run_status = "HEALTHY"
+
     return {
         "id": str(row["id"]),
         "tenant_id": tenant_id,
@@ -304,4 +444,17 @@ def get_prediction_run_latest(conn: sqlite3.Connection, *, tenant_id: str, timef
         "predictionStart": str(row["prediction_start"]),
         "predictionEnd": str(row["prediction_end"]),
         "createdAt": str(row["created_at"]),
+        "runStatus": run_status,
+        "runQuality": run_quality,
+        "degradedReasons": degraded_reasons,
+        "ingestLatencySec": ingest_latency_sec,
+        "predictLatencySec": predict_latency_sec,
+        "stalenessMinutes": staleness_minutes,
+        "consensusStalenessMinutes": consensus_staleness_minutes,
+        "expectedUniverseCount": int(expected_universe_count),
+        "rankingUniverseCount": int(ranking_universe_count),
+        "predictions7dCount": int(pred_7d),
+        "recommendationUniqueCount": int(rec_unique),
+        "predictionBatchCoverageRatio": round(float(prediction_batch_coverage_ratio), 4),
+        "coverageRatio": round(float(fresh_coverage_ratio), 4),
     }
