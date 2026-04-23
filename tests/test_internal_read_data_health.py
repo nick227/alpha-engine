@@ -18,7 +18,13 @@ pytest.importorskip("httpx")
 
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from internal_read_inventory.config import DEFAULT_THRESHOLDS, FRESH_BAR_MAX_AGE_DAYS, SENTINEL_SYMBOLS
+from internal_read_inventory.config import (
+    BAR_COVERAGE_SLA_RATIO,
+    DEFAULT_THRESHOLDS,
+    FRESH_BAR_MAX_AGE_DAYS,
+    MIN_RECOMMENDATION_UNIQUE_TICKERS_WARNING,
+    SENTINEL_SYMBOLS,
+)
 
 
 def _bar(ts: str, close: float, *, high: float | None = None, low: float | None = None) -> SimpleNamespace:
@@ -208,6 +214,7 @@ def _reconcile_upstream_funnel(
     run: dict,
     rec_rows_count: int,
     ranking_rows_count: int,
+    rec_unique_tickers: int,
 ) -> list[str]:
     from app.core.active_universe import get_active_universe_tickers
 
@@ -319,6 +326,57 @@ def _reconcile_upstream_funnel(
     except sqlite3.OperationalError:
         house_reco_n = None
 
+    max_bar_universe = "n/a"
+    if universe:
+        ph = ",".join("?" * len(universe))
+        br = conn.execute(
+            f"""
+            SELECT MAX(timestamp) AS ts FROM price_bars
+            WHERE tenant_id = ? AND timeframe = '1d' AND ticker IN ({ph})
+            """,
+            (tenant_id, *universe),
+        ).fetchone()
+        if br and br["ts"]:
+            max_bar_universe = str(br["ts"])
+
+    max_pred_ts = "none"
+    try:
+        pr = conn.execute(
+            "SELECT MAX(timestamp) AS ts FROM predictions WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if pr and pr["ts"]:
+            max_pred_ts = str(pr["ts"])
+    except sqlite3.OperationalError:
+        pass
+
+    max_consensus_ts = "n/a"
+    try:
+        cs = conn.execute(
+            "SELECT MAX(created_at) AS ts FROM consensus_signals WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if cs and cs["ts"]:
+            max_consensus_ts = str(cs["ts"])
+    except sqlite3.OperationalError:
+        pass
+
+    max_cq_seen = "n/a"
+    try:
+        cqmx = conn.execute(
+            "SELECT MAX(last_seen_at) AS ts FROM candidate_queue WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if cqmx and cqmx["ts"]:
+            max_cq_seen = str(cqmx["ts"])
+    except sqlite3.OperationalError:
+        pass
+
+    bar_cov_ratio = (fresh_count / expected) if expected else 1.0
+    bar_cov_pct = round(100.0 * bar_cov_ratio, 1)
+    sla_pass = bar_cov_ratio >= BAR_COVERAGE_SLA_RATIO
+    sla_label = "PASS" if sla_pass else "FAIL"
+
     api_expected = run.get("expectedUniverseCount")
     mismatch_note = ""
     if api_expected is not None and int(api_expected) != expected:
@@ -354,6 +412,16 @@ def _reconcile_upstream_funnel(
         f"Missing from fresh bar coverage: {expected - fresh_count}",
         f"Top missing (no fresh bar): {top_missing}",
         "",
+        f"coverage SLA (target ≥{int(BAR_COVERAGE_SLA_RATIO * 100)}% fresh 1d bars on expected universe):",
+        f"  ratio: {bar_cov_pct}%  status: {sla_label}",
+        "",
+        "stage freshness (latest warehouse timestamps):",
+        f"  max 1d bar (universe tickers): {max_bar_universe}",
+        f"  max prediction timestamp: {max_pred_ts}",
+        f"  max ranking_snapshots batch: {latest_rank_ts}",
+        f"  max consensus_signals: {max_consensus_ts}",
+        f"  max candidate_queue last_seen_at: {max_cq_seen}",
+        "",
         "pipeline funnel (warehouse):",
         f"candidate_queue symbols: {cq_total}",
         f"  by status: {cq_status_line}",
@@ -371,6 +439,13 @@ def _reconcile_upstream_funnel(
         f"{pred_7d} predictions (7d) → {ranking_db_count} ranked (DB) → {rec_rows_count} recommended (API)",
         f"  likely bottleneck: {bottleneck}",
     ]
+
+    lines.append("")
+    lines.append("output breadth (recommendations/latest):")
+    lines.append(
+        f"  unique tickers in API response: {rec_unique_tickers} "
+        f"(warn if <{MIN_RECOMMENDATION_UNIQUE_TICKERS_WARNING} for thin breadth)"
+    )
 
     lines.append("")
     lines.append("operational notes (two independent gates for B+ quality):")
@@ -391,6 +466,26 @@ def _reconcile_upstream_funnel(
             "  · Gate 2 — prediction pipeline: with sufficient bars, run full daily pipeline so discovery → "
             "prediction_cli → prediction_rank_sqlite → ranking_snapshots_from_predictions fills predictions "
             r"(e.g. scripts\windows\run_daily_pipeline.bat)."
+        )
+    if not sla_pass:
+        lines.append(
+            "  · Upstream: fresh 1d bar coverage below SLA — automation starvation / wrong job target / "
+            "DB path drift / or provider throttling (check scheduler logs and ALPHA_DB_PATH)."
+        )
+    elif pred_total == 0:
+        lines.append(
+            "  · Diagnosis: API can respond 200 while the prediction layer is dormant — not a broken read API, "
+            "but weak upstream generation."
+        )
+    if sla_pass and pred_total == 0 and ranking_db_count > 0:
+        lines.append(
+            "  · Policy hint (operational): do not promote rankings as trusted production output when "
+            "bar SLA passes but predictions=0 — resolve prediction pipeline before relying on ranking depth."
+        )
+    if rec_unique_tickers > 0 and rec_unique_tickers < MIN_RECOMMENDATION_UNIQUE_TICKERS_WARNING:
+        lines.append(
+            f"  · Breadth: recommendation list has only {rec_unique_tickers} unique tickers — "
+            "expect weak diversity until universe + pipeline feed more names."
         )
 
     return lines
@@ -516,12 +611,14 @@ def test_data_health_critical_surfaces_pass(data_health_client: TestClient) -> N
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
+        rec_unique = len({str(r["ticker"]).strip().upper() for r in rec_rows if r.get("ticker")})
         reconcile_lines = _reconcile_upstream_funnel(
             conn,
             tenant_id="default",
             run=run,
             rec_rows_count=len(rec_rows),
             ranking_rows_count=len(ranking_rows),
+            rec_unique_tickers=rec_unique,
         )
     finally:
         conn.close()
