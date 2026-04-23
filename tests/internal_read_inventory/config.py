@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.core.pipeline_gates import BAR_COVERAGE_SLA_RATIO, FRESH_BAR_MAX_AGE_DAYS
+
 
 @dataclass(frozen=True, slots=True)
 class FreshnessThresholds:
@@ -25,13 +27,6 @@ CRITICAL_SURFACES: tuple[str, ...] = (
 )
 
 DEFAULT_THRESHOLDS = FreshnessThresholds()
-
-# Latest 1d bar must be within this window to count as "fresh" for ingest coverage reconciliation.
-FRESH_BAR_MAX_AGE_DAYS = 7
-
-# Operational policy: warn when fresh-bar coverage (expected universe) falls below this ratio.
-# Downstream ranking/recommendation quality should not be trusted as "production-grade" below SLA.
-BAR_COVERAGE_SLA_RATIO = 0.9
 
 # Warn if recommendations/latest exposes fewer unique tickers than this (breadth guardrail).
 MIN_RECOMMENDATION_UNIQUE_TICKERS_WARNING = 5

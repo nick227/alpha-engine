@@ -7,6 +7,11 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.core.pipeline_gates import (
+    compute_pipeline_signals,
+    intelligence_confidence_tier,
+    should_block_best_pick_without_predictions,
+)
 from app.internal_read_v1.bars_chart import (
     build_candles_payload,
     build_company_payload,
@@ -20,6 +25,7 @@ from app.internal_read_v1.recommendations import (
     get_recommendation_best,
     get_recommendation_for_ticker,
     get_recommendations_latest,
+    get_recommendations_under_price,
     parse_best_preference,
     parse_mode,
 )
@@ -219,14 +225,24 @@ def api_recommendations_latest(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     n = max(1, min(100, limit))
+    conn = _svc(request).store.conn
     rows = get_recommendations_latest(
-        _svc(request).store.conn,
+        conn,
         tenant_id=tenant_id,
         mode=mode_key,
         preference=pref_key,
         limit=n,
     )
-    return {"tenant_id": tenant_id, "mode": mode_key, "selectionPreference": pref_key, "recommendations": rows}
+    signals = compute_pipeline_signals(conn, tenant_id=tenant_id)
+    tier = intelligence_confidence_tier(signals)
+    return {
+        "tenant_id": tenant_id,
+        "mode": mode_key,
+        "selectionPreference": pref_key,
+        "intelligenceConfidenceTier": tier,
+        "pipelineSignals": signals.as_public_dict(),
+        "recommendations": rows,
+    }
 
 
 @router.get("/recommendations/best")
@@ -241,15 +257,23 @@ def api_recommendations_best(
         pref_key = parse_best_preference(preference)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    conn = _svc(request).store.conn
+    signals = compute_pipeline_signals(conn, tenant_id=tenant_id)
+    if should_block_best_pick_without_predictions(signals.predictions_total):
+        raise HTTPException(
+            status_code=503,
+            detail="prediction pipeline dormant; best pick withheld (PIPELINE_BLOCK_BEST_WITHOUT_PREDICTIONS)",
+        )
     row = get_recommendation_best(
-        _svc(request).store.conn,
+        conn,
         tenant_id=tenant_id,
         mode=mode_key,
         preference=pref_key,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="no recommendation available")
-    return row
+    tier = intelligence_confidence_tier(signals)
+    return {**row, "intelligenceConfidenceTier": tier, "pipelineSignals": signals.as_public_dict()}
 
 
 @router.get("/recommendations/{ticker}")
@@ -270,3 +294,37 @@ def api_recommendations_ticker(
     if row is None:
         raise HTTPException(status_code=404, detail="no recommendation for ticker")
     return row
+
+
+@router.get("/recommendations/under/{price_cap}")
+def api_recommendations_under_price(
+    request: Request,
+    price_cap: float,
+    limit: int = 10,
+    mode: str = "balanced",
+    preference: str = "long_only",
+    tenant_id: str = "default",
+) -> dict[str, Any]:
+    if price_cap <= 0:
+        raise HTTPException(status_code=400, detail="price_cap must be > 0")
+    try:
+        mode_key = parse_mode(mode)
+        pref_key = parse_best_preference(preference)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    n = max(1, min(100, limit))
+    rows = get_recommendations_under_price(
+        _svc(request).store.conn,
+        tenant_id=tenant_id,
+        mode=mode_key,
+        price_cap=float(price_cap),
+        preference=pref_key,
+        limit=n,
+    )
+    return {
+        "tenant_id": tenant_id,
+        "mode": mode_key,
+        "selectionPreference": pref_key,
+        "priceCap": float(price_cap),
+        "recommendations": rows,
+    }

@@ -215,8 +215,11 @@ def _reconcile_upstream_funnel(
     rec_rows_count: int,
     ranking_rows_count: int,
     rec_unique_tickers: int,
+    ranking_tickers_sample: list[str],
+    rec_tickers_sample: list[str],
 ) -> list[str]:
     from app.core.active_universe import get_active_universe_tickers
+    from app.core.pipeline_gates import infer_ranking_provenance
 
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=FRESH_BAR_MAX_AGE_DAYS)
@@ -252,7 +255,7 @@ def _reconcile_upstream_funnel(
 
     fresh_count = len(fresh_tickers)
     not_fresh = sorted([x for x in universe if x not in fresh_tickers])
-    top_missing = ", ".join(not_fresh[:10]) if not_fresh else "none"
+    top_missing = ", ".join(not_fresh[:20]) if not_fresh else "none"
 
     cq_by_status: dict[str, int] = {}
     try:
@@ -376,6 +379,9 @@ def _reconcile_upstream_funnel(
     bar_cov_pct = round(100.0 * bar_cov_ratio, 1)
     sla_pass = bar_cov_ratio >= BAR_COVERAGE_SLA_RATIO
     sla_label = "PASS" if sla_pass else "FAIL"
+    ranking_prov = infer_ranking_provenance(
+        conn, tenant_id=tenant_id, ranking_tickers=ranking_tickers_sample
+    )
 
     api_expected = run.get("expectedUniverseCount")
     mismatch_note = ""
@@ -433,10 +439,11 @@ def _reconcile_upstream_funnel(
         f"ranking/top response rows: {ranking_rows_count}",
         f"house_recommendations rows (balanced, DB): {house_reco_n if house_reco_n is not None else 'n/a'}",
         f"recommendations/latest (API rows): {rec_rows_count}",
+        f"ranking provenance (heuristic): {ranking_prov}",
         "",
         "full funnel (incident sentence):",
-        f"  {expected} universe → {fresh_count} fresh 1d bars → {admitted_n} admitted in queue → "
-        f"{pred_7d} predictions (7d) → {ranking_db_count} ranked (DB) → {rec_rows_count} recommended (API)",
+        f"  {expected} universe → {fresh_count} eligible (fresh 1d) → {cq_total} queued → "
+        f"{pred_7d} predicted (7d rows) → {ranking_db_count} ranked (DB) → {rec_rows_count} recommended (API)",
         f"  likely bottleneck: {bottleneck}",
     ]
 
@@ -486,6 +493,16 @@ def _reconcile_upstream_funnel(
         lines.append(
             f"  · Breadth: recommendation list has only {rec_unique_tickers} unique tickers — "
             "expect weak diversity until universe + pipeline feed more names."
+        )
+    uniq_rec = {t for t in rec_tickers_sample if t}
+    if (
+        rec_unique_tickers <= 3
+        and uniq_rec
+        and uniq_rec.issubset(set(SENTINEL_SYMBOLS))
+    ):
+        lines.append(
+            "  · Repeated-name concentration: recommendations only show sentinel symbols "
+            "(e.g. AAPL/SPY/QQQ) — valid but may feel stale; widen universe + pipeline throughput."
         )
 
     return lines
@@ -619,6 +636,10 @@ def test_data_health_critical_surfaces_pass(data_health_client: TestClient) -> N
             rec_rows_count=len(rec_rows),
             ranking_rows_count=len(ranking_rows),
             rec_unique_tickers=rec_unique,
+            ranking_tickers_sample=[
+                str(r["ticker"]).strip().upper() for r in ranking_rows[:120]
+            ],
+            rec_tickers_sample=[str(r["ticker"]).strip().upper() for r in rec_rows[:120]],
         )
     finally:
         conn.close()

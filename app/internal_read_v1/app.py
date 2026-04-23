@@ -7,14 +7,24 @@ Bind 127.0.0.1 only. Set INTERNAL_READ_KEY; optional INTERNAL_READ_INSECURE=1 fo
 from __future__ import annotations
 
 import os
+from statistics import mean
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.internal_read_v1.api_routes import router as api_router
+from app.core.pipeline_gates import (
+    compute_pipeline_signals,
+    infer_ranking_provenance,
+    intelligence_confidence_tier,
+    should_suppress_rankings,
+)
+from app.internal_read_v1.intelligence_read import get_prediction_run_latest
 from app.ui.middle.dashboard_service import DashboardService, RankingView
 
 _ENV_INSECURE = "INTERNAL_READ_INSECURE"
@@ -35,6 +45,43 @@ def _ranking_row(r: RankingView) -> dict[str, Any]:
         "timestamp": r.timestamp,
         "attribution": r.attribution,
     }
+
+
+def _parse_iso_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _fragility_score(
+    request: Request,
+    *,
+    tenant_id: str,
+    ticker: str,
+    max_snapshots: int = 5,
+) -> float:
+    rows = _svc(request).store.conn.execute(
+        """
+        SELECT score
+        FROM ranking_snapshots
+        WHERE tenant_id = ? AND UPPER(TRIM(ticker)) = UPPER(TRIM(?))
+        ORDER BY timestamp DESC
+        LIMIT ?
+        """,
+        (tenant_id, ticker, int(max_snapshots)),
+    ).fetchall()
+    scores = [float(r["score"]) for r in rows if r["score"] is not None]
+    if len(scores) < 2:
+        return 1.0
+    deltas = [abs(scores[i] - scores[i + 1]) for i in range(len(scores) - 1)]
+    avg_abs_delta = mean(deltas)
+    return round(max(0.0, min(1.0, avg_abs_delta / 0.25)), 4)
 
 
 def _parse_window(window: str | None) -> str | None:
@@ -70,6 +117,8 @@ app = FastAPI(
 
 class _InternalKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        if request.method == "OPTIONS":
+            return await call_next(request)
         if request.url.path in ("/health", "/docs", "/openapi.json", "/redoc"):
             return await call_next(request)
         key = os.environ.get(_ENV_KEY, "").strip()
@@ -87,6 +136,14 @@ class _InternalKeyMiddleware(BaseHTTPMiddleware):
 
 
 app.include_router(api_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Internal-Key"],
+)
 
 app.add_middleware(_InternalKeyMiddleware)
 
@@ -114,16 +171,71 @@ def health(request: Request) -> dict[str, Any]:
 def ranking_top(
     request: Request,
     limit: int = 50,
+    maxFragility: float | None = None,
     tenant_id: str = "default",
+    allow_legacy: bool = Query(
+        False,
+        description="When true, rankings are returned even if PIPELINE_SUPPRESS_RANKINGS_BELOW would hide them",
+    ),
 ) -> dict[str, Any]:
     """v1: latest snapshot only; historical as_of is not supported yet."""
     lim = max(1, min(500, int(limit)))
+    if maxFragility is not None and not (0.0 <= float(maxFragility) <= 1.0):
+        raise HTTPException(status_code=400, detail="invalid maxFragility; use 0.0 to 1.0")
+    conn = _svc(request).store.conn
+    signals = compute_pipeline_signals(conn, tenant_id=tenant_id)
     rows = _svc(request).get_target_rankings(tenant_id=tenant_id, limit=lim)
+    run = get_prediction_run_latest(conn, tenant_id=tenant_id, timeframe=None)
+    ranked_under_degraded = bool(run and str(run.get("runStatus")) in {"DEGRADED", "FAILED"})
+    run_quality = float(run.get("runQuality")) if run and run.get("runQuality") is not None else 1.0
+    pre_tier = intelligence_confidence_tier(signals, rankings_suppressed=False)
+    confidence_mult = 0.85 if pre_tier == "limited" else 1.0
+    rankings = []
+    for r in rows:
+        base = _ranking_row(r)
+        fragility = _fragility_score(request, tenant_id=tenant_id, ticker=r.ticker)
+        if maxFragility is not None and fragility > float(maxFragility):
+            continue
+        score01 = max(0.0, min(1.0, (float(r.score) + 1.0) / 2.0))
+        conviction01 = max(0.0, min(1.0, float(r.conviction)))
+        edge_score = round(
+            max(0.0, min(1.0, (0.50 * score01) + (0.30 * conviction01) + (0.20 * (1.0 - fragility))))
+            * run_quality
+            * confidence_mult,
+            4,
+        )
+        rankings.append(
+            {
+                **base,
+                "edgeScore": edge_score,
+                "fragilityScore": fragility,
+            }
+        )
+    suppress = should_suppress_rankings(signals.bar_coverage_ratio) and not allow_legacy
+    if suppress:
+        rankings = []
+    final_tier = intelligence_confidence_tier(signals, rankings_suppressed=suppress)
+    prov_tickers = [str(x.ticker).strip().upper() for x in rows[:lim]]
+    ranking_provenance = infer_ranking_provenance(
+        conn, tenant_id=tenant_id, ranking_tickers=prov_tickers
+    )
+    pipe = signals.as_public_dict()
+    pipe["rankingsSuppressed"] = suppress
+    pipe["suppressRankingsGateConfigured"] = bool(
+        str(os.environ.get("PIPELINE_SUPPRESS_RANKINGS_BELOW", "")).strip()
+    )
     return {
         "tenant_id": tenant_id,
         "as_of": None,
         "as_of_note": "v1 returns latest ranking_snapshots batch only; as_of query not implemented",
-        "rankings": [_ranking_row(r) for r in rows],
+        "rankedUnderDegradedRun": ranked_under_degraded,
+        "runStatus": run.get("runStatus") if run else None,
+        "runQuality": run_quality if run else None,
+        "maxFragility": float(maxFragility) if maxFragility is not None else None,
+        "rankingProvenance": ranking_provenance,
+        "intelligenceConfidenceTier": final_tier,
+        "pipelineSignals": pipe,
+        "rankings": rankings,
     }
 
 

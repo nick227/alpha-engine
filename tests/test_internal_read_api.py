@@ -63,7 +63,24 @@ def test_protected_correct_key(alpha_db_memory: None, monkeypatch: pytest.Monkey
     data = res.json()
     assert data["as_of"] is None
     assert "as_of_note" in data
+    assert "rankedUnderDegradedRun" in data
+    assert "runStatus" in data
+    assert data["rankingProvenance"] in {
+        "none",
+        "legacy_snapshot",
+        "seeded",
+        "live_prediction",
+        "fallback_consensus",
+    }
+    assert data["intelligenceConfidenceTier"] in {"full", "limited", "suppressed"}
+    assert isinstance(data["pipelineSignals"], dict)
     assert data["rankings"] == []
+
+
+def test_ranking_top_invalid_max_fragility(alpha_db_memory: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _client(monkeypatch, insecure=True, key=None) as client:
+        res = client.get("/ranking/top", params={"maxFragility": 1.5})
+    assert res.status_code == 400
 
 
 def test_insecure_bypasses_key(alpha_db_memory: None, monkeypatch: pytest.MonkeyPatch) -> None:
