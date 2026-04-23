@@ -1,0 +1,6 @@
+DATA HEALTH: FAIL
+Generated: 2026-04-23 06:51 UTC
+
+root_cause: pipeline_data_failure
+heartbeat_age_minutes: 4330
+run_staleness_minutes: 4500

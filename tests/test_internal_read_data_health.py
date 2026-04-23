@@ -804,7 +804,7 @@ def test_data_health_critical_surfaces_pass(data_health_client: TestClient) -> N
         *_json_preview("/ranking/top", ranking_consumer),
         *_json_preview("/api/quote/AAPL", quote),
     ]
-    _write_report(health_status, lines, filename="data-health-latest.txt")
+    _write_report(health_status, lines, filename="data-health-test.txt")
 
 
 def test_data_health_fails_early_when_run_or_heartbeat_stale(
@@ -836,6 +836,6 @@ def test_data_health_fails_early_when_run_or_heartbeat_stale(
                 f"heartbeat_age_minutes: {heartbeat_age}",
                 f"run_staleness_minutes: {run_staleness}",
             ],
-            filename="data-health-stale-scenario.txt",
+            filename="data-health-test-stale-scenario.txt",
         )
 
