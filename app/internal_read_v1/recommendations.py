@@ -565,6 +565,18 @@ def rebuild_house_recommendations(
 def _row_to_payload(row: sqlite3.Row, *, mode: RecommendationMode) -> dict[str, Any]:
     thesis = json.loads(str(row["thesis_json"] or "[]"))
     avoid_if = json.loads(str(row["avoid_if_json"] or "[]"))
+    source_raw = json.loads(str(row["source_json"] or "{}"))
+    source = source_raw if isinstance(source_raw, dict) else {}
+    diversity_diagnostics = {
+        "freshnessBonus": source.get("freshness_bonus"),
+        "repeatPenalty": source.get("repeat_penalty"),
+        "recentRepeatCount": source.get("repeat_count_window"),
+        "sector": source.get("sector"),
+        "sectorSeenBefore": source.get("sector_seen_before"),
+        "sectorDiversityPenalty": source.get("sector_diversity_penalty"),
+        "preliminaryScore": source.get("preliminary_score"),
+        "diversityAdjustedScore": source.get("diversity_adjusted_score"),
+    }
     return {
         "ticker": str(row["ticker"]),
         "action": str(row["action"]),
@@ -577,6 +589,7 @@ def _row_to_payload(row: sqlite3.Row, *, mode: RecommendationMode) -> dict[str, 
         "avoidIf": avoid_if if isinstance(avoid_if, list) else [],
         "mode": str(mode),
         "asOf": str(row["as_of"]),
+        "selectionDiagnostics": diversity_diagnostics,
     }
 
 
