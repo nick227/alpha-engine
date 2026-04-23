@@ -1,11 +1,11 @@
 DATA HEALTH PROD: PASS
-Generated: 2026-04-23 07:32 UTC
+Generated: 2026-04-23 07:37 UTC
 
 runtime identity:
 db_path: C:\wamp64\www\alpha-engine-poc\data\alpha.db
 db_modified_utc: 2026-04-23 07:18:12 UTC
 db_size_bytes: 5931966464
-git_commit: 83372d7
+git_commit: 2afb3df
 pipeline_script: scripts/windows/run_daily_pipeline.bat
 pipeline_script_mtime_utc: 2026-04-23 07:00:51 UTC
 
@@ -14,10 +14,13 @@ coverage_pct: 97.7
 predictions_total: 62
 predictions_7d: 39
 predictions_distinct_7d: 21
+prediction_repeat_rate_7d_pct: 46.2
 ranking_rows: 21
 ranking_provenance: live_prediction
 recommendations_rows: 10
 recommendations_unique_tickers: 10
+recommendation_sector_unique_count: 4
+recommendation_confidence_avg_min_max: 30.7/22.0/44.0
 megacap_share_pct: 10.0
 
 upstream run signals:

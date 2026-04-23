@@ -109,6 +109,19 @@ def generate_report(db_path: Path, output_path: Path) -> Path:
     rec_unique = len(set(rec_tickers))
     mega = {"AAPL", "SPY", "QQQ"}
     mega_share = (sum(1 for t in rec_tickers if t in mega) / len(rec_tickers)) if rec_tickers else 0.0
+    pred_repeat_rate = (
+        (1.0 - (pred_distinct_7d / float(pred_7d))) if pred_7d > 0 else 1.0
+    )
+    rec_conf = [float(r.get("confidence")) for r in rec_rows if r.get("confidence") is not None]
+    rec_conf_avg = (sum(rec_conf) / len(rec_conf)) if rec_conf else None
+    rec_conf_min = min(rec_conf) if rec_conf else None
+    rec_conf_max = max(rec_conf) if rec_conf else None
+    sectors = [
+        str((r.get("selectionDiagnostics") or {}).get("sector") or "").strip().lower()
+        for r in rec_rows
+    ]
+    sectors = [s for s in sectors if s]
+    sector_unique = len(set(sectors))
 
     db_stat = db_path.stat()
     script_path = Path("scripts/windows/run_daily_pipeline.bat")
@@ -136,10 +149,18 @@ def generate_report(db_path: Path, output_path: Path) -> Path:
         f"predictions_total: {pred_total}",
         f"predictions_7d: {pred_7d}",
         f"predictions_distinct_7d: {pred_distinct_7d}",
+        f"prediction_repeat_rate_7d_pct: {round(pred_repeat_rate * 100.0, 1)}",
         f"ranking_rows: {len(ranking_rows)}",
         f"ranking_provenance: {rank.get('rankingProvenance')}",
         f"recommendations_rows: {len(rec_rows)}",
         f"recommendations_unique_tickers: {rec_unique}",
+        f"recommendation_sector_unique_count: {sector_unique}",
+        (
+            f"recommendation_confidence_avg_min_max: "
+            f"{round(rec_conf_avg, 1)}/{round(rec_conf_min, 1)}/{round(rec_conf_max, 1)}"
+            if rec_conf_avg is not None and rec_conf_min is not None and rec_conf_max is not None
+            else "recommendation_confidence_avg_min_max: n/a"
+        ),
         f"megacap_share_pct: {round(mega_share * 100.0, 1)}",
         "",
         "upstream run signals:",
