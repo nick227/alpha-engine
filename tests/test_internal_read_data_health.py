@@ -372,6 +372,27 @@ def _reconcile_upstream_funnel(
         f"  likely bottleneck: {bottleneck}",
     ]
 
+    lines.append("")
+    lines.append("operational notes (two independent gates for B+ quality):")
+    if pred_total == 0 and ranking_db_count > 0:
+        lines.append(
+            "  · Rankings in DB but predictions table has 0 rows: latest snapshot is not driven by the "
+            "live prediction pipeline (seed, legacy batch, or materialized outside prediction_cli). "
+            "Recommendations may mirror a shallow ranking surface only."
+        )
+    if fresh_count < expected:
+        lines.append(
+            "  · Gate 1 — market data: run the active-universe downloader until fresh 1d bars cover the "
+            'universe (e.g. .venv python dev_scripts/scripts/download_prices_daily.py --days 40).'
+        )
+    cover_ratio = fresh_count / expected if expected else 1.0
+    if pred_7d == 0 and expected > 0 and cover_ratio >= 0.7:
+        lines.append(
+            "  · Gate 2 — prediction pipeline: with sufficient bars, run full daily pipeline so discovery → "
+            "prediction_cli → prediction_rank_sqlite → ranking_snapshots_from_predictions fills predictions "
+            r"(e.g. scripts\windows\run_daily_pipeline.bat)."
+        )
+
     return lines
 
 
