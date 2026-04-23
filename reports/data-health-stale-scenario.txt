@@ -1,5 +1,5 @@
 DATA HEALTH: FAIL
-Generated: 2026-04-23 07:40 UTC
+Generated: 2026-04-23 06:45 UTC
 
 root_cause: pipeline_data_failure
 heartbeat_age_minutes: 4330

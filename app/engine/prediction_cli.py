@@ -55,6 +55,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Queue status to write after a successful build (default: processed)",
     )
     rq.add_argument(
+        "--freshness-hours",
+        type=int,
+        default=20,
+        dest="freshness_hours",
+        help="Skip tickers already predicted within this many hours (default: 20). Pass 0 to disable.",
+    )
+    rq.add_argument(
         "--dry-run",
         action="store_true",
         help="Print what would run without writing predicted series or updating queue rows",
@@ -158,6 +165,24 @@ def main(argv: list[str] | None = None) -> int:
                 tenant_id=tenant_id,
             )
             tickers = sorted({str(r.get("symbol") or "").strip().upper() for r in rows} - {""})
+
+            freshness_hours = int(args.freshness_hours)
+            if freshness_hours > 0 and tickers:
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=freshness_hours)).isoformat()
+                try:
+                    recent_rows = repo.conn.execute(
+                        "SELECT DISTINCT ticker FROM predictions WHERE tenant_id = ? AND timestamp >= ?",
+                        (tenant_id, cutoff),
+                    ).fetchall()
+                    recently_predicted = {str(r["ticker"]).strip().upper() for r in recent_rows}
+                    before = len(tickers)
+                    tickers = [t for t in tickers if t not in recently_predicted]
+                    skipped_fresh = before - len(tickers)
+                    if skipped_fresh:
+                        print(json.dumps({"freshness_filter": {"skipped": skipped_fresh, "window_hours": freshness_hours, "remaining": len(tickers)}}))
+                except Exception:
+                    pass
+
             if not tickers:
                 repo.finish_prediction_job(
                     job_id=str(job_id),

@@ -1,5 +1,5 @@
 DATA HEALTH: WARNING
-Generated: 2026-04-23 07:40 UTC
+Generated: 2026-04-23 06:45 UTC
 
 heartbeat: fresh
 latest run: 3.0h ago
@@ -8,24 +8,24 @@ ranking/top: 3 rows
 AAPL quote: present
 
 runtime identity (environment alignment):
-db_path: C:\Users\Administrator\AppData\Local\Temp\pytest-of-Administrator\pytest-352\test_data_health_critical_surf0\data_health.db
+db_path: C:\Users\Administrator\AppData\Local\Temp\pytest-of-Administrator\pytest-346\test_data_health_critical_surf0\data_health.db
 db_exists: yes
-db_modified_utc: 2026-04-23 07:40:28 UTC
+db_modified_utc: 2026-04-23 06:45:01 UTC
 db_size_bytes: 528384
-git_commit: df22bb0
+git_commit: 67c5db9
 pipeline_script: scripts/windows/run_daily_pipeline.bat
-pipeline_script_mtime_utc: 2026-04-23 07:00:51 UTC
+pipeline_script_mtime_utc: 2026-04-23 06:09:47 UTC
 
 quality:
 runStatus: FAILED
 coverageRatio: 13.04%
-runQuality: 0.00
-degradedReasons: 5
+runQuality: 0.50
+degradedReasons: 2
 
 user-facing confidence: LOW
 reason: degraded prediction run powering rankings
 recommendation diversity: uniqueTickers=3, topConcentration=33%
-quality warnings: runStatus=FAILED, degradedReasons=5, runQuality=0.00<0.80, coverageRatio=13.04%<80%
+quality warnings: runStatus=FAILED, degradedReasons=2, runQuality=0.50<0.80, coverageRatio=13.04%<80%
 
 reconciliation (market data):
 Universe expected: 23
@@ -41,11 +41,11 @@ coverage SLA (target ≥90% fresh 1d bars on expected universe):
   ratio: 13.0%  status: FAIL
 
 stage freshness (latest warehouse timestamps):
-  max 1d bar (universe tickers): 2026-04-23T07:40:27.034636+00:00
+  max 1d bar (universe tickers): 2026-04-23T06:45:00.111113+00:00
   max prediction timestamp: none
-  max ranking_snapshots batch: 2026-04-23T07:40:27.034636+00:00
-  max consensus_signals: 2026-04-23 07:40:27
-  max candidate_queue last_seen_at: 2026-04-23T07:40:27.034636+00:00
+  max ranking_snapshots batch: 2026-04-23T06:45:00.111113+00:00
+  max consensus_signals: 2026-04-23 06:45:00
+  max candidate_queue last_seen_at: 2026-04-23T06:45:00.111113+00:00
 
 pipeline funnel (warehouse):
 candidate_queue symbols: 3
@@ -53,7 +53,7 @@ candidate_queue symbols: 3
 predictions rows (all time): 0
 predictions rows (last 7d): 0
 predictions distinct tickers (last 7d): 0
-latest ranking snapshot ts: 2026-04-23T07:40:27.034636+00:00
+latest ranking snapshot ts: 2026-04-23T06:45:00.111113+00:00
 ranking symbols (latest DB batch): 3
 ranking/top response rows: 3
 house_recommendations rows (balanced, DB): 3
@@ -73,7 +73,7 @@ B+ output quality scorecard (what users experience):
   · ranking breadth: 3 symbols (latest DB batch), 3 rows (/ranking/top — aim ≥10)
   · recommendations/latest: 3 rows, 3 unique tickers (aim 5–15 worthwhile names)
   · top-ticker concentration (latest response): 33% (lower is more diverse)
-  · mean recommendation confidence: 51.3%
+  · mean recommendation confidence: 54.0%
   · sentinel mega-cap share (AAPL/SPY/QQQ rows): 100% (lower usually feels less repetitive)
 
 operational notes (two independent gates for B+ quality):
@@ -93,9 +93,9 @@ quote/AAPL.item: 1
 
 response keys:
 /api/system/heartbeat keys: loops, tenant_id
-/api/predictions/runs/latest keys: consensusStalenessMinutes, coverageRatio, createdAt, degradedReasons, expectedUniverseCount, id, ingestLatencySec, ingressEnd, ingressStart, predictLatencySec, predictionBatchCoverageRatio, predictionEnd, predictionStart, predictions7dCount, rankingUniverseCount, recommendationUniqueCount, regime, runQuality, runStatus, stalenessMinutes, tenant_id, timeframe
+/api/predictions/runs/latest keys: consensusStalenessMinutes, coverageRatio, createdAt, degradedReasons, expectedUniverseCount, id, ingestLatencySec, ingressEnd, ingressStart, predictLatencySec, predictionEnd, predictionStart, rankingUniverseCount, regime, runQuality, runStatus, stalenessMinutes, tenant_id, timeframe
 /api/recommendations/latest keys: consumerExperience, intelligenceConfidenceTier, mode, pipelineSignals, recommendations, selectionPreference, tenant_id
-/api/recommendations/best keys: action, asOf, avoidIf, confidence, consumerExperience, entryZone, horizon, intelligenceConfidenceTier, mode, pipelineSignals, risk, score, selectionDiagnostics, selectionPreference, thesis, ticker
+/api/recommendations/best keys: action, asOf, avoidIf, confidence, consumerExperience, entryZone, horizon, intelligenceConfidenceTier, mode, pipelineSignals, risk, score, selectionPreference, thesis, ticker
 /ranking/top keys: as_of, as_of_note, consumerExperience, intelligenceConfidenceTier, maxFragility, pipelineSignals, rankedUnderDegradedRun, rankingProvenance, rankings, runQuality, runStatus, tenant_id
 /api/quote/AAPL keys: price, ticker, time, timeframe
 
@@ -105,7 +105,7 @@ consumer response simulation:
 {
   "loops": [
     {
-      "createdAt": "2026-04-23T07:30:27.034636+00:00",
+      "createdAt": "2026-04-23T06:35:00.111113+00:00",
       "loopType": "live",
       "notes": "fresh heartbeat",
       "status": "ok"
@@ -119,28 +119,22 @@ consumer response simulation:
 {
   "consensusStalenessMinutes": 0,
   "coverageRatio": 0.1304,
-  "createdAt": "2026-04-23T04:40:27.034636+00:00",
+  "createdAt": "2026-04-23T03:45:00.111113+00:00",
   "degradedReasons": [
-    "LOW_BAR_COVERAGE",
-    "LOW_UNIVERSE_COVERAGE",
-    "PREDICTION_PIPELINE_INACTIVE",
-    "RANKING_BREADTH_THIN",
-    "RECOMMENDATION_DIVERSITY_THIN"
+    "MISSING_SYMBOLS_THRESHOLD_EXCEEDED",
+    "LOW_UNIVERSE_COVERAGE"
   ],
   "expectedUniverseCount": 23,
   "id": "run_health_1",
   "ingestLatencySec": 600,
-  "ingressEnd": "2026-04-23T04:30:27.034636+00:00",
-  "ingressStart": "2026-04-23T04:20:27.034636+00:00",
+  "ingressEnd": "2026-04-23T03:35:00.111113+00:00",
+  "ingressStart": "2026-04-23T03:25:00.111113+00:00",
   "predictLatencySec": 540,
-  "predictionBatchCoverageRatio": 0.1304,
-  "predictionEnd": "2026-04-23T04:40:27.034636+00:00",
-  "predictionStart": "2026-04-23T04:31:27.034636+00:00",
-  "predictions7dCount": 0,
+  "predictionEnd": "2026-04-23T03:45:00.111113+00:00",
+  "predictionStart": "2026-04-23T03:36:00.111113+00:00",
   "rankingUniverseCount": 3,
-  "recommendationUniqueCount": 0,
   "regime": "risk_on",
-  "runQuality": 0.0,
+  "runQuality": 0.5,
   "runStatus": "FAILED",
   "stalenessMinutes": 180,
   "tenant_id": "default",
@@ -154,12 +148,12 @@ consumer response simulation:
   "recommendations": [
     {
       "action": "BUY",
-      "asOf": "2026-04-23T07:40:28.043837+00:00",
+      "asOf": "2026-04-23T06:45:01.008534+00:00",
       "avoidIf": [
         "Breaks below 171.8145",
         "Broad market shifts to risk-off"
       ],
-      "confidence": 56,
+      "confidence": 59,
       "entryZone": [
         176.22,
         179.78
@@ -167,17 +161,7 @@ consumer response simulation:
       "horizon": "2-6 weeks",
       "mode": "balanced",
       "risk": "Moderate",
-      "score": 0.5639,
-      "selectionDiagnostics": {
-        "diversityAdjustedScore": 0.563928,
-        "freshnessBonus": 0.0,
-        "preliminaryScore": 0.563928,
-        "recentRepeatCount": 1,
-        "repeatPenalty": 0.333333,
-        "sector": "technology",
-        "sectorDiversityPenalty": 0.0,
-        "sectorSeenBefore": 0
-      },
+      "score": 0.5906,
       "selectionPreference": "absolute",
       "thesis": [
         "Composite model bias is bullish",
@@ -188,12 +172,12 @@ consumer response simulation:
     },
     {
       "action": "BUY",
-      "asOf": "2026-04-23T07:40:28.043837+00:00",
+      "asOf": "2026-04-23T06:45:01.008534+00:00",
       "avoidIf": [
         "Breaks below 439.1887",
         "Broad market shifts to risk-off"
       ],
-      "confidence": 49,
+      "confidence": 52,
       "entryZone": [
         450.45,
         459.55
@@ -201,21 +185,32 @@ consumer response simulation:
       "horizon": "2-6 weeks",
       "mode": "balanced",
       "risk": "Low",
-      "score": 0.4939,
-      "selectionDiagnostics": {
-        "d
+      "score": 0.5205,
+      "selectionPreference": "absolute",
+      "thesis": [
+        "Composite model bias is bullish",
+        "Ranking layer contributes positive conviction",
+        "Consensus track agreement supports upside"
+      ],
+      "ticker": "QQQ"
+    },
+    {
+      "action": "BUY",
+      "asOf": "2026-04-23T06:45:01.008534+00:00",
+      "avoidIf": [
+        "Breaks b
 ... [truncated]
 ```
 /api/recommendations/best preview:
 ```json
 {
   "action": "BUY",
-  "asOf": "2026-04-23T07:40:28.050973+00:00",
+  "asOf": "2026-04-23T06:45:01.016381+00:00",
   "avoidIf": [
     "Breaks below 171.8145",
     "Broad market shifts to risk-off"
   ],
-  "confidence": 56,
+  "confidence": 59,
   "consumerExperience": {
     "displayTier": "reduced_coverage",
     "message": "",
@@ -238,17 +233,7 @@ consumer response simulation:
     "universeExpected": 23
   },
   "risk": "Moderate",
-  "score": 0.5639,
-  "selectionDiagnostics": {
-    "diversityAdjustedScore": 0.563928,
-    "freshnessBonus": 0.0,
-    "preliminaryScore": 0.563928,
-    "recentRepeatCount": 1,
-    "repeatPenalty": 0.333333,
-    "sector": "technology",
-    "sectorDiversityPenalty": 0.0,
-    "sectorSeenBefore": 0
-  },
+  "score": 0.5906,
   "selectionPreference": "absolute",
   "thesis": [
     "Composite model bias is bullish",
@@ -265,35 +250,35 @@ consumer response simulation:
     {
       "attribution": {},
       "conviction": 0.7,
-      "edgeScore": 0.0,
+      "edgeScore": 0.2646,
       "fragilityScore": 1.0,
       "regime": "NORMAL",
       "score": 0.65,
       "ticker": "AAPL",
-      "timestamp": "2026-04-23T07:40:27.034636+00:00"
+      "timestamp": "2026-04-23T06:45:00.111113+00:00"
     },
     {
       "attribution": {},
       "conviction": 0.7,
-      "edgeScore": 0.0,
+      "edgeScore": 0.2646,
       "fragilityScore": 1.0,
       "regime": "NORMAL",
       "score": 0.65,
       "ticker": "SPY",
-      "timestamp": "2026-04-23T07:40:27.034636+00:00"
+      "timestamp": "2026-04-23T06:45:00.111113+00:00"
     },
     {
       "attribution": {},
       "conviction": 0.7,
-      "edgeScore": 0.0,
+      "edgeScore": 0.2646,
       "fragilityScore": 1.0,
       "regime": "NORMAL",
       "score": 0.65,
       "ticker": "QQQ",
-      "timestamp": "2026-04-23T07:40:27.034636+00:00"
+      "timestamp": "2026-04-23T06:45:00.111113+00:00"
     }
   ],
-  "runQuality": 0.0,
+  "runQuality": 0.5,
   "runStatus": "FAILED",
   "tenant_id": "default"
 }
@@ -303,7 +288,7 @@ consumer response simulation:
 {
   "price": 178.0,
   "ticker": "AAPL",
-  "time": "2026-04-23T07:40:27.034636+00:00",
+  "time": "2026-04-23T06:45:00.111113+00:00",
   "timeframe": "1d"
 }
 ```

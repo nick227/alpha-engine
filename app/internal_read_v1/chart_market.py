@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from app.core.time_utils import to_utc_datetime
 from app.internal_read_v1.chart_symbols import normalize_ticker
 
 UTC = timezone.utc
+_MARKET_READ_LOCK = threading.RLock()
 
 
 def build_quote_payload(
@@ -25,22 +27,26 @@ def build_quote_payload(
 ) -> dict[str, Any] | None:
     now = to_utc_datetime(now or datetime.now(UTC))
     end_iso = now.isoformat()
-    for tf in ("1m", "1h", "1d"):
-        row = conn.execute(
-            """
-            SELECT timestamp, close FROM price_bars
-            WHERE tenant_id = ? AND ticker = ? AND timeframe = ? AND timestamp <= ?
-            ORDER BY timestamp DESC LIMIT 1
-            """,
-            (tenant_id, ticker, tf, end_iso),
-        ).fetchone()
-        if row:
-            return {
-                "ticker": ticker,
-                "price": float(row["close"]),
-                "time": str(row["timestamp"]),
-                "timeframe": tf,
-            }
+    tenant_key = str(tenant_id)
+    ticker_key = normalize_ticker(ticker)
+    with _MARKET_READ_LOCK:
+        for tf in ("1m", "1h", "1d"):
+            row = conn.execute(
+                """
+                SELECT timestamp, close FROM price_bars
+                WHERE tenant_id = ? AND ticker = ? AND timeframe = ? AND timestamp <= ?
+                  AND close IS NOT NULL
+                ORDER BY timestamp DESC LIMIT 1
+                """,
+                (tenant_key, ticker_key, str(tf), str(end_iso)),
+            ).fetchone()
+            if row:
+                return {
+                    "ticker": ticker_key,
+                    "price": float(row["close"]),
+                    "time": str(row["timestamp"]),
+                    "timeframe": tf,
+                }
     return None
 
 
@@ -62,14 +68,15 @@ def build_company_payload(
     ticker: str,
 ) -> dict[str, Any]:
     prof = load_company_profile_json(ticker)
-    row = conn.execute(
-        """
-        SELECT sector, industry FROM fundamentals_snapshot
-        WHERE tenant_id = ? AND ticker = ?
-        ORDER BY as_of_date DESC LIMIT 1
-        """,
-        (tenant_id, ticker),
-    ).fetchone()
+    with _MARKET_READ_LOCK:
+        row = conn.execute(
+            """
+            SELECT sector, industry FROM fundamentals_snapshot
+            WHERE tenant_id = ? AND ticker = ?
+            ORDER BY as_of_date DESC LIMIT 1
+            """,
+            (tenant_id, ticker),
+        ).fetchone()
     sec = row["sector"] if row else None
     ind = row["industry"] if row else None
     return {
@@ -87,10 +94,11 @@ def build_company_payload(
 
 
 def _first_bar_date(conn: sqlite3.Connection, *, tenant_id: str, ticker: str) -> str | None:
-    row = conn.execute(
-        "SELECT MIN(timestamp) FROM price_bars WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d'",
-        (tenant_id, ticker),
-    ).fetchone()
+    with _MARKET_READ_LOCK:
+        row = conn.execute(
+            "SELECT MIN(timestamp) FROM price_bars WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d'",
+            (tenant_id, ticker),
+        ).fetchone()
     if not row or row[0] is None:
         return None
     return to_utc_datetime(row[0]).strftime("%Y-%m-%d")
@@ -104,15 +112,16 @@ def _avg_daily_volume(
     now: datetime,
     sessions: int = 30,
 ) -> float | None:
-    rows = conn.execute(
-        """
-        SELECT volume FROM price_bars
-        WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND timestamp <= ?
-        ORDER BY timestamp DESC
-        LIMIT ?
-        """,
-        (tenant_id, ticker, now.isoformat(), int(sessions)),
-    ).fetchall()
+    with _MARKET_READ_LOCK:
+        rows = conn.execute(
+            """
+            SELECT volume FROM price_bars
+            WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND timestamp <= ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (tenant_id, ticker, now.isoformat(), int(sessions)),
+        ).fetchall()
     if not rows:
         return None
     vols = [float(r["volume"]) for r in rows if r["volume"] is not None]
@@ -128,15 +137,16 @@ def _day_change_pct_daily(
     ticker: str,
     now: datetime,
 ) -> float | None:
-    rows = conn.execute(
-        """
-        SELECT close FROM price_bars
-        WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND timestamp <= ?
-        ORDER BY timestamp DESC
-        LIMIT 2
-        """,
-        (tenant_id, ticker, now.isoformat()),
-    ).fetchall()
+    with _MARKET_READ_LOCK:
+        rows = conn.execute(
+            """
+            SELECT close FROM price_bars
+            WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND timestamp <= ?
+            ORDER BY timestamp DESC
+            LIMIT 2
+            """,
+            (tenant_id, ticker, now.isoformat()),
+        ).fetchall()
     if len(rows) < 2:
         return None
     last = float(rows[0]["close"])
@@ -159,23 +169,25 @@ def build_stats_payload(
         return None
     price = float(q["price"])
     start_52w = now - timedelta(days=372)
-    row_52 = conn.execute(
-        """
-        SELECT MAX(high) AS mx, MIN(low) AS mn FROM price_bars
-        WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d'
-          AND timestamp >= ? AND timestamp <= ?
-        """,
-        (tenant_id, ticker, start_52w.isoformat(), now.isoformat()),
-    ).fetchone()
+    with _MARKET_READ_LOCK:
+        row_52 = conn.execute(
+            """
+            SELECT MAX(high) AS mx, MIN(low) AS mn FROM price_bars
+            WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d'
+              AND timestamp >= ? AND timestamp <= ?
+            """,
+            (tenant_id, ticker, start_52w.isoformat(), now.isoformat()),
+        ).fetchone()
     high52 = float(row_52["mx"]) if row_52 and row_52["mx"] is not None else price
     low52 = float(row_52["mn"]) if row_52 and row_52["mn"] is not None else price
-    row_ath = conn.execute(
-        """
-        SELECT MAX(high) AS mx FROM price_bars
-        WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d'
-        """,
-        (tenant_id, ticker),
-    ).fetchone()
+    with _MARKET_READ_LOCK:
+        row_ath = conn.execute(
+            """
+            SELECT MAX(high) AS mx FROM price_bars
+            WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d'
+            """,
+            (tenant_id, ticker),
+        ).fetchone()
     ath = float(row_ath["mx"]) if row_ath and row_ath["mx"] is not None else price
     prof = load_company_profile_json(ticker)
     ipo_raw = prof.get("ipoDate") if isinstance(prof.get("ipoDate"), str) else None

@@ -227,6 +227,36 @@ def _write_bars(conn: sqlite3.Connection, rows: list[tuple]) -> int:
     return len(rows)
 
 
+FRESH_WINDOW_DAYS = 7
+COVERAGE_THRESHOLD_DEFAULT = 0.70
+
+
+def _count_fresh_coverage(
+    conn: sqlite3.Connection,
+    symbols: list[str],
+    tenant_id: str,
+    today: date,
+) -> tuple[int, float]:
+    """Return (fresh_count, coverage_ratio) — symbols with a 1d bar within FRESH_WINDOW_DAYS."""
+    if not symbols:
+        return 0, 1.0
+    cutoff_iso = (today - timedelta(days=FRESH_WINDOW_DAYS)).isoformat()
+    ph = ",".join("?" * len(symbols))
+    try:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(DISTINCT ticker) FROM price_bars
+            WHERE tenant_id = ? AND timeframe = ? AND DATE(timestamp) >= ?
+            AND ticker IN ({ph})
+            """,
+            (tenant_id, TIMEFRAME, cutoff_iso, *symbols),
+        ).fetchone()
+        fresh = int(row[0]) if row and row[0] else 0
+    except Exception:
+        fresh = 0
+    return fresh, fresh / len(symbols)
+
+
 def run_download(
     *,
     db_path: Path = DB_PATH,
@@ -277,8 +307,10 @@ def run_download(
 
     if not fetch_groups:
         print("All symbols are current. Nothing to download.")
+        fresh_count, coverage_ratio = _count_fresh_coverage(conn, all_symbols, tenant_id, today)
         conn.close()
-        return {"downloaded": 0, "written": 0}
+        print(f"Coverage: {fresh_count}/{len(all_symbols)} symbols fresh ({coverage_ratio:.0%}) in 7-day window")
+        return {"downloaded": 0, "written": 0, "coverage_ratio": coverage_ratio, "fresh_count": fresh_count, "total_symbols": len(all_symbols)}
 
     total_written = 0
     total_errors = 0
@@ -321,10 +353,18 @@ def run_download(
 
             print(f"got data for {hits}/{len(chunk)}  wrote {written} bars")
 
+    fresh_count, coverage_ratio = _count_fresh_coverage(conn, all_symbols, tenant_id, today)
     conn.close()
 
     print(f"\nDone.  {total_written:,} bars written  {total_errors} symbols with no data")
-    return {"downloaded": total_written, "errors": total_errors}
+    print(f"Coverage: {fresh_count}/{len(all_symbols)} symbols fresh ({coverage_ratio:.0%}) in 7-day window")
+    return {
+        "downloaded": total_written,
+        "errors": total_errors,
+        "coverage_ratio": coverage_ratio,
+        "fresh_count": fresh_count,
+        "total_symbols": len(all_symbols),
+    }
 
 
 def main() -> int:
@@ -339,11 +379,17 @@ def main() -> int:
         action="store_true",
         help="Also download every symbol in feature_snapshot (can be thousands; not for routine daily runs).",
     )
+    p.add_argument(
+        "--coverage-threshold",
+        type=float,
+        default=COVERAGE_THRESHOLD_DEFAULT,
+        help=f"Exit 1 if fewer than this fraction of universe symbols have fresh bars (default {COVERAGE_THRESHOLD_DEFAULT}). Pass 0 to disable.",
+    )
     args = p.parse_args()
 
     syms = [s.strip().upper() for s in args.symbols.split(",")] if args.symbols else None
 
-    run_download(
+    result = run_download(
         db_path=Path(args.db),
         tenant_id=args.tenant_id,
         symbols=syms,
@@ -351,6 +397,19 @@ def main() -> int:
         dry_run=args.dry_run,
         include_feature_snapshot=args.include_feature_snapshot,
     )
+
+    if args.dry_run:
+        return 0
+
+    threshold = args.coverage_threshold
+    total = result.get("total_symbols", 0)
+    coverage = result.get("coverage_ratio", 1.0)
+    if threshold > 0 and total > 0 and coverage < threshold:
+        print(
+            f"ERROR: bar coverage {coverage:.0%} ({result.get('fresh_count', '?')}/{total})"
+            f" below {threshold:.0%} threshold — pipeline should not proceed"
+        )
+        return 1
     return 0
 
 

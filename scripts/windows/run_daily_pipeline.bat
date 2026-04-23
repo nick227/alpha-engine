@@ -11,7 +11,7 @@ set LOCK=pipeline.lock
 set "RANKING_LOOKBACK_DAYS=%ALPHA_RANKING_SNAPSHOT_LOOKBACK_DAYS%"
 if "%RANKING_LOOKBACK_DAYS%"=="" set "RANKING_LOOKBACK_DAYS=7"
 set "RANKING_MAX_TICKERS=%ALPHA_RANKING_SNAPSHOT_MAX_TICKERS%"
-if "%RANKING_MAX_TICKERS%"=="" set "RANKING_MAX_TICKERS=30"
+if "%RANKING_MAX_TICKERS%"=="" set "RANKING_MAX_TICKERS=50"
 
 for /f "delims=" %%I in ('%PYTHON% -c "from datetime import date; print(date.today().isoformat())"') do set "ASOF=%%I"
 
@@ -68,7 +68,7 @@ echo [%DATE% %TIME%] STEP 1 END: Download complete >> %LOG%
 :: STEP 2 — Discovery CLI nightly: candidates, watchlist, queue, outcomes, stats + threshold supplement
 :: ----------------------------------------------------------------
 echo [%DATE% %TIME%] STEP 2 START: discovery_cli nightly >> %LOG%
-%PYTHON% -m app.discovery.discovery_cli nightly --db data\alpha.db --tenant-id default >> %LOG% 2>&1
+%PYTHON% -m app.discovery.discovery_cli nightly --db data\alpha.db --tenant-id default --admission-max 40 --admission-per-lens 6 --admission-max-overrule-swaps 5 >> %LOG% 2>&1
 if %ERRORLEVEL% neq 0 (
     set FAILED_STEP=2_discovery_nightly
     echo [%DATE% %TIME%] STEP 2 FAILED >> %LOG%
@@ -92,7 +92,7 @@ echo [%DATE% %TIME%] STEP 3 END: Queue ranked and trimmed >> %LOG%
 :: STEP 4 — Build predicted series from queue (engine path)
 :: ----------------------------------------------------------------
 echo [%DATE% %TIME%] STEP 4 START: prediction_cli run-queue >> %LOG%
-%PYTHON% -m app.engine.prediction_cli run-queue --as-of %ASOF% --db data\alpha.db --tenant-id default --limit 400 --forecast-days 30 --ingress-days 30 >> %LOG% 2>&1
+%PYTHON% -m app.engine.prediction_cli run-queue --as-of %ASOF% --db data\alpha.db --tenant-id default --limit 400 --forecast-days 30 --ingress-days 30 --freshness-hours 20 >> %LOG% 2>&1
 if %ERRORLEVEL% equ 0 goto step4_ok
 if %ERRORLEVEL% equ 3 goto step4_ok
 set FAILED_STEP=4_prediction_cli

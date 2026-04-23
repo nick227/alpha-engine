@@ -294,3 +294,7 @@ def test_api_prediction_runs_latest(intel_client: TestClient) -> None:
     assert body["id"] == "run_1"
     assert "ingressEnd" in body
     assert "predictionEnd" in body
+    assert body["runStatus"] in ("HEALTHY", "DEGRADED", "FAILED")
+    assert isinstance(body["degradedReasons"], list)
+    assert "runQuality" in body
+    assert "coverageRatio" in body

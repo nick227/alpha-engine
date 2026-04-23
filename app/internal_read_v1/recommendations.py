@@ -430,6 +430,13 @@ def rebuild_house_recommendations(
     status_map = _candidate_status(conn, tenant_id=tenant_id)
     universe = get_active_universe_tickers(tenant_id=tenant_id, sqlite_conn=conn)
 
+    # When live rankings exist, use the ranked tickers as the recommendation universe.
+    # The ranking snapshot covers the prediction pipeline's broader discovery set, which
+    # is wider than active_universe (static + admitted only). Building recommendations from
+    # active_universe when rankings are available means most candidates have ranking_score=0.
+    if ranking_map:
+        universe = sorted(ranking_map.keys())
+
     conn.execute("DELETE FROM house_recommendations WHERE tenant_id = ? AND mode = ?", (tenant_id, mode))
 
     candidates: list[dict[str, Any]] = []

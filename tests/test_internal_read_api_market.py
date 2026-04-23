@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -25,17 +26,22 @@ def _seed_price_bars(db_path: Path) -> None:
 
     repo = AlphaRepository(db_path=str(db_path))
     daily = [
-        _bar("2025-06-01T00:00:00+00:00", 100.0, high=105.0, low=95.0, volume=1e6),
-        _bar("2025-06-02T00:00:00+00:00", 110.0, high=112.0, low=108.0, volume=2e6),
+        _bar("2022-06-01T00:00:00+00:00", 100.0, high=105.0, low=95.0, volume=1e6),
+        _bar("2022-06-02T00:00:00+00:00", 110.0, high=112.0, low=108.0, volume=2e6),
+    ]
+    cheap_daily = [
+        _bar("2022-06-01T00:00:00+00:00", 1.40, high=1.60, low=1.20, volume=3e6),
+        _bar("2022-06-02T00:00:00+00:00", 1.70, high=1.90, low=1.35, volume=4e6),
     ]
     repo.save_price_bars("TST", "1d", daily, tenant_id="default")
+    repo.save_price_bars("CHEAP", "1d", cheap_daily, tenant_id="default")
     repo.conn.execute(
         """
         INSERT OR REPLACE INTO candidate_queue
           (tenant_id, ticker, status, first_seen_at, last_seen_at, signal_count, metadata_json)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        ("default", "TST", "admitted", "2025-06-01T00:00:00+00:00", "2025-06-02T00:00:00+00:00", 2, "{}"),
+        ("default", "TST", "admitted", "2022-06-01T00:00:00+00:00", "2022-06-02T00:00:00+00:00", 2, "{}"),
     )
     repo.save_consensus_signal(
         {
@@ -55,6 +61,14 @@ def _seed_price_bars(db_path: Path) -> None:
     )
     repo.conn.execute(
         """
+        INSERT OR REPLACE INTO candidate_queue
+          (tenant_id, ticker, status, first_seen_at, last_seen_at, signal_count, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("default", "CHEAP", "admitted", "2022-06-01T00:00:00+00:00", "2022-06-02T00:00:00+00:00", 2, "{}"),
+    )
+    repo.conn.execute(
+        """
         INSERT INTO ranking_snapshots
           (id, tenant_id, ticker, score, conviction, attribution_json, regime, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -67,8 +81,41 @@ def _seed_price_bars(db_path: Path) -> None:
             0.55,
             "{}",
             "NORMAL",
-            "2025-06-02T00:00:00+00:00",
+            "2022-06-02T00:00:00+00:00",
         ),
+    )
+    repo.conn.execute(
+        """
+        INSERT INTO ranking_snapshots
+          (id, tenant_id, ticker, score, conviction, attribution_json, regime, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid4()),
+            "default",
+            "CHEAP",
+            0.68,
+            0.68,
+            "{}",
+            "NORMAL",
+            "2022-06-02T00:00:00+00:00",
+        ),
+    )
+    repo.save_consensus_signal(
+        {
+            "ticker": "CHEAP",
+            "regime": "NORMAL",
+            "sentiment_strategy_id": "test_s2",
+            "quant_strategy_id": "test_q2",
+            "sentiment_score": 0.75,
+            "quant_score": 0.7,
+            "ws": 0.5,
+            "wq": 0.5,
+            "agreement_bonus": 0.0,
+            "p_final": 0.73,
+            "stability_score": 0.72,
+        },
+        tenant_id="default",
     )
     repo.conn.commit()
     repo.conn.close()
@@ -77,7 +124,22 @@ def _seed_price_bars(db_path: Path) -> None:
 @pytest.fixture
 def market_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     db = tmp_path / "market.db"
+    profiles_dir = tmp_path / "company_profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "CHEAP.json").write_text(
+        """
+{"longName":"Cheap Co","sector":"Technology","industry":"Software","website":"https://cheap.example","country":"US","fullTimeEmployees":2500}
+""".strip(),
+        encoding="utf-8",
+    )
+    (profiles_dir / "TST.json").write_text(
+        """
+{"longName":"Test Holdings","sector":"Finance","industry":"Services","website":"https://tst.example","country":"US","fullTimeEmployees":1200}
+""".strip(),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("ALPHA_DB_PATH", str(db))
+    monkeypatch.setenv("COMPANY_PROFILES_DIR", str(profiles_dir))
     monkeypatch.setenv("INTERNAL_READ_INSECURE", "1")
     monkeypatch.delenv("INTERNAL_READ_KEY", raising=False)
     _seed_price_bars(db)
@@ -210,3 +272,61 @@ def test_api_recommendations_best_invalid_preference_400(market_client: TestClie
 def test_api_recommendations_latest_invalid_preference_400(market_client: TestClient) -> None:
     res = market_client.get("/api/recommendations/latest", params={"preference": "x"})
     assert res.status_code == 400
+
+
+def test_api_recommendations_under_price(market_client: TestClient) -> None:
+    res = market_client.get("/api/recommendations/under/2", params={"mode": "balanced", "limit": 10})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["selectionPreference"] == "long_only"
+    assert body["priceCap"] == 2.0
+    rows = body["recommendations"]
+    assert len(rows) >= 1
+    assert rows[0]["ticker"] == "CHEAP"
+    assert rows[0]["entryZone"][1] <= 2.0
+    assert rows[0]["band"] == "under_2"
+    assert rows[0]["eligibilityPassed"] is True
+    assert "compositeScore" in rows[0]
+    assert "fiftyDollarPotential" in rows[0]
+    assert rows[0]["disqualifiers"] == []
+
+
+def test_api_recommendations_under_price_invalid_400(market_client: TestClient) -> None:
+    res = market_client.get("/api/recommendations/under/0")
+    assert res.status_code == 400
+
+
+def test_api_recommendations_under_price_skips_null_latest_close(market_client: TestClient) -> None:
+    from app.internal_read_v1.chart_market import build_quote_payload
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE price_bars (
+            tenant_id TEXT,
+            ticker TEXT,
+            timeframe TEXT,
+            timestamp TEXT,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            volume REAL
+        )
+        """,
+    )
+    conn.executemany(
+        """
+        INSERT INTO price_bars
+          (tenant_id, ticker, timeframe, timestamp, open, high, low, close, volume)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("default", "CHEAP", "1d", "2022-06-02T00:00:00+00:00", 1.6, 1.9, 1.4, 1.7, 4_000_000.0),
+            ("default", "CHEAP", "1d", "2022-06-03T00:00:00+00:00", 1.8, 2.0, 1.7, None, 4_200_000.0),
+        ],
+    )
+    out = build_quote_payload(conn, tenant_id="default", ticker="CHEAP")
+    assert out is not None
+    assert out["price"] == 1.7

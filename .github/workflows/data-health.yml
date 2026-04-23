@@ -1,0 +1,45 @@
+name: data-health
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  data-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Create venv
+        run: python -m venv .venv
+
+      - name: Install dependencies
+        run: |
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run Data Health lane
+        run: |
+          . .venv/bin/activate
+          python -m pytest tests/test_internal_read_data_health.py -q
+
+      - name: Upload Data Health artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-health-report
+          path: reports/data-health-*.txt
+          if-no-files-found: warn

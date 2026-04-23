@@ -1,31 +1,54 @@
-DATA HEALTH PROD: PASS
-Generated: 2026-04-23 07:37 UTC
+DATA HEALTH (PROD): PASS
+Generated: 2026-04-23 10:30 UTC
+
+pipeline last run: OK finished_at=Thu 04/23/2026_ 2:01:51.74
 
 runtime identity:
-db_path: C:\wamp64\www\alpha-engine-poc\data\alpha.db
-db_modified_utc: 2026-04-23 07:18:12 UTC
-db_size_bytes: 5931966464
-git_commit: 2afb3df
-pipeline_script: scripts/windows/run_daily_pipeline.bat
-pipeline_script_mtime_utc: 2026-04-23 07:00:51 UTC
+  db_path: C:\wamp64\www\alpha-engine-poc\data\alpha.db
+  db_modified_utc: 2026-04-23 10:30:16 UTC
+  db_size_bytes: 5931982848
+  git_commit: df22bb0
+  pipeline_script_mtime_utc: 2026-04-23 10:21:31 UTC
 
-output KPIs:
-coverage_pct: 97.7
-predictions_total: 62
-predictions_7d: 39
-predictions_distinct_7d: 21
-prediction_repeat_rate_7d_pct: 46.2
-ranking_rows: 21
-ranking_provenance: live_prediction
-recommendations_rows: 10
-recommendations_unique_tickers: 10
-recommendation_sector_unique_count: 4
-recommendation_confidence_avg_min_max: 30.7/22.0/44.0
-megacap_share_pct: 10.0
+reconciliation (market data):
+Universe expected: 62
+Fresh bars available (7d window): 62
+bars freshness split:
+  bars fresh: 62
+  bars stale: 0
+  bars missing (no 1d rows): 0
+Missing from fresh bar coverage: 0
+Top missing (no fresh bar): none
 
-upstream run signals:
-runStatus: DEGRADED
-runQuality: 0.8
-coverageRatio: 0.9767
+coverage SLA (target ≥90% fresh 1d bars on expected universe):
+  ratio: 100.0%  status: PASS
 
-top_missing_fresh_bars: AMED
+stage freshness (latest warehouse timestamps):
+  max 1d bar (universe tickers): 2026-04-22T00:00:00+00:00
+  max prediction timestamp: 2026-04-22T09:30:00+00:00
+  max ranking_snapshots batch: 2026-04-23T07:01:45.792369+00:00
+  max consensus_signals: 2026-04-23 05:42:24
+  max candidate_queue last_seen_at: 2026-04-23T07:01:22.807287+00:00
+
+pipeline funnel (warehouse):
+candidate_queue symbols: 1106
+  by status: admitted=40, recurring=385, rejected=2, seen=679
+predictions rows (all time): 62
+predictions rows (last 7d): 21
+predictions distinct tickers (last 7d): 21
+latest ranking snapshot ts: 2026-04-23T07:01:45.792369+00:00
+ranking symbols (latest DB batch): 21
+house_recommendations rows (balanced, DB): 21
+ranking provenance (heuristic): live_prediction
+
+full funnel (incident sentence):
+  62 universe → 62 eligible (fresh 1d) → 1106 queued → 21 predicted (7d rows) → 21 ranked (DB) → 21 recommended (DB)
+  likely bottleneck: none
+
+B+ output quality scorecard:
+  · bar coverage: 100.0%  (target ≥90% fresh universe)
+  · predictions: 0 rows (24h), 21 rows (7d), 21 distinct tickers (7d)
+  · ranking breadth: 21 symbols (latest DB batch) — aim ≥10
+  · ranking provenance: live_prediction
+  · house_recommendations: 21 rows (balanced) — aim 5–15
+  · prediction repeat pressure (7d): 0.0%
