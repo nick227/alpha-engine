@@ -113,8 +113,8 @@ def supplement_prediction_queue_from_discovery(
     exclude_symbols = {str(r["s"]) for r in ex if r and r["s"]}
 
     queue_rows, by_strategy = build_threshold_queue_rows(
-        disc_summary,
-        as_of_date,
+        disc_summary=disc_summary,
+        as_of_str=as_of_date,
         target_signals=target_signals,
         per_strategy_cap=per_strategy_cap,
         min_confidence=min_confidence,
@@ -158,8 +158,8 @@ def queue_discovery_predictions(
     )
 
     queue_rows, by_strategy_counts = build_threshold_queue_rows(
-        result,
-        as_of_str,
+        disc_summary=result,
+        as_of_str=as_of_str,
         promoted_overrides=PROMOTED_STRATEGIES,
         exclude_symbols=set(),
         source_pipeline="nightly_discovery",
