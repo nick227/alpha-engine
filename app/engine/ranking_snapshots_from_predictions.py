@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any
 
 from app.core.types import TargetRanking
 from app.db.repository import AlphaRepository
+
+DEFAULT_LOOKBACK_DAYS = int(os.getenv("ALPHA_RANKING_SNAPSHOT_LOOKBACK_DAYS", "7"))
+DEFAULT_MAX_TICKERS = int(os.getenv("ALPHA_RANKING_SNAPSHOT_MAX_TICKERS", "30"))
 
 
 def persist_ranking_snapshots_from_ranked_predictions(
@@ -21,6 +25,8 @@ def persist_ranking_snapshots_from_ranked_predictions(
     tenant_id: str = "default",
     as_of_date: str,
     mode: str = "discovery",
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    max_tickers: int = DEFAULT_MAX_TICKERS,
 ) -> dict[str, Any]:
     """
     Insert a new ranking_snapshots batch sharing one UTC timestamp.
@@ -30,17 +36,20 @@ def persist_ranking_snapshots_from_ranked_predictions(
     ts = datetime.now(timezone.utc)
     try:
         conn = repo.conn
+        lb_days = max(1, int(lookback_days))
+        max_rows = max(1, int(max_tickers))
         rows = conn.execute(
             """
-            SELECT UPPER(TRIM(ticker)) AS ticker, rank_score, confidence, regime
+            SELECT UPPER(TRIM(ticker)) AS ticker, rank_score, confidence, regime, timestamp
             FROM predictions
             WHERE tenant_id = ?
               AND mode = ?
-              AND date(timestamp) = date(?)
+              AND date(timestamp) <= date(?)
+              AND date(timestamp) >= date(?, ?)
               AND rank_score IS NOT NULL
             ORDER BY rank_score DESC
             """,
-            (tenant_id, mode, as_of_date),
+            (tenant_id, mode, as_of_date, as_of_date, f"-{lb_days} day"),
         ).fetchall()
         seen: set[str] = set()
         rankings: list[TargetRanking] = []
@@ -63,14 +72,24 @@ def persist_ranking_snapshots_from_ranked_predictions(
                     tenant_id=tenant_id,
                 )
             )
+            if len(rankings) >= max_rows:
+                break
         if not rankings:
-            return {"as_of_date": as_of_date, "written": 0, "snapshot_ts": ts.isoformat()}
+            return {
+                "as_of_date": as_of_date,
+                "written": 0,
+                "snapshot_ts": ts.isoformat(),
+                "lookback_days": lb_days,
+                "max_tickers": max_rows,
+            }
 
         repo.save_target_ranking(rankings, tenant_id)
         return {
             "as_of_date": as_of_date,
             "written": len(rankings),
             "snapshot_ts": ts.isoformat(),
+            "lookback_days": lb_days,
+            "max_tickers": max_rows,
         }
     finally:
         repo.close()
@@ -82,6 +101,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tenant-id", default="default")
     p.add_argument("--as-of", dest="as_of", required=True, help="YYYY-MM-DD (must match prediction_rank_sqlite day)")
     p.add_argument("--mode", default="discovery", help="predictions.mode filter (default: discovery)")
+    p.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
+    p.add_argument("--max-tickers", type=int, default=DEFAULT_MAX_TICKERS)
     return p
 
 
@@ -92,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
         tenant_id=str(args.tenant_id),
         as_of_date=str(args.as_of),
         mode=str(args.mode),
+        lookback_days=int(args.lookback_days),
+        max_tickers=int(args.max_tickers),
     )
     print(json.dumps(out, indent=2))
     return 0
