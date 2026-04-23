@@ -8,8 +8,12 @@ set "PYTHON=%ROOT%\.venv\Scripts\python.exe"
 set PYTHONPATH=.
 set LOG=logs\daily_pipeline_%DATE:~-4,4%-%DATE:~-10,2%-%DATE:~-7,2%.log
 set LOCK=pipeline.lock
+set "RANKING_LOOKBACK_DAYS=%ALPHA_RANKING_SNAPSHOT_LOOKBACK_DAYS%"
+if "%RANKING_LOOKBACK_DAYS%"=="" set "RANKING_LOOKBACK_DAYS=7"
+set "RANKING_MAX_TICKERS=%ALPHA_RANKING_SNAPSHOT_MAX_TICKERS%"
+if "%RANKING_MAX_TICKERS%"=="" set "RANKING_MAX_TICKERS=30"
 
-for /f "delims=" %%I in ('"%PYTHON%" -c "from datetime import date; print(date.today().isoformat())"') do set "ASOF=%%I"
+for /f "delims=" %%I in ('%PYTHON% -c "from datetime import date; print(date.today().isoformat())"') do set "ASOF=%%I"
 
 if not exist logs mkdir logs
 
@@ -103,7 +107,7 @@ echo [%DATE% %TIME%] STEP 6 END: Predictions ranked >> %LOG%
 :: STEP 7 — Persist ranking_snapshots from ranked predictions (movers / top-N read API)
 :: ----------------------------------------------------------------
 echo [%DATE% %TIME%] STEP 7 START: ranking_snapshots from predictions >> %LOG%
-%PYTHON% -m app.engine.ranking_snapshots_from_predictions --as-of %ASOF% --db data\alpha.db --tenant-id default >> %LOG% 2>&1
+%PYTHON% -m app.engine.ranking_snapshots_from_predictions --as-of %ASOF% --db data\alpha.db --tenant-id default --lookback-days %RANKING_LOOKBACK_DAYS% --max-tickers %RANKING_MAX_TICKERS% >> %LOG% 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [%DATE% %TIME%] STEP 7 FAILED >> %LOG%
     goto :abort
