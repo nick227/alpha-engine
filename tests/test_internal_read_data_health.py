@@ -217,6 +217,9 @@ def _reconcile_upstream_funnel(
     rec_unique_tickers: int,
     ranking_tickers_sample: list[str],
     rec_tickers_sample: list[str],
+    rec_top_concentration: float | None = None,
+    rec_avg_confidence_pct: float | None = None,
+    rec_sentinel_share_pct: float | None = None,
 ) -> list[str]:
     from app.core.active_universe import get_active_universe_tickers
     from app.core.pipeline_gates import infer_ranking_provenance
@@ -224,6 +227,7 @@ def _reconcile_upstream_funnel(
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=FRESH_BAR_MAX_AGE_DAYS)
     cutoff_pred_7d = (now - timedelta(days=7)).isoformat()
+    cutoff_pred_24h = (now - timedelta(hours=24)).isoformat()
 
     universe = sorted(get_active_universe_tickers(tenant_id=tenant_id, sqlite_conn=conn))
     expected = len(universe)
@@ -273,13 +277,21 @@ def _reconcile_upstream_funnel(
     admitted_n = cq_by_status.get("admitted", 0)
     cq_status_line = ", ".join(f"{k}={v}" for k, v in sorted(cq_by_status.items())) or "none"
 
-    pred_total = pred_7d = pred_distinct_7d = 0
+    pred_total = pred_24h = pred_7d = pred_distinct_7d = 0
     try:
         pt = conn.execute(
             "SELECT COUNT(*) AS n FROM predictions WHERE tenant_id = ?",
             (tenant_id,),
         ).fetchone()
         pred_total = int(pt["n"]) if pt and pt["n"] is not None else 0
+        p24 = conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM predictions
+            WHERE tenant_id = ? AND timestamp >= ?
+            """,
+            (tenant_id, cutoff_pred_24h),
+        ).fetchone()
+        pred_24h = int(p24["n"]) if p24 and p24["n"] is not None else 0
         p7 = conn.execute(
             """
             SELECT COUNT(*) AS n FROM predictions
@@ -298,6 +310,13 @@ def _reconcile_upstream_funnel(
         pred_distinct_7d = int(pd["n"]) if pd and pd["n"] is not None else 0
     except sqlite3.OperationalError:
         pass
+
+    repeat_pressure_pct: float | None = None
+    if pred_7d > 0:
+        repeat_pressure_pct = round(
+            100.0 * (1.0 - pred_distinct_7d / float(pred_7d)),
+            2,
+        )
 
     rmax = conn.execute(
         "SELECT MAX(timestamp) AS ts FROM ranking_snapshots WHERE tenant_id = ?",
@@ -453,6 +472,41 @@ def _reconcile_upstream_funnel(
         f"  unique tickers in API response: {rec_unique_tickers} "
         f"(warn if <{MIN_RECOMMENDATION_UNIQUE_TICKERS_WARNING} for thin breadth)"
     )
+
+    lines.append("")
+    lines.append("B+ output quality scorecard (what users experience):")
+    lines.append(
+        f"  · bar coverage: {bar_cov_pct}%  (target ≥{int(BAR_COVERAGE_SLA_RATIO * 100)}% fresh universe)"
+    )
+    lines.append(
+        f"  · predictions: {pred_24h} rows (24h), {pred_7d} rows (7d), "
+        f"{pred_distinct_7d} distinct tickers (7d)"
+    )
+    if repeat_pressure_pct is not None:
+        lines.append(
+            f"  · prediction repeat pressure (7d): {repeat_pressure_pct}% "
+            "(high = same tickers dominate runs — widen discovery or refresh)"
+        )
+    lines.append(
+        f"  · ranking breadth: {ranking_db_count} symbols (latest DB batch), "
+        f"{ranking_rows_count} rows (/ranking/top — aim ≥10)"
+    )
+    lines.append(
+        f"  · recommendations/latest: {rec_rows_count} rows, {rec_unique_tickers} unique tickers "
+        "(aim 5–15 worthwhile names)"
+    )
+    if rec_top_concentration is not None:
+        lines.append(
+            f"  · top-ticker concentration (latest response): {rec_top_concentration:.0%} "
+            "(lower is more diverse)"
+        )
+    if rec_avg_confidence_pct is not None:
+        lines.append(f"  · mean recommendation confidence: {rec_avg_confidence_pct:.1f}%")
+    if rec_sentinel_share_pct is not None:
+        lines.append(
+            f"  · sentinel mega-cap share (AAPL/SPY/QQQ rows): {rec_sentinel_share_pct:.0%} "
+            "(lower usually feels less repetitive)"
+        )
 
     lines.append("")
     lines.append("operational notes (two independent gates for B+ quality):")
@@ -629,6 +683,19 @@ def test_data_health_critical_surfaces_pass(data_health_client: TestClient) -> N
     conn.row_factory = sqlite3.Row
     try:
         rec_unique = len({str(r["ticker"]).strip().upper() for r in rec_rows if r.get("ticker")})
+        conf_nums = [
+            float(r["confidence"]) for r in rec_rows if r.get("confidence") is not None
+        ]
+        rec_avg_conf = round(sum(conf_nums) / len(conf_nums), 1) if conf_nums else None
+        fts = [
+            str(r["ticker"]).strip().upper()
+            for r in rec_rows
+            if r.get("ticker")
+        ]
+        sent_set = set(SENTINEL_SYMBOLS)
+        rec_sent_share = (
+            round(sum(1 for t in fts if t in sent_set) / len(fts), 4) if fts else None
+        )
         reconcile_lines = _reconcile_upstream_funnel(
             conn,
             tenant_id="default",
@@ -640,6 +707,9 @@ def test_data_health_critical_surfaces_pass(data_health_client: TestClient) -> N
                 str(r["ticker"]).strip().upper() for r in ranking_rows[:120]
             ],
             rec_tickers_sample=[str(r["ticker"]).strip().upper() for r in rec_rows[:120]],
+            rec_top_concentration=float(quality_metrics["top_recommendation_concentration"]),
+            rec_avg_confidence_pct=rec_avg_conf,
+            rec_sentinel_share_pct=rec_sent_share,
         )
     finally:
         conn.close()
