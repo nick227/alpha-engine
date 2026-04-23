@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.core.pipeline_gates import (
     compute_pipeline_signals,
     intelligence_confidence_tier,
+    product_labels_for_tier,
     should_block_best_pick_without_predictions,
 )
 from app.internal_read_v1.bars_chart import (
@@ -235,11 +236,16 @@ def api_recommendations_latest(
     )
     signals = compute_pipeline_signals(conn, tenant_id=tenant_id)
     tier = intelligence_confidence_tier(signals)
+    labels = product_labels_for_tier(tier)
     return {
         "tenant_id": tenant_id,
         "mode": mode_key,
         "selectionPreference": pref_key,
         "intelligenceConfidenceTier": tier,
+        "consumerExperience": {
+            **labels,
+            "message": "" if rows else "No recommendations available.",
+        },
         "pipelineSignals": signals.as_public_dict(),
         "recommendations": rows,
     }
@@ -262,7 +268,11 @@ def api_recommendations_best(
     if should_block_best_pick_without_predictions(signals.predictions_total):
         raise HTTPException(
             status_code=503,
-            detail="prediction pipeline dormant; best pick withheld (PIPELINE_BLOCK_BEST_WITHOUT_PREDICTIONS)",
+            detail={
+                "status": "limited_mode",
+                "reason": "prediction_pipeline_inactive",
+                "retryHint": "Run pipeline",
+            },
         )
     row = get_recommendation_best(
         conn,
@@ -273,7 +283,13 @@ def api_recommendations_best(
     if row is None:
         raise HTTPException(status_code=404, detail="no recommendation available")
     tier = intelligence_confidence_tier(signals)
-    return {**row, "intelligenceConfidenceTier": tier, "pipelineSignals": signals.as_public_dict()}
+    labels = product_labels_for_tier(tier)
+    return {
+        **row,
+        "intelligenceConfidenceTier": tier,
+        "consumerExperience": {**labels, "message": ""},
+        "pipelineSignals": signals.as_public_dict(),
+    }
 
 
 @router.get("/recommendations/{ticker}")

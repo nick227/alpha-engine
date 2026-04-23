@@ -74,7 +74,29 @@ def test_protected_correct_key(alpha_db_memory: None, monkeypatch: pytest.Monkey
     }
     assert data["intelligenceConfidenceTier"] in {"full", "limited", "suppressed"}
     assert isinstance(data["pipelineSignals"], dict)
+    ce = data["consumerExperience"]
+    assert ce["displayTier"] in ("live_intelligence", "reduced_coverage", "refreshing_data")
+    assert ce["title"]
+    assert "message" in ce
+    assert ce["rankingsUnavailable"] is True
     assert data["rankings"] == []
+
+
+def test_recommendations_best_semantic_503_when_pipeline_blocked(
+    alpha_db_memory: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INTERNAL_READ_INSECURE", "1")
+    monkeypatch.setenv("PIPELINE_BLOCK_BEST_WITHOUT_PREDICTIONS", "1")
+    monkeypatch.delenv("INTERNAL_READ_KEY", raising=False)
+    from app.internal_read_v1.app import app
+
+    with TestClient(app) as client:
+        res = client.get("/api/recommendations/best")
+    assert res.status_code == 503
+    body = res.json()
+    assert body["status"] == "limited_mode"
+    assert body["reason"] == "prediction_pipeline_inactive"
+    assert body["retryHint"] == "Run pipeline"
 
 
 def test_ranking_top_invalid_max_fragility(alpha_db_memory: None, monkeypatch: pytest.MonkeyPatch) -> None:

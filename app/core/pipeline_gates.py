@@ -12,6 +12,12 @@ from app.core.active_universe import get_active_universe_tickers
 
 RankingProvenance = Literal["live_prediction", "legacy_snapshot", "fallback_consensus", "seeded", "none"]
 
+# Pragmatic edge-score discount when tier is limited (recompute later; see internal read ranking handler).
+LIMITED_EDGE_SCORE_MULTIPLIER = 0.85
+
+InternalTier = Literal["full", "limited", "suppressed"]
+DisplayTier = Literal["live_intelligence", "reduced_coverage", "refreshing_data"]
+
 BAR_COVERAGE_SLA_RATIO = float(os.environ.get("PIPELINE_BAR_COVERAGE_SLA", "0.9"))
 FRESH_BAR_MAX_AGE_DAYS = int(os.environ.get("PIPELINE_FRESH_BAR_DAYS", "7"))
 
@@ -140,6 +146,91 @@ def should_block_best_pick_without_predictions(predictions_total: int) -> bool:
     if os.environ.get("PIPELINE_BLOCK_BEST_WITHOUT_PREDICTIONS", "").strip() not in ("1", "true", "yes"):
         return False
     return predictions_total == 0
+
+
+def latest_ranking_snapshot_timestamp(
+    conn: sqlite3.Connection, *, tenant_id: str
+) -> datetime | None:
+    try:
+        row = conn.execute(
+            "SELECT MAX(timestamp) AS ts FROM ranking_snapshots WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if row and row["ts"] is not None:
+            return _parse_iso_utc(str(row["ts"]))
+    except sqlite3.OperationalError:
+        pass
+    return None
+
+
+def ranking_snapshot_age_hours(conn: sqlite3.Connection, *, tenant_id: str) -> float | None:
+    ts = latest_ranking_snapshot_timestamp(conn, tenant_id=tenant_id)
+    if ts is None:
+        return None
+    delta = datetime.now(timezone.utc) - ts
+    return round(max(0.0, delta.total_seconds() / 3600.0), 4)
+
+
+def should_suppress_stale_legacy_ranking(
+    provenance: RankingProvenance,
+    snapshot_age_hours: float | None,
+) -> bool:
+    raw = os.environ.get("PIPELINE_SUPPRESS_LEGACY_SNAPSHOT_OLDER_THAN_HOURS", "").strip()
+    if not raw:
+        return False
+    try:
+        max_hours = float(raw)
+    except ValueError:
+        return False
+    if provenance not in ("legacy_snapshot", "seeded"):
+        return False
+    if snapshot_age_hours is None:
+        return False
+    return snapshot_age_hours > max_hours
+
+
+def product_labels_for_tier(internal_tier: InternalTier) -> dict[str, str]:
+    """User-facing labels (avoid exposing raw pipeline tier strings in UI)."""
+    mapping: dict[InternalTier, tuple[DisplayTier, str]] = {
+        "full": ("live_intelligence", "Live Intelligence"),
+        "limited": ("reduced_coverage", "Reduced Coverage"),
+        "suppressed": ("refreshing_data", "Refreshing Data"),
+    }
+    display_id, title = mapping[internal_tier]
+    return {"displayTier": display_id, "title": title}
+
+
+def build_ranking_consumer_experience(
+    internal_tier: InternalTier,
+    *,
+    rankings_count: int,
+    suppression_reasons: list[str],
+    filtered_out_entirely: bool,
+) -> dict[str, Any]:
+    labels = product_labels_for_tier(internal_tier)
+    reason: str | None = None
+    if "bar_coverage" in suppression_reasons:
+        reason = "market_data_coverage"
+    elif "legacy_stale" in suppression_reasons:
+        reason = "legacy_snapshot_stale"
+
+    if rankings_count > 0:
+        message = ""
+    elif filtered_out_entirely:
+        message = "No rankings match the current filters."
+    elif suppression_reasons or internal_tier in ("limited", "suppressed"):
+        message = (
+            "Refreshing market intelligence. Rankings temporarily unavailable."
+        )
+    else:
+        message = "No rankings are available yet."
+
+    return {
+        **labels,
+        "message": message,
+        "rankingsUnavailable": rankings_count == 0,
+        "reason": reason,
+    }
 
 
 def infer_ranking_provenance(

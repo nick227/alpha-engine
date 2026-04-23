@@ -19,10 +19,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.internal_read_v1.api_routes import router as api_router
 from app.core.pipeline_gates import (
+    LIMITED_EDGE_SCORE_MULTIPLIER,
+    build_ranking_consumer_experience,
     compute_pipeline_signals,
     infer_ranking_provenance,
     intelligence_confidence_tier,
+    ranking_snapshot_age_hours,
     should_suppress_rankings,
+    should_suppress_stale_legacy_ranking,
 )
 from app.internal_read_v1.intelligence_read import get_prediction_run_latest
 from app.ui.middle.dashboard_service import DashboardService, RankingView
@@ -150,7 +154,9 @@ app.add_middleware(_InternalKeyMiddleware)
 
 @app.exception_handler(HTTPException)
 async def _http_exc(_request: Request, exc: HTTPException) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content={"error": str(exc.detail)})
+    detail = exc.detail
+    body: dict[str, Any] = detail if isinstance(detail, dict) else {"error": str(detail)}
+    return JSONResponse(status_code=exc.status_code, content=body)
 
 
 @app.get("/health")
@@ -175,7 +181,7 @@ def ranking_top(
     tenant_id: str = "default",
     allow_legacy: bool = Query(
         False,
-        description="When true, rankings are returned even if PIPELINE_SUPPRESS_RANKINGS_BELOW would hide them",
+        description="When true, skip bar-coverage and legacy-snapshot staleness suppression (gates must be configured via env)",
     ),
 ) -> dict[str, Any]:
     """v1: latest snapshot only; historical as_of is not supported yet."""
@@ -189,7 +195,7 @@ def ranking_top(
     ranked_under_degraded = bool(run and str(run.get("runStatus")) in {"DEGRADED", "FAILED"})
     run_quality = float(run.get("runQuality")) if run and run.get("runQuality") is not None else 1.0
     pre_tier = intelligence_confidence_tier(signals, rankings_suppressed=False)
-    confidence_mult = 0.85 if pre_tier == "limited" else 1.0
+    confidence_mult = LIMITED_EDGE_SCORE_MULTIPLIER if pre_tier == "limited" else 1.0
     rankings = []
     for r in rows:
         base = _ranking_row(r)
@@ -211,18 +217,46 @@ def ranking_top(
                 "fragilityScore": fragility,
             }
         )
-    suppress = should_suppress_rankings(signals.bar_coverage_ratio) and not allow_legacy
-    if suppress:
-        rankings = []
-    final_tier = intelligence_confidence_tier(signals, rankings_suppressed=suppress)
+    rankings_after_filters = len(rankings)
+    filtered_out_entirely = len(rows) > 0 and rankings_after_filters == 0 and maxFragility is not None
+
     prov_tickers = [str(x.ticker).strip().upper() for x in rows[:lim]]
     ranking_provenance = infer_ranking_provenance(
         conn, tenant_id=tenant_id, ranking_tickers=prov_tickers
     )
+    snap_age_hours = ranking_snapshot_age_hours(conn, tenant_id=tenant_id)
+
+    suppress_bar = should_suppress_rankings(signals.bar_coverage_ratio) and not allow_legacy
+    suppress_legacy = should_suppress_stale_legacy_ranking(ranking_provenance, snap_age_hours) and not allow_legacy
+
+    suppression_reasons: list[str] = []
+    if suppress_bar:
+        suppression_reasons.append("bar_coverage")
+    if suppress_legacy:
+        suppression_reasons.append("legacy_stale")
+
+    if suppress_bar or suppress_legacy:
+        rankings = []
+
+    rankings_suppressed = suppress_bar or suppress_legacy
+    final_tier = intelligence_confidence_tier(signals, rankings_suppressed=rankings_suppressed)
+
+    consumer_experience = build_ranking_consumer_experience(
+        final_tier,
+        rankings_count=len(rankings),
+        suppression_reasons=suppression_reasons,
+        filtered_out_entirely=filtered_out_entirely,
+    )
+
     pipe = signals.as_public_dict()
-    pipe["rankingsSuppressed"] = suppress
+    pipe["rankingsSuppressed"] = rankings_suppressed
+    pipe["suppressionReasons"] = suppression_reasons
+    pipe["latestRankingSnapshotAgeHours"] = snap_age_hours
     pipe["suppressRankingsGateConfigured"] = bool(
         str(os.environ.get("PIPELINE_SUPPRESS_RANKINGS_BELOW", "")).strip()
+    )
+    pipe["legacySnapshotStalenessConfigured"] = bool(
+        str(os.environ.get("PIPELINE_SUPPRESS_LEGACY_SNAPSHOT_OLDER_THAN_HOURS", "")).strip()
     )
     return {
         "tenant_id": tenant_id,
@@ -234,6 +268,7 @@ def ranking_top(
         "maxFragility": float(maxFragility) if maxFragility is not None else None,
         "rankingProvenance": ranking_provenance,
         "intelligenceConfidenceTier": final_tier,
+        "consumerExperience": consumer_experience,
         "pipelineSignals": pipe,
         "rankings": rankings,
     }
