@@ -52,6 +52,39 @@ TIMEFRAME = "1d"
 CHUNK_SIZE = 12        # symbols per yfinance batch request
 DEFAULT_LOOKBACK = 30   # days to fetch for symbols with no existing bars
 MIN_LOOKBACK = 2        # always fetch at least this many days back (catches today)
+_DEFAULT_DEEP_MIN_BARS = int(os.getenv("ALPHA_ADMITTED_DEEP_MIN_BARS", "130"))
+_DEFAULT_DEEP_LOOKBACK_DAYS = int(os.getenv("ALPHA_ADMITTED_DEEP_LOOKBACK_DAYS", "400"))
+
+
+def _thin_admitted_symbols(db_path: Path, *, tenant_id: str, min_bars: int) -> list[str]:
+    from app.db.repository import AlphaRepository
+
+    repo = AlphaRepository(db_path=str(db_path))
+    try:
+        admitted = repo.list_admitted_candidate_tickers(tenant_id)
+    finally:
+        repo.close()
+    if not admitted:
+        return []
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000;")
+    try:
+        thin: list[str] = []
+        for sym in admitted:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM price_bars
+                WHERE tenant_id = ? AND ticker = ? AND timeframe = ?
+                """,
+                (tenant_id, sym, TIMEFRAME),
+            ).fetchone()
+            n = int(row["n"]) if row else 0
+            if n < min_bars:
+                thin.append(str(sym).strip().upper())
+        return sorted(set(thin))
+    finally:
+        conn.close()
 
 
 def _get_symbols(
@@ -385,7 +418,46 @@ def main() -> int:
         default=COVERAGE_THRESHOLD_DEFAULT,
         help=f"Exit 1 if fewer than this fraction of universe symbols have fresh bars (default {COVERAGE_THRESHOLD_DEFAULT}). Pass 0 to disable.",
     )
+    p.add_argument(
+        "--deep-fill-admitted",
+        action="store_true",
+        help="Fetch ~deep-lookback-days for admitted symbols with fewer than --deep-min-bars daily bars",
+    )
+    p.add_argument("--deep-min-bars", type=int, default=_DEFAULT_DEEP_MIN_BARS)
+    p.add_argument("--deep-lookback-days", type=int, default=_DEFAULT_DEEP_LOOKBACK_DAYS)
     args = p.parse_args()
+
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(ROOT / ".env", override=False)
+    except ImportError:
+        pass
+
+    if args.deep_fill_admitted:
+        thin = _thin_admitted_symbols(
+            Path(args.db), tenant_id=args.tenant_id, min_bars=int(args.deep_min_bars)
+        )
+        print(
+            f"Deep-fill admitted: {len(thin)} symbols under {args.deep_min_bars} "
+            f"daily bars (lookback {args.deep_lookback_days} calendar days)"
+        )
+        if args.dry_run:
+            print(thin)
+            return 0
+        if not thin:
+            print("Nothing to deep-fill.")
+            return 0
+        result = run_download(
+            db_path=Path(args.db),
+            tenant_id=args.tenant_id,
+            symbols=thin,
+            force_days=int(args.deep_lookback_days),
+            dry_run=False,
+            include_feature_snapshot=False,
+        )
+        print(result)
+        return 0
 
     syms = [s.strip().upper() for s in args.symbols.split(",")] if args.symbols else None
 

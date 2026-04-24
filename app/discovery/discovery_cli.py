@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from app.core.active_universe import get_active_universe_tickers
 from app.core.target_stocks import get_target_stocks
 from app.db.repository import AlphaRepository
 from app.discovery.fundamentals_fmp import fetch_fmp_fundamentals_batch
@@ -16,6 +17,15 @@ from app.discovery.promotion import select_high_conviction, watchlist_to_queue_r
 from app.discovery.runner import format_summary_json, run_discovery
 from app.discovery.stats import compute_discovery_stats, stats_to_repo_rows
 from app.discovery.admission import fetch_admission_metrics_recent, run_diversity_admission
+
+
+def _load_repo_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    root = Path(__file__).resolve().parents[2]
+    load_dotenv(root / ".env", override=False)
 
 
 def _parse_date(s: str) -> date:
@@ -112,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  python -m app.discovery.discovery_cli sync-fundamentals --symbols AAPL,MSFT\n"
             "  python -m app.discovery.discovery_cli sync-fundamentals --use-target-universe\n"
+            "  python -m app.discovery.discovery_cli sync-fundamentals --use-active-universe --db data/alpha.db\n"
             "  python -m app.discovery.discovery_cli run --date 2026-04-12 --top 50 --min-adv 2000000\n"
             "  python -m app.discovery.discovery_cli admit-candidates --max-admitted 20\n"
             "  python -m app.discovery.discovery_cli admission-metrics --limit 14\n"
@@ -120,11 +131,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sf = sub.add_parser("sync-fundamentals", help="Fetch minimal fundamentals from FMP and upsert fundamentals_snapshot")
-    sf.add_argument("--symbols", default=None, help="Comma-separated tickers (required unless --use-target-universe)")
+    sf.add_argument("--symbols", default=None, help="Comma-separated tickers (unless --use-*-universe)")
     sf.add_argument(
         "--use-target-universe",
         action="store_true",
         help="Use enabled symbols from config/target_stocks.yaml (as of today)",
+    )
+    sf.add_argument(
+        "--use-active-universe",
+        action="store_true",
+        help="YAML target stocks plus admitted candidate_queue symbols (recommended for daily)",
     )
     sf.add_argument("--db", default="data/alpha.db")
     sf.add_argument("--tenant-id", default="default")
@@ -298,6 +314,7 @@ def _get_latest_snapshot(conn: sqlite3.Connection, *, tenant_id: str, ticker: st
 
 
 def main(argv: list[str] | None = None) -> int:
+    _load_repo_dotenv()
     args = build_parser().parse_args(argv)
 
     def _run_with_job(job_type: str, fn) -> int:
@@ -331,15 +348,31 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     if args.command == "sync-fundamentals":
-        if bool(args.use_target_universe) and args.symbols:
-            print(json.dumps({"error": "Use either --symbols or --use-target-universe, not both"}, indent=2))
+        uni_modes = int(bool(args.use_target_universe)) + int(bool(args.use_active_universe))
+        has_explicit_symbols = bool(str(args.symbols or "").strip())
+        if uni_modes > 1:
+            print(json.dumps({"error": "Choose at most one of --use-target-universe, --use-active-universe"}, indent=2))
             return 2
-        if args.use_target_universe:
+        if uni_modes == 1 and has_explicit_symbols:
+            print(json.dumps({"error": "Do not combine --symbols with --use-*-universe"}, indent=2))
+            return 2
+        if args.use_active_universe:
+            conn = sqlite3.connect(str(Path(args.db)))
+            try:
+                symbols = get_active_universe_tickers(tenant_id=str(args.tenant_id), sqlite_conn=conn)
+            finally:
+                conn.close()
+        elif args.use_target_universe:
             symbols = get_target_stocks(asof=date.today())
         else:
             symbols = [s.strip().upper() for s in str(args.symbols or "").split(",") if s.strip()]
         if not symbols:
-            print(json.dumps({"error": "Provide --symbols SYM1,SYM2 or --use-target-universe"}, indent=2))
+            print(
+                json.dumps(
+                    {"error": "Provide --symbols, --use-target-universe, or --use-active-universe"},
+                    indent=2,
+                )
+            )
             return 2
         snapshots = fetch_fmp_fundamentals_batch(symbols, api_key=args.api_key)
 

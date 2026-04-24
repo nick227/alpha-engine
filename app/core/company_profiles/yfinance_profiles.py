@@ -22,6 +22,7 @@ PROFILE_FIELDS = (
     "grossMargins",
     "operatingMargins",
     "profitMargins",
+    "ipoDate",
 )
 
 
@@ -36,12 +37,13 @@ async def ensure_yfinance_company_profiles(
     out_dir: str | Path = Path("data") / "company_profiles",
     cache_handle: dict[str, Any] | None = None,
     concurrency: int = 4,
+    refetch_if_missing_keys: tuple[str, ...] = ("ipoDate",),
 ) -> None:
     """
     Best-effort profile fetch for tickers using yfinance.
 
     - Writes `data/company_profiles/{ticker}.json`
-    - If file exists, skips
+    - Skips existing files unless `refetch_if_missing_keys` lists fields absent from JSON
     - If `cache_handle` is provided, avoids reattempting within the same run
     """
     normalized = []
@@ -65,11 +67,23 @@ async def ensure_yfinance_company_profiles(
     def profile_file(ticker: str) -> Path:
         return out_path / f"{_safe_filename(ticker)}.json"
 
+    def _needs_refetch(path: Path) -> bool:
+        if not path.exists():
+            return True
+        if not refetch_if_missing_keys:
+            return False
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return True
+        return any(payload.get(k) in (None, "") for k in refetch_if_missing_keys)
+
     to_fetch: list[str] = []
     for t in normalized:
         if attempted is not None and t in attempted:
             continue
-        if profile_file(t).exists():
+        pf = profile_file(t)
+        if pf.exists() and not _needs_refetch(pf):
             if attempted is not None:
                 attempted.add(t)
             continue

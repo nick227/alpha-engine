@@ -65,19 +65,28 @@ if %ERRORLEVEL% neq 0 (
 echo [%DATE% %TIME%] STEP 1 END: Download complete >> %LOG%
 
 :: ----------------------------------------------------------------
-:: STEP 1b — FMP fundamentals snapshot (target universe; optional if FMP_API_KEY unset)
+:: STEP 1b — FMP fundamentals_snapshot (YAML ∪ admitted; discovery_cli loads repo .env)
 :: ----------------------------------------------------------------
 echo [%DATE% %TIME%] STEP 1b START: sync-fundamentals >> %LOG%
-if defined FMP_API_KEY (
-    %PYTHON% -m app.discovery.discovery_cli sync-fundamentals --db "%DB_FILE%" --tenant-id default --use-target-universe >> %LOG% 2>&1
-    if errorlevel 1 (
-        echo [%DATE% %TIME%] STEP 1b WARNING: sync-fundamentals failed ^(pipeline continues^) >> %LOG%
-    ) else (
-        echo [%DATE% %TIME%] STEP 1b END: fundamentals_snapshot updated >> %LOG%
-    )
-) else (
-    echo [%DATE% %TIME%] STEP 1b SKIP: FMP_API_KEY not set >> %LOG%
+%PYTHON% -m app.discovery.discovery_cli sync-fundamentals --db "%DB_FILE%" --tenant-id default --use-active-universe >> %LOG% 2>&1
+if errorlevel 1 (
+    set FAILED_STEP=1b_sync_fundamentals
+    echo [%DATE% %TIME%] STEP 1b FAILED >> %LOG%
+    goto :abort
 )
+echo [%DATE% %TIME%] STEP 1b END: fundamentals_snapshot updated >> %LOG%
+
+:: ----------------------------------------------------------------
+:: STEP 1c — Company profile JSON (yfinance ipoDate + PROFILE_FIELDS; catches missing keys)
+:: ----------------------------------------------------------------
+echo [%DATE% %TIME%] STEP 1c START: company_profiles sync >> %LOG%
+%PYTHON% dev_scripts\scripts\sync_company_profiles_daily.py --db "%DB_FILE%" --tenant-id default >> %LOG% 2>&1
+if errorlevel 1 (
+    set FAILED_STEP=1c_company_profiles
+    echo [%DATE% %TIME%] STEP 1c FAILED >> %LOG%
+    goto :abort
+)
+echo [%DATE% %TIME%] STEP 1c END: company_profiles pass complete >> %LOG%
 
 :: ----------------------------------------------------------------
 :: STEP 2 — Discovery CLI nightly: candidates, watchlist, queue, outcomes, stats + threshold supplement
@@ -90,6 +99,18 @@ if %ERRORLEVEL% neq 0 (
     goto :abort
 )
 echo [%DATE% %TIME%] STEP 2 END: Discovery nightly complete >> %LOG%
+
+:: ----------------------------------------------------------------
+:: STEP 2b — Deep price history for admitted symbols with sparse bars (new admits)
+:: ----------------------------------------------------------------
+echo [%DATE% %TIME%] STEP 2b START: deep-fill admitted prices >> %LOG%
+%PYTHON% dev_scripts\scripts\download_prices_daily.py --db "%DB_FILE%" --tenant-id default --deep-fill-admitted >> %LOG% 2>&1
+if errorlevel 1 (
+    set FAILED_STEP=2b_deep_fill_admitted
+    echo [%DATE% %TIME%] STEP 2b FAILED >> %LOG%
+    goto :abort
+)
+echo [%DATE% %TIME%] STEP 2b END: Deep-fill complete >> %LOG%
 
 :: ----------------------------------------------------------------
 :: STEP 3 — Global rank score + trim pending queue (competition across strategies)

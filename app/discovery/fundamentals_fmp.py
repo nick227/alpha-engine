@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -85,13 +86,22 @@ def fetch_fmp_fundamentals(symbol: str, *, api_key: str) -> FundamentalsSnapshot
 
 
 def fetch_fmp_fundamentals_batch(
-    symbols: list[str], *, api_key: str | None = None
+    symbols: list[str],
+    *,
+    api_key: str | None = None,
+    max_workers: int | None = None,
 ) -> list[FundamentalsSnapshot]:
     key = str(api_key or _env("FMP_API_KEY"))
     if not key:
         raise RuntimeError("FMP_API_KEY is required to fetch fundamentals")
-    out: list[FundamentalsSnapshot] = []
-    for s in symbols:
-        out.append(fetch_fmp_fundamentals(s, api_key=key))
-    return out
+    raw = _env("FMP_FETCH_CONCURRENCY", "6")
+    try:
+        n = int(raw) if max_workers is None else int(max_workers)
+    except ValueError:
+        n = 6
+    workers = max(1, min(n, 32))
+    if len(symbols) <= 1:
+        return [fetch_fmp_fundamentals(symbols[0], api_key=key)] if symbols else []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(lambda s: fetch_fmp_fundamentals(s, api_key=key), symbols))
 
