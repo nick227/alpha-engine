@@ -60,7 +60,6 @@ def _latest_price_bar_date(*, db_path: str, tenant_id: str, timeframe: str) -> s
             conn.close()
     except Exception:
         return None
-    return None
 
 
 def _latest_coherent_trading_day(

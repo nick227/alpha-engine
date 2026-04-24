@@ -28,7 +28,7 @@ from typing import Any, Iterator
 import numpy as np
 import pandas as pd
 
-from app.core.event_ticker_aliases import EVENT_STOCK_ALIASES, canonical_event_ticker
+from app.core.event_ticker_aliases import EVENT_STOCK_ALIASES
 from app.ingest.adapters.dump_adapter import DumpAdapter
 
 

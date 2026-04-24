@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional

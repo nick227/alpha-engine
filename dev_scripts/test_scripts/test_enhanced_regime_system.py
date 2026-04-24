@@ -7,7 +7,6 @@ Demonstrates: model performance tracking + sector-specific models + meaningful e
 from __future__ import annotations
 
 from app.ml.regime_model_loader import get_model, get_available_models
-from app.ml.regime_aware_predict import predict_regime_aware_ml
 from app.ml.model_performance_tracker import get_performance_tracker, store_prediction_outcome
 from app.core.environment import build_env_snapshot_v3
 from app.core.environment_v3 import bucket_env_v3

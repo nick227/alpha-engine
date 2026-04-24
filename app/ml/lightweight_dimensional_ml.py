@@ -11,8 +11,8 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from app.ml.dimensional_tagger import (
-    get_dimensional_tagger, tag_and_store_prediction, update_prediction_result,
-    should_activate_for_conditions, get_best_performing_axes, get_activation_rules
+    get_dimensional_tagger, tag_and_store_prediction,
+    get_best_performing_axes, get_activation_rules
 )
 from app.core.environment import build_env_snapshot_v3
 from app.ml.feature_builder import FeatureBuilder

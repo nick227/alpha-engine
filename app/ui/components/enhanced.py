@@ -6,7 +6,7 @@ Sophisticated components using the enhanced theme system
 import streamlit as st
 import plotly.graph_objects as go
 from typing import Any, Optional, Dict, List
-from app.ui.theme import COLORS, TYPOGRAPHY, SPACING, LAYOUT, COMPONENTS, get_color_for_direction
+from app.ui.theme import COLORS, TYPOGRAPHY, SPACING, LAYOUT, get_color_for_direction
 
 
 def elevated_card(title: str = None, content: str = None, footer: str = None, 

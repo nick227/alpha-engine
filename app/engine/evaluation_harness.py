@@ -14,7 +14,7 @@ class EvaluationHarness:
         # Allow passing an existing learner or instantiate a fresh offline learner for pure evaluation
         self.learner = continuous_learner or ContinuousLearner()
 
-    def run_slice(self, strategies: List[StrategyGenome], events_batch: list = None) -> Dict[str, StrategyPerformance]:
+    def run_slice(self, strategies: List[StrategyGenome], _events_batch: list = None) -> Dict[str, StrategyPerformance]:
         """
         Executes a historical slice for the provided strategies.
         (Placeholder logic replacing a real backtest loop)

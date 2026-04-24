@@ -150,7 +150,7 @@ class BudgetGuard:
     current_days: int = 0
     current_tickers: int = 0
     
-    def check_budget(self, operation: str) -> bool:
+    def check_budget(self, _operation: str) -> bool:
         """
         Check if operation can proceed within budget.
         Returns True if allowed, False if exceeded.
