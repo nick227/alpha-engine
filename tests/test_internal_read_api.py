@@ -43,6 +43,19 @@ def test_health_ok(alpha_db_memory: None, monkeypatch: pytest.MonkeyPatch) -> No
     assert body["db_path"] == ":memory:"
 
 
+def test_data_health_endpoint(alpha_db_memory: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _client(monkeypatch, insecure=True, key=None) as client:
+        res = client.get("/api/system/data-health")
+    assert res.status_code == 200
+    j = res.json()
+    assert j["tenant_id"] == "default"
+    assert j["overall"] in ("OK", "WARN", "FAIL")
+    assert "summary" in j
+    for key in ("prices", "fundamentals", "profiles", "predictions"):
+        assert j[key]["status"] in ("OK", "WARN", "FAIL")
+    assert "last_run" in j
+
+
 def test_protected_without_key_returns_503(alpha_db_memory: None, monkeypatch: pytest.MonkeyPatch) -> None:
     with _client(monkeypatch, insecure=False, key=None) as client:
         res = client.get("/ranking/top")

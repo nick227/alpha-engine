@@ -91,6 +91,7 @@ There are two families of endpoints:
 - `GET /api/ticker/{symbol}/attribution`
 - `GET /api/ticker/{symbol}/accuracy`
 - `GET /api/system/heartbeat`
+- `GET /api/system/data-health`
 - `GET /api/predictions/runs/latest`
 
 Plus top-level:
@@ -251,6 +252,14 @@ Plus top-level:
 - Refresh behavior: loop-driven, often frequent if runtime is enabled
 - Depth: shallow-medium (operational liveness)
 
+### `/api/system/data-health`
+
+- Source: SQLite active universe + `fundamentals_snapshot` + on-disk `company_profiles` + `predictions`, plus `reports/pipeline-last-status.txt` when present
+- Focus: one JSON object with `overall`, per-layer `status` (`OK` / `WARN` / `FAIL`), `summary` line, and `last_run` (from pipeline sentinel)
+- Why it matters: fastest “is the warehouse alive” check for ops dashboards
+- Refresh behavior: read-only, always current DB state
+- Depth: shallow (thresholds align with `fresh_bar_coverage` SLA and simple coverage ratios)
+
 ### `/api/predictions/runs/latest`
 
 - Source: `prediction_runs`
@@ -319,7 +328,7 @@ This split is intentional: keep core reads fast/simple while preserving depth in
 
 For a symbol-level investigation:
 
-1. check `/api/system/heartbeat`
+1. check `/api/system/data-health` (warehouse + last pipeline line) or `/api/system/heartbeat`
 2. check `/api/predictions/runs/latest`
 3. get market context via `/api/stats/{ticker}` and `/api/regime/{ticker}`
 4. inspect overlap via `/api/consensus/signals?ticker=...`

@@ -31,6 +31,7 @@ from app.internal_read_v1.recommendations import (
     parse_mode,
 )
 from app.internal_read_v1.regime_read import build_regime_payload
+from app.internal_read_v1.data_health_read import build_data_health_compact
 from app.internal_read_v1.intelligence_read import (
     get_consensus_signals,
     get_prediction_run_latest,
@@ -200,6 +201,12 @@ def api_ticker_accuracy(request: Request, symbol: str, tenant_id: str = "default
 def api_system_heartbeat(request: Request, tenant_id: str = "default", limit: int = 200) -> dict[str, Any]:
     n = max(1, min(1000, limit))
     return get_system_heartbeat(_svc(request).store.conn, tenant_id=tenant_id, limit=n)
+
+
+@router.get("/system/data-health")
+def api_system_data_health(request: Request, tenant_id: str = "default") -> dict[str, Any]:
+    """Single-glance warehouse + pipeline sentinel (for ops cards)."""
+    return build_data_health_compact(_svc(request).store.conn, tenant_id=tenant_id)
 
 
 @router.get("/predictions/runs/latest")
