@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -307,10 +308,20 @@ class EngineReadStore:
 
     def __init__(self, db_path: str | Path = "data/alpha.db") -> None:
         self.db_path = str(db_path)
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
+        self._local = threading.local()
+        self._local.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._local.conn.row_factory = sqlite3.Row
         self._consensus_has_horizon = False
         self._ensure_read_model_contract()
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(self.db_path, check_same_thread=False)
+            c.row_factory = sqlite3.Row
+            self._local.conn = c
+        return c
 
     def _ensure_read_model_contract(self) -> None:
         """
@@ -685,7 +696,10 @@ class EngineReadStore:
 
     def close(self) -> None:
         try:
-            self.conn.close()
+            c = getattr(self._local, "conn", None)
+            if c is not None:
+                c.close()
+                self._local.conn = None
         except Exception:
             pass
 

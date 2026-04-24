@@ -22,6 +22,16 @@ def _loads_list(raw: str | None) -> list[Any]:
         return []
 
 
+def _loads_obj(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
 def _parse_iso_dt(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -115,6 +125,81 @@ def get_strategy_stability(conn: sqlite3.Connection, *, tenant_id: str, strategy
         "liveAccuracy": float(row["live_accuracy"]),
         "stabilityScore": float(row["stability_score"]),
         "updatedAt": str(row["updated_at"]),
+    }
+
+
+def get_strategy_performance(conn: sqlite3.Connection, *, tenant_id: str, strategy_id: str) -> dict[str, Any] | None:
+    profile = conn.execute(
+        """
+        SELECT id, name, version, strategy_type, mode, track, status, active, is_champion,
+               backtest_score, forward_score, live_score, stability_score, sample_size,
+               created_at, activated_at, deactivated_at
+        FROM strategies
+        WHERE tenant_id = ? AND id = ?
+        LIMIT 1
+        """,
+        (tenant_id, strategy_id),
+    ).fetchone()
+    if not profile:
+        return None
+
+    stability = get_strategy_stability(conn, tenant_id=tenant_id, strategy_id=strategy_id)
+    perf_rows: list[sqlite3.Row] = []
+    try:
+        perf_rows = conn.execute(
+            """
+            SELECT horizon, accuracy, avg_return, updated_at
+            FROM strategy_performance
+            WHERE tenant_id = ? AND strategy_id = ?
+            ORDER BY
+              CASE WHEN horizon = 'ALL' THEN 0 ELSE 1 END,
+              updated_at DESC,
+              horizon ASC
+            """,
+            (tenant_id, strategy_id),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        perf_rows = []
+
+    by_horizon = [
+        {
+            "horizon": str(r["horizon"]),
+            "accuracy": float(r["accuracy"]),
+            "avgReturn": float(r["avg_return"]),
+            "updatedAt": str(r["updated_at"]) if r["updated_at"] is not None else None,
+        }
+        for r in perf_rows
+    ]
+    latest = by_horizon[0] if by_horizon else None
+
+    return {
+        "tenant_id": tenant_id,
+        "strategyId": str(profile["id"]),
+        "name": str(profile["name"]),
+        "version": str(profile["version"]),
+        "strategyType": str(profile["strategy_type"]),
+        "mode": str(profile["mode"]),
+        "track": str(profile["track"]),
+        "status": str(profile["status"]),
+        "active": bool(profile["active"]),
+        "isChampion": bool(profile["is_champion"]),
+        "scorecard": {
+            "backtestScore": float(profile["backtest_score"]),
+            "forwardScore": float(profile["forward_score"]),
+            "liveScore": float(profile["live_score"]),
+            "stabilityScore": float(profile["stability_score"]),
+            "sampleSize": int(profile["sample_size"]),
+        },
+        "stability": stability,
+        "performance": {
+            "latest": latest,
+            "byHorizon": by_horizon,
+        },
+        "lifecycle": {
+            "createdAt": str(profile["created_at"]),
+            "activatedAt": str(profile["activated_at"]) if profile["activated_at"] is not None else None,
+            "deactivatedAt": str(profile["deactivated_at"]) if profile["deactivated_at"] is not None else None,
+        },
     }
 
 
@@ -457,4 +542,147 @@ def get_prediction_run_latest(conn: sqlite3.Connection, *, tenant_id: str, timef
         "recommendationUniqueCount": int(rec_unique),
         "predictionBatchCoverageRatio": round(float(prediction_batch_coverage_ratio), 4),
         "coverageRatio": round(float(fresh_coverage_ratio), 4),
+    }
+
+
+def get_prediction_context(
+    conn: sqlite3.Connection, *, tenant_id: str, prediction_id: str
+) -> dict[str, Any] | None:
+    try:
+        row = conn.execute(
+            """
+            SELECT id, tenant_id, strategy_id, ticker, timestamp, prediction, confidence, horizon, mode,
+                   entry_price, rank_score, feature_snapshot_json, ranking_context_json
+            FROM predictions
+            WHERE tenant_id = ? AND id = ?
+            LIMIT 1
+            """,
+            (tenant_id, prediction_id),
+        ).fetchone()
+    except (sqlite3.OperationalError, sqlite3.InterfaceError):
+        return None
+    if not row:
+        return None
+
+    ranking_ctx = _loads_obj(str(row["ranking_context_json"]) if row["ranking_context_json"] is not None else None)
+    feature_ctx = _loads_obj(str(row["feature_snapshot_json"]) if row["feature_snapshot_json"] is not None else None)
+    return {
+        "predictionId": str(row["id"]),
+        "tenant_id": str(row["tenant_id"]),
+        "ticker": str(row["ticker"]),
+        "timestamp": str(row["timestamp"]),
+        "prediction": str(row["prediction"]),
+        "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
+        "horizon": str(row["horizon"]) if row["horizon"] is not None else None,
+        "mode": str(row["mode"]) if row["mode"] is not None else None,
+        "strategyId": str(row["strategy_id"]) if row["strategy_id"] is not None else None,
+        "entryPrice": float(row["entry_price"]) if row["entry_price"] is not None else None,
+        "rankScore": float(row["rank_score"]) if row["rank_score"] is not None else None,
+        "rankingContext": ranking_ctx,
+        "featureSnapshot": feature_ctx,
+    }
+
+
+def get_engine_calendar(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    month: str,
+    limit: int,
+) -> dict[str, Any]:
+    n = max(1, min(500, int(limit)))
+    events: list[dict[str, Any]] = []
+
+    pred_rows = conn.execute(
+        """
+        SELECT ticker, timestamp, prediction, confidence
+        FROM predictions
+        WHERE tenant_id = ? AND substr(timestamp, 1, 7) = ?
+        ORDER BY timestamp DESC
+        LIMIT 1000
+        """,
+        (tenant_id, month),
+    ).fetchall()
+    for r in pred_rows:
+        pred = str(r["prediction"] or "").strip().lower()
+        if pred in ("up", "long", "buy", "bullish", "1"):
+            direction = "bullish"
+        elif pred in ("down", "short", "sell", "bearish", "-1"):
+            direction = "bearish"
+        else:
+            direction = "neutral"
+        events.append(
+            {
+                "date": str(r["timestamp"])[:10],
+                "type": "prediction",
+                "symbol": str(r["ticker"]).strip().upper(),
+                "direction": direction,
+                "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+                "source": "predictions_runs_latest",
+            }
+        )
+
+    rank_rows = conn.execute(
+        """
+        SELECT ticker, timestamp, score, conviction
+        FROM ranking_snapshots
+        WHERE tenant_id = ? AND substr(timestamp, 1, 7) = ?
+        ORDER BY timestamp DESC
+        LIMIT 1000
+        """,
+        (tenant_id, month),
+    ).fetchall()
+    for r in rank_rows:
+        score = float(r["score"] or 0.0)
+        direction = "bullish" if score > 0 else ("bearish" if score < 0 else "neutral")
+        events.append(
+            {
+                "date": str(r["timestamp"])[:10],
+                "type": "ranking",
+                "symbol": str(r["ticker"]).strip().upper(),
+                "direction": direction,
+                "confidence": float(r["conviction"]) if r["conviction"] is not None else None,
+                "source": "rankings_top",
+            }
+        )
+
+    cons_rows = conn.execute(
+        """
+        SELECT ticker, created_at, p_final
+        FROM consensus_signals
+        WHERE tenant_id = ? AND substr(created_at, 1, 7) = ?
+        ORDER BY created_at DESC
+        LIMIT 1000
+        """,
+        (tenant_id, month),
+    ).fetchall()
+    for r in cons_rows:
+        p_final = float(r["p_final"] or 0.0)
+        direction = "bullish" if p_final > 0 else ("bearish" if p_final < 0 else "neutral")
+        events.append(
+            {
+                "date": str(r["created_at"])[:10],
+                "type": "consensus",
+                "symbol": str(r["ticker"]).strip().upper(),
+                "direction": direction,
+                "confidence": min(1.0, max(0.0, abs(p_final))),
+                "source": "consensus_signals",
+            }
+        )
+
+    events.sort(key=lambda e: (str(e["date"]), str(e["type"]), str(e["symbol"])), reverse=True)
+    trimmed = events[:n]
+    by_type = {"prediction": 0, "ranking": 0, "consensus": 0}
+    for e in trimmed:
+        et = str(e["type"])
+        if et in by_type:
+            by_type[et] += 1
+    return {
+        "tenant_id": tenant_id,
+        "month": month,
+        "minimumExpected": 10,
+        "eventCount": len(trimmed),
+        "meetsMinimum": len(trimmed) >= 10,
+        "countsByType": by_type,
+        "events": trimmed,
     }
