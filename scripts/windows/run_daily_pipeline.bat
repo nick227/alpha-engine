@@ -65,6 +65,21 @@ if %ERRORLEVEL% neq 0 (
 echo [%DATE% %TIME%] STEP 1 END: Download complete >> %LOG%
 
 :: ----------------------------------------------------------------
+:: STEP 1b — FMP fundamentals snapshot (target universe; optional if FMP_API_KEY unset)
+:: ----------------------------------------------------------------
+echo [%DATE% %TIME%] STEP 1b START: sync-fundamentals >> %LOG%
+if defined FMP_API_KEY (
+    %PYTHON% -m app.discovery.discovery_cli sync-fundamentals --db "%DB_FILE%" --tenant-id default --use-target-universe >> %LOG% 2>&1
+    if errorlevel 1 (
+        echo [%DATE% %TIME%] STEP 1b WARNING: sync-fundamentals failed ^(pipeline continues^) >> %LOG%
+    ) else (
+        echo [%DATE% %TIME%] STEP 1b END: fundamentals_snapshot updated >> %LOG%
+    )
+) else (
+    echo [%DATE% %TIME%] STEP 1b SKIP: FMP_API_KEY not set >> %LOG%
+)
+
+:: ----------------------------------------------------------------
 :: STEP 2 — Discovery CLI nightly: candidates, watchlist, queue, outcomes, stats + threshold supplement
 :: ----------------------------------------------------------------
 echo [%DATE% %TIME%] STEP 2 START: discovery_cli nightly >> %LOG%

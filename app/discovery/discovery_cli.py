@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from app.core.target_stocks import get_target_stocks
 from app.db.repository import AlphaRepository
 from app.discovery.fundamentals_fmp import fetch_fmp_fundamentals_batch
 from app.discovery.outcomes import compute_candidate_outcomes, compute_watchlist_outcomes, outcomes_to_repo_rows
@@ -110,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  python -m app.discovery.discovery_cli sync-fundamentals --symbols AAPL,MSFT\n"
+            "  python -m app.discovery.discovery_cli sync-fundamentals --use-target-universe\n"
             "  python -m app.discovery.discovery_cli run --date 2026-04-12 --top 50 --min-adv 2000000\n"
             "  python -m app.discovery.discovery_cli admit-candidates --max-admitted 20\n"
             "  python -m app.discovery.discovery_cli admission-metrics --limit 14\n"
@@ -118,7 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sf = sub.add_parser("sync-fundamentals", help="Fetch minimal fundamentals from FMP and upsert fundamentals_snapshot")
-    sf.add_argument("--symbols", required=True, help="Comma-separated tickers")
+    sf.add_argument("--symbols", default=None, help="Comma-separated tickers (required unless --use-target-universe)")
+    sf.add_argument(
+        "--use-target-universe",
+        action="store_true",
+        help="Use enabled symbols from config/target_stocks.yaml (as of today)",
+    )
     sf.add_argument("--db", default="data/alpha.db")
     sf.add_argument("--tenant-id", default="default")
     sf.add_argument("--api-key", default=None, help="FMP API key (default: env FMP_API_KEY)")
@@ -324,7 +331,16 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     if args.command == "sync-fundamentals":
-        symbols = [s.strip().upper() for s in str(args.symbols).split(",") if s.strip()]
+        if bool(args.use_target_universe) and args.symbols:
+            print(json.dumps({"error": "Use either --symbols or --use-target-universe, not both"}, indent=2))
+            return 2
+        if args.use_target_universe:
+            symbols = get_target_stocks(asof=date.today())
+        else:
+            symbols = [s.strip().upper() for s in str(args.symbols or "").split(",") if s.strip()]
+        if not symbols:
+            print(json.dumps({"error": "Provide --symbols SYM1,SYM2 or --use-target-universe"}, indent=2))
+            return 2
         snapshots = fetch_fmp_fundamentals_batch(symbols, api_key=args.api_key)
 
         repo = AlphaRepository(db_path=str(args.db))
