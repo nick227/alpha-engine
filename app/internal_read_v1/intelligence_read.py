@@ -589,13 +589,16 @@ def get_engine_calendar(
     tenant_id: str,
     month: str,
     limit: int,
+    distribution: str = "actual",
+    min_days: int = 12,
 ) -> dict[str, Any]:
     n = max(1, min(500, int(limit)))
+    target_days = max(1, min(31, int(min_days)))
     events: list[dict[str, Any]] = []
 
     pred_rows = conn.execute(
         """
-        SELECT ticker, timestamp, prediction, confidence
+        SELECT id, ticker, timestamp, prediction, confidence
         FROM predictions
         WHERE tenant_id = ? AND substr(timestamp, 1, 7) = ?
         ORDER BY timestamp DESC
@@ -606,43 +609,57 @@ def get_engine_calendar(
     for r in pred_rows:
         pred = str(r["prediction"] or "").strip().lower()
         if pred in ("up", "long", "buy", "bullish", "1"):
-            direction = "bullish"
+            direction = "BUY"
         elif pred in ("down", "short", "sell", "bearish", "-1"):
-            direction = "bearish"
+            direction = "SELL"
         else:
-            direction = "neutral"
+            direction = "HOLD"
         events.append(
             {
                 "date": str(r["timestamp"])[:10],
                 "type": "prediction",
                 "symbol": str(r["ticker"]).strip().upper(),
+                "predictionId": str(r["id"]) if r["id"] is not None else None,
                 "direction": direction,
                 "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
                 "source": "predictions_runs_latest",
+                "datePolicy": "actual",
             }
         )
 
     rank_rows = conn.execute(
         """
-        SELECT ticker, timestamp, score, conviction
-        FROM ranking_snapshots
-        WHERE tenant_id = ? AND substr(timestamp, 1, 7) = ?
-        ORDER BY timestamp DESC
+        SELECT rs.ticker, rs.timestamp, rs.score, rs.conviction,
+               (
+                 SELECT p.id
+                 FROM predictions p
+                 WHERE p.tenant_id = rs.tenant_id
+                   AND UPPER(TRIM(p.ticker)) = UPPER(TRIM(rs.ticker))
+                   AND p.rank_score IS NOT NULL
+                   AND p.timestamp <= rs.timestamp
+                 ORDER BY p.timestamp DESC
+                 LIMIT 1
+               ) AS prediction_id
+        FROM ranking_snapshots rs
+        WHERE rs.tenant_id = ? AND substr(rs.timestamp, 1, 7) = ?
+        ORDER BY rs.timestamp DESC
         LIMIT 1000
         """,
         (tenant_id, month),
     ).fetchall()
     for r in rank_rows:
         score = float(r["score"] or 0.0)
-        direction = "bullish" if score > 0 else ("bearish" if score < 0 else "neutral")
+        direction = "BUY" if score > 0 else ("SELL" if score < 0 else "HOLD")
         events.append(
             {
                 "date": str(r["timestamp"])[:10],
                 "type": "ranking",
                 "symbol": str(r["ticker"]).strip().upper(),
+                "predictionId": str(r["prediction_id"]) if r["prediction_id"] is not None else None,
                 "direction": direction,
                 "confidence": float(r["conviction"]) if r["conviction"] is not None else None,
                 "source": "rankings_top",
+                "datePolicy": "actual",
             }
         )
 
@@ -658,7 +675,7 @@ def get_engine_calendar(
     ).fetchall()
     for r in cons_rows:
         p_final = float(r["p_final"] or 0.0)
-        direction = "bullish" if p_final > 0 else ("bearish" if p_final < 0 else "neutral")
+        direction = "BUY" if p_final > 0 else ("SELL" if p_final < 0 else "HOLD")
         events.append(
             {
                 "date": str(r["created_at"])[:10],
@@ -667,19 +684,44 @@ def get_engine_calendar(
                 "direction": direction,
                 "confidence": min(1.0, max(0.0, abs(p_final))),
                 "source": "consensus_signals",
+                "datePolicy": "actual",
             }
         )
 
     events.sort(key=lambda e: (str(e["date"]), str(e["type"]), str(e["symbol"])), reverse=True)
     trimmed = events[:n]
+    if distribution == "uniform" and trimmed:
+        month_start = f"{month}-01"
+        try:
+            start_dt = datetime.fromisoformat(month_start)
+            if start_dt.month == 12:
+                next_dt = start_dt.replace(year=start_dt.year + 1, month=1, day=1)
+            else:
+                next_dt = start_dt.replace(month=start_dt.month + 1, day=1)
+            day_count = max(1, (next_dt - start_dt).days)
+        except ValueError:
+            day_count = 30
+        spread_days = min(day_count, max(1, target_days), len(trimmed))
+        day_slots = [f"{month}-{str(i + 1).zfill(2)}" for i in range(spread_days)]
+        for idx, event in enumerate(trimmed):
+            observed = str(event.get("date") or "")
+            event["observedDate"] = observed
+            event["date"] = day_slots[idx % spread_days]
+            event["datePolicy"] = "uniform"
+
     by_type = {"prediction": 0, "ranking": 0, "consensus": 0}
     for e in trimmed:
         et = str(e["type"])
         if et in by_type:
             by_type[et] += 1
+    distinct_days = len({str(e.get("date")) for e in trimmed if e.get("date")})
     return {
         "tenant_id": tenant_id,
         "month": month,
+        "distribution": distribution,
+        "minimumDaysTarget": target_days,
+        "distinctDays": distinct_days,
+        "meetsDayTarget": distinct_days >= target_days,
         "minimumExpected": 10,
         "eventCount": len(trimmed),
         "meetsMinimum": len(trimmed) >= 10,

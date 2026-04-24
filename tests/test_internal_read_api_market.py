@@ -330,3 +330,33 @@ def test_api_recommendations_under_price_skips_null_latest_close(market_client: 
     out = build_quote_payload(conn, tenant_id="default", ticker="CHEAP")
     assert out is not None
     assert out["price"] == 1.7
+
+
+def test_ranking_top_peer_count_uses_full_latest_snapshot(market_client: TestClient) -> None:
+    res = market_client.get("/ranking/top", params={"limit": 1})
+    assert res.status_code == 200
+    body = res.json()
+    rows = body["rankings"]
+    assert len(rows) == 1
+    assert rows[0]["peerCount"] == 2
+
+
+def test_ranking_top_invalidator_signature_varies_by_ticker(market_client: TestClient) -> None:
+    res = market_client.get("/ranking/top", params={"limit": 2})
+    assert res.status_code == 200
+    body = res.json()
+    rows = body["rankings"]
+    assert len(rows) == 2
+    first_invalidators = [str(r["rankContext"]["invalidators"][0]) for r in rows]
+    assert len(set(first_invalidators)) == len(first_invalidators)
+
+
+def test_ranking_top_includes_daily_change_pct_per_ticker(market_client: TestClient) -> None:
+    res = market_client.get("/ranking/top", params={"limit": 2})
+    assert res.status_code == 200
+    rows = res.json()["rankings"]
+    by_ticker = {str(r["ticker"]): r for r in rows}
+    assert by_ticker["TST"]["dailyChangePct"] == pytest.approx(10.0, abs=0.0001)
+    assert by_ticker["CHEAP"]["dailyChangePct"] == pytest.approx(21.4286, abs=0.0001)
+
+

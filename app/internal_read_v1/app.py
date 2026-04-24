@@ -154,6 +154,66 @@ def _load_previous_snapshot_state(
     return score_map, rank_map
 
 
+def _latest_snapshot_peer_count(
+    conn: Any,
+    *,
+    tenant_id: str,
+    current_ts: str | None,
+) -> int:
+    if not current_ts:
+        return 0
+    row = conn.execute(
+        """
+        SELECT COUNT(1) AS n
+        FROM ranking_snapshots
+        WHERE tenant_id = ? AND timestamp = ?
+        """,
+        (tenant_id, current_ts),
+    ).fetchone()
+    return int(row["n"] or 0) if row else 0
+
+
+def _load_daily_change_pct_map(
+    conn: Any,
+    *,
+    tenant_id: str,
+    tickers: list[str],
+    as_of_ts: str | None,
+) -> dict[str, float | None]:
+    keys = sorted({str(t).strip().upper() for t in tickers if str(t).strip()})
+    if not keys:
+        return {}
+    placeholders = ",".join("?" for _ in keys)
+    as_of_key = str(as_of_ts) if as_of_ts else "9999-12-31T23:59:59+00:00"
+    rows = conn.execute(
+        f"""
+        SELECT UPPER(TRIM(ticker)) AS ticker, timestamp, close
+        FROM price_bars
+        WHERE tenant_id = ?
+          AND timeframe = '1d'
+          AND close IS NOT NULL
+          AND UPPER(TRIM(ticker)) IN ({placeholders})
+          AND timestamp <= ?
+        ORDER BY UPPER(TRIM(ticker)) ASC, timestamp DESC
+        """,
+        (tenant_id, *keys, as_of_key),
+    ).fetchall()
+    closes: dict[str, list[float]] = {k: [] for k in keys}
+    for row in rows:
+        ticker = str(row["ticker"]).strip().upper()
+        buf = closes.get(ticker)
+        if buf is None or len(buf) >= 2:
+            continue
+        buf.append(float(row["close"]))
+    out: dict[str, float | None] = {}
+    for ticker, vals in closes.items():
+        if len(vals) < 2 or vals[1] == 0.0:
+            out[ticker] = None
+            continue
+        out[ticker] = round(((vals[0] / vals[1]) - 1.0) * 100.0, 4)
+    return out
+
+
 def _ranking_factors(
     *,
     ticker: str,
@@ -601,8 +661,9 @@ def _rank_context_for_ticker(
             timing.append(f"Score decreased by {score_delta:+.2f} snapshot-over-snapshot")
         else:
             timing.append("Score is stable snapshot-over-snapshot")
+    rank_cutoff = min(current_peer_count, max(rank + 5, min(15, current_peer_count)))
     invalidators = [
-        f"Rank falls below {min(current_peer_count, max(15, rank + 5))}",
+        f"Current #{rank} rank falls below top {rank_cutoff}",
         f"Fragility exceeds {max(0.5, round(fragility + 0.15, 2)):.2f}",
         f"Edge score drops below {max(0.35, round(edge_score - 0.15, 2)):.2f}",
     ]
@@ -771,7 +832,7 @@ def ranking_top(
     pre_tier = intelligence_confidence_tier(signals, rankings_suppressed=False)
     confidence_mult = LIMITED_EDGE_SCORE_MULTIPLIER if pre_tier == "limited" else 1.0
     rankings = []
-    peer_count = len(rows)
+    peer_count = _latest_snapshot_peer_count(conn, tenant_id=tenant_id, current_ts=current_ts)
     snapshot_windows = _load_recent_snapshot_rank_maps(conn, tenant_id=tenant_id, max_snapshots=5)
     pre_rankings: list[dict[str, Any]] = []
     for r in rows:
@@ -829,6 +890,12 @@ def ranking_top(
             for item in pre_rankings
         ]
     )
+    daily_change_pct_map = _load_daily_change_pct_map(
+        conn,
+        tenant_id=tenant_id,
+        tickers=[str(x.get("ticker", "")) for x in pre_rankings],
+        as_of_ts=current_ts,
+    )
     for item in pre_rankings:
         ticker_key = str(item["ticker"]).strip().upper()
         ctx = context_map.get(ticker_key, {"componentContext": [], "whyPrioritized": []})
@@ -837,6 +904,7 @@ def ranking_top(
             "components": ctx["componentContext"],
             "whyPrioritized": ctx["whyPrioritized"],
         }
+        daily_change_pct = daily_change_pct_map.get(ticker_key)
         rankings.append(
             {
                 **item["base"],
@@ -849,6 +917,7 @@ def ranking_top(
                 "fragilityScore": item["fragilityScore"],
                 "scoreBreakdown": (item["rankSubdrivers"] or {}).get("scoreBreakdown") or {},
                 "predictionId": (item["rankSubdrivers"] or {}).get("predictionId"),
+                "dailyChangePct": daily_change_pct,
                 "subDrivers": subdrivers,
                 "selectionRationale": {
                     "prioritizedBy": ctx["whyPrioritized"],

@@ -25,7 +25,17 @@
       "Read(//tmp/**)",
       "Bash(cmd:*)",
       "Bash(.venv/Scripts/python.exe *)",
-      "Bash(PYTHONPATH=. .venv/Scripts/python.exe *)"
+      "Bash(PYTHONPATH=. .venv/Scripts/python.exe *)",
+      "Bash($MYSQL *)",
+      "Bash(npx prisma *)",
+      "Bash(.venv/Scripts/python *)",
+      "Bash(curl *)",
+      "Bash(winget install *)",
+      "PowerShell(winget install *)",
+      "PowerShell(choco install *)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/Graphviz/bin\")",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }

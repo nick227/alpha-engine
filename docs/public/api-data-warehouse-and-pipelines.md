@@ -86,6 +86,7 @@ There are two families of endpoints:
 
 - `GET /api/strategies/catalog`
 - `GET /api/strategies/{strategy_id}/stability`
+- `GET /api/strategies/{strategy_id}/performance`
 - `GET /api/performance/regime`
 - `GET /api/consensus/signals`
 - `GET /api/ticker/{symbol}/attribution`
@@ -93,6 +94,8 @@ There are two families of endpoints:
 - `GET /api/system/heartbeat`
 - `GET /api/system/data-health`
 - `GET /api/predictions/runs/latest`
+- `GET /api/predictions/{prediction_id}/context`
+- `GET /api/engine/calendar`
 
 Plus top-level:
 
@@ -179,6 +182,8 @@ Plus top-level:
 - Under-price view:
   - `GET /api/recommendations/under/{price_cap}` returns top recommendations under a price ceiling
   - defaults to `preference=long_only` and falls back to absolute ranking when no BUY rows exist under the cap
+- Ticker view:
+  - `GET /api/recommendations/{ticker}` returns `200` with `found=true|false` (no 404 for missing ticker recommendation)
 - Refresh behavior: updates as upstream ranking/consensus/admission data updates
 - Depth: medium-deep (cross-table composition with policy weighting)
 
@@ -199,6 +204,26 @@ Plus top-level:
 - Focus: drift lens between backtest accuracy and live accuracy via `stabilityScore`
 - Refresh behavior: depends on stability computation cadence
 - Depth: deep (model reliability over time, not just point-in-time output)
+
+### `/api/strategies/{strategy_id}/performance`
+
+- Sources:
+  - `strategies` (profile + scorecard fields)
+  - `strategy_stability` (backtest/live accuracy drift lens)
+  - `strategy_performance` (accuracy + avg return by horizon)
+- Focus:
+  - one merged object for strategy-level performance inspection
+  - includes:
+    - strategy metadata (`name`, `version`, `track`, `status`, champion/active flags)
+    - scorecard (`backtestScore`, `forwardScore`, `liveScore`, `stabilityScore`, `sampleSize`)
+    - stability block (same shape as `/stability`)
+    - performance block:
+      - `latest` horizon snapshot
+      - `byHorizon[]` rows (`horizon`, `accuracy`, `avgReturn`, `updatedAt`)
+    - lifecycle timestamps
+- Why it matters: provides a single strategy-performance read without client-side endpoint stitching
+- Refresh behavior: updates as strategy scoring/stability/performance aggregation writes persist
+- Depth: deep (merged strategy profile + reliability + realized performance signal)
 
 ### `/api/performance/regime`
 
@@ -272,18 +297,149 @@ Plus top-level:
 - Refresh behavior: updates when each prediction batch completes
 - Depth: medium (pipeline observability)
 
+### `/api/predictions/{prediction_id}/context`
+
+- Source: `predictions`
+- Focus:
+  - row-level prediction traceability by id
+  - includes strategy + scoring context fields used downstream:
+    - prediction metadata (`ticker`, `timestamp`, `prediction`, `confidence`, `horizon`, `mode`)
+    - ranking-linked fields (`rankScore`, `rankingContext`)
+    - feature snapshot context (`featureSnapshot`)
+- Why it matters: lets consumers/auditors inspect the exact context behind one prediction record
+- Refresh behavior: immutable per prediction row once written (unless explicitly rewritten by pipeline jobs)
+- Depth: deep (per-record explainability substrate)
+
+### `/api/engine/calendar`
+
+- Source: merged current-month rows from `predictions`, `ranking_snapshots`, `consensus_signals`
+- Query:
+  - `month=YYYY-MM` (optional; request month is accepted but response is always served for current UTC month)
+  - `limit` (default 50, max 500)
+  - `distribution=actual|uniform` (default `actual`; `uniform` spreads returned events across month days for UI calendars)
+  - `min_days` (default 12; target day spread when `distribution=uniform`)
+- Focus:
+  - unified event feed for consumer calendars in one call
+  - each event shape:
+    - `date`, `type` (`prediction|ranking|consensus`), `symbol`, `predictionId`, `direction` (`BUY|HOLD|SELL`), `confidence`, `source`
+  - includes summary metadata:
+    - `eventCount`, `minimumExpected` (10), `meetsMinimum`, `countsByType`
+    - `distinctDays`, `minimumDaysTarget`, `meetsDayTarget`
+    - `requestedMonth`, `servedMonth`, `requestAdjustedToCurrentMonth`
+- Why it matters: replaces multi-endpoint stitching with one normalized calendar contract
+- Refresh behavior: updates as underlying prediction/ranking/consensus writers persist rows during the month
+- Depth: medium-deep (cross-source merge normalized for UI consumption)
+
 ### `/ranking/top`
 
-- Source: latest `ranking_snapshots` + recent per-ticker rank stability + latest run health
+- Source:
+  - latest `ranking_snapshots`
+  - recent per-ticker rank stability
+  - latest run health
+  - nearest ranked `predictions` row context (`rank_score`, `ranking_context_json`, strategy metrics lookups)
 - Focus:
   - base ranking rows (`score`, `conviction`, attribution)
+  - explicit interpretation contract:
+    - `rankingKind="relative_priority"`
+    - `notActionable=true`
+    - `rank` and `peerCount`
+    - `drivers[]`, `risks[]`, `changes[]`
   - `edgeScore` (score + conviction + low fragility, adjusted by run quality)
   - `fragilityScore` (stability of ranking score over recent snapshots)
+  - factor metadata:
+    - `factorVersion`
+    - `scoreBreakdown` (rank-score component weights)
+    - `subDrivers` (model accuracy, avg return, live score, stability, temporal multiplier, regime-fit proxy, raw rank score)
+  - rank-native interpretation block:
+    - `rankContext.basis[]` (peer-relative basis for current position)
+    - `rankContext.timing[]` (what changed snapshot-over-snapshot)
+    - `rankContext.risks[]` + `rankContext.invalidators[]` (current risk + break conditions)
+    - `rankContext.scope` (window + peer-basis metadata)
+    - lifecycle summary fields:
+      - `status`, `horizon`, `fit`, `durability`, `freshness`
+      - `spread`, `pressure`, `trigger`, `history`
   - cross-endpoint bridge fields (`rankedUnderDegradedRun`, `runStatus`, `runQuality`)
 - Query options:
   - `maxFragility` in `[0.0, 1.0]` to pre-filter unstable names server-side
-- Why it matters: shifts ranking from descriptive ordering to trading-quality ordering
-- Depth: medium-deep (ranking + trust synthesis)
+- Why it matters:
+  - rankings are now inspectable rather than mystical
+  - clients can render simple badges or advanced factor tables from the same payload
+  - contract makes clear this endpoint is ranking context, not execution intent
+  - consumer-facing narratives can be built directly from rank-context statements
+- Depth: deep (ranking + trust synthesis + factor diagnostics)
+
+#### Example row shape (abbreviated)
+
+```json
+{
+  "ticker": "NVDA",
+  "rankingKind": "relative_priority",
+  "notActionable": true,
+  "rank": 1,
+  "peerCount": 50,
+  "score": 0.82,
+  "edgeScore": 0.79,
+  "drivers": [],
+  "risks": [],
+  "changes": [],
+  "scoreBreakdown": {
+    "confidence": 0.35,
+    "accuracy": 0.2,
+    "avgReturn": 0.2,
+    "liveScore": 0.15,
+    "stability": 0.1
+  },
+  "subDrivers": {
+    "modelAccuracy": 0.61,
+    "avgReturn": 0.0123,
+    "liveScore": 0.72,
+    "stabilityScore": 0.58,
+    "temporalMultiplier": 1.08,
+    "regimeFit": 0.9
+  },
+  "rankContext": {
+    "basis": [
+      "Score is above current peer median by +0.18",
+      "Persisted in top 10 for 4/5 recent snapshots"
+    ],
+    "timing": [
+      "Rank improved by 3 since previous snapshot",
+      "Score increased by +0.04 snapshot-over-snapshot"
+    ],
+    "risks": [
+      "Fragility is 0.22",
+      "Pressure is low",
+      "Spread vs next is +0.08"
+    ],
+    "status": "rising",
+    "horizon": "swing",
+    "fit": "strong",
+    "durability": "high",
+    "freshness": "recent",
+    "spread": 0.08,
+    "pressure": "low",
+    "trigger": "rank_up",
+    "invalidators": [
+      "Rank falls below 15",
+      "Fragility exceeds 0.50",
+      "Edge score drops below 0.64"
+    ],
+    "history": [4, 3, 2, 2, 1],
+    "scope": {
+      "window": 5,
+      "cutoff": 10,
+      "median": 0.41,
+      "edge": 0.18,
+      "peers": "ranking_peer_set"
+    }
+  }
+}
+```
+
+#### Regime-fit note
+
+- Current `regimeFit` is a normalized proxy derived from temporal adjustment context.
+- It is useful for interpretation but is not yet a standalone stored regime-fit metric.
 
 ---
 
@@ -318,6 +474,7 @@ This split is intentional: keep core reads fast/simple while preserving depth in
 ## Reliability model and caveats
 
 - No endpoint should be interpreted as a guarantee of return.
+- `/ranking/top` is explicitly non-actionable ranking context (`rankingKind=relative_priority`, `notActionable=true`).
 - Confidence-like values are model outputs, not certainties.
 - Freshness depends on job/loop execution; check heartbeat and latest run endpoints first.
 - Missing data is possible in thin-history tickers or before enough outcomes have accrued.
