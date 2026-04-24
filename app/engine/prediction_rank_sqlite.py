@@ -90,7 +90,7 @@ def _lookup_live_score(conn: sqlite3.Connection, tenant_id: str, keys: list[str]
     # Backward-compatible: older DBs may not have strategies.live_score yet.
     try:
         conn.execute("SELECT live_score FROM strategies LIMIT 1").fetchone()
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return 0.0
     for sid in keys:
         row = conn.execute(

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 from app.db.repository import AlphaRepository
 from app.engine.prediction_rank_sqlite import (
+    _lookup_live_score,
     compute_prediction_rank_score,
     rank_predictions_for_date,
 )
@@ -171,3 +173,13 @@ def test_prediction_rank_sqlite_cli_help() -> None:
 
     p = build_parser()
     assert "--as-of" in str(p.format_help())
+
+
+def test_lookup_live_score_missing_column_database_error_returns_zero() -> None:
+    class _MissingLiveScoreConn:
+        def execute(self, query: str, params: tuple | None = None):
+            if query.strip().startswith("SELECT live_score FROM strategies LIMIT 1"):
+                raise sqlite3.DatabaseError("no such column: live_score")
+            raise AssertionError("unexpected query in test stub")
+
+    assert _lookup_live_score(_MissingLiveScoreConn(), "default", ["silent_compounder"]) == 0.0
