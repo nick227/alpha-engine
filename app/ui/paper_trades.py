@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover
     def st_autorefresh(*args, **kwargs):  # type: ignore[no-redef]
         return None
 
-from app.ui.middle.dashboard_service import DashboardService
+from app.services.dashboard_service import DashboardService
 
 
 def _arrow_safe_df(df: pd.DataFrame) -> pd.DataFrame:

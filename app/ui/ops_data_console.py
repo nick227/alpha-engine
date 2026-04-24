@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover
     def st_autorefresh(*args, **kwargs):  # type: ignore[no-redef]
         return None
 
-from app.ui.middle.dashboard_service import DashboardService
+from app.services.dashboard_service import DashboardService
 from app.ui.middle.job_runner import python_module_argv, python_script_argv, run_subprocess_job_in_thread
 from app.ui.middle.ops_job_store import OpsJobStore
 from app.db.repository import AlphaRepository

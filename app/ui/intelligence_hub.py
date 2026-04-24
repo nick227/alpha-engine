@@ -8,8 +8,8 @@ No simulation, no numpy, no scoring logic in UI.
 import streamlit as st
 import plotly.graph_objects as go
 from app.ui.theme import apply_theme
-from app.ui.intelligence.intelligence_hub_state import IntelligenceHubState
-from app.ui.middle.dashboard_service import DashboardService
+from app.services.intelligence_hub_state import IntelligenceHubState
+from app.services.dashboard_service import DashboardService
 
 
 def intelligence_hub_main(

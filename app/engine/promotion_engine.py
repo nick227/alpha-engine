@@ -5,7 +5,7 @@ from uuid import uuid4
 from typing import Any, List, Dict, Optional
 
 from app.db.repository import AlphaRepository
-from app.ui.middle.engine_read_store import EngineReadStore
+from app.services.engine_read_store import EngineReadStore
 
 log = logging.getLogger(__name__)
 

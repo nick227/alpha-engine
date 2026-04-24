@@ -5,8 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app.ui.middle.dashboard_service import DashboardService
-from app.ui.middle.explainability_constants import DEFAULT_MAX_RANK_DEPTH, MIN_SAMPLE_N
+from app.services.dashboard_service import DashboardService
+from app.services.explainability_constants import DEFAULT_MAX_RANK_DEPTH, MIN_SAMPLE_N
 
 
 def _style_low_sample_rows(df: pd.DataFrame, *, n_col: str = "n"):

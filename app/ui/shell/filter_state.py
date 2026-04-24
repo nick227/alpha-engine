@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.ui.middle.dashboard_service import DashboardService
+from app.services.dashboard_service import DashboardService
 
 
 def _selectbox(label: str, options: list[str], *, key: str, default: str | None = None) -> str:

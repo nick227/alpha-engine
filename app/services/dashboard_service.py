@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 from functools import lru_cache
 
-from app.ui.middle.engine_read_store import (
+from app.services.engine_read_store import (
     ChampionRow,
     ChampionMatrixRow,
     ConsensusRow,
@@ -1222,8 +1222,8 @@ class DashboardService:
         """
         Get complete intelligence hub state with real data only.
         """
-        from app.ui.intelligence.intelligence_hub_state import IntelligenceHubState
-        from app.ui.intelligence.intelligence_hub_dto import IntelligenceHubDTO
+        from app.services.intelligence_hub_state import IntelligenceHubState
+        from app.services.intelligence_hub_dto import IntelligenceHubDTO
         
         # Compute tenant_id once for consistency
         tenant_id = getattr(state, 'tenant_id', 'default')
@@ -1329,12 +1329,12 @@ class DashboardService:
     # --- Explainability read models (existing tables only; see explainability_read_model.py) ---
 
     def get_explain_ticker_panel(self, *, tenant_id: str = "default", ticker: str) -> dict[str, Any]:
-        from app.ui.middle.explainability_read_model import build_ticker_why_panel
+        from app.services.explainability_read_model import build_ticker_why_panel
 
         return build_ticker_why_panel(self.store.conn, tenant_id=tenant_id, ticker=ticker)
 
     def get_explain_per_ticker_performance(self, *, tenant_id: str = "default", ticker: str) -> dict[str, Any]:
-        from app.ui.middle.explainability_read_model import build_per_ticker_performance
+        from app.services.explainability_read_model import build_per_ticker_performance
 
         return build_per_ticker_performance(self.store.conn, tenant_id=tenant_id, ticker=ticker)
 
@@ -1345,18 +1345,18 @@ class DashboardService:
         tickers: list[str] | None = None,
         lookback_days: int = 90,
     ) -> list[dict[str, Any]]:
-        from app.ui.middle.explainability_read_model import build_strategy_ticker_matrix
+        from app.services.explainability_read_model import build_strategy_ticker_matrix
 
         t = list(tickers) if tickers else get_active_universe_tickers(tenant_id=tenant_id, sqlite_conn=self.store.conn)
         return build_strategy_ticker_matrix(self.store.conn, tenant_id=tenant_id, tickers=t, lookback_days=lookback_days)
 
     def get_explain_what_changed(self, *, tenant_id: str = "default", hours: int = 24) -> dict[str, Any]:
-        from app.ui.middle.explainability_read_model import build_what_changed_recent
+        from app.services.explainability_read_model import build_what_changed_recent
 
         return build_what_changed_recent(self.store.conn, tenant_id=tenant_id, hours=hours)
 
     def get_explain_topn_quality(self, *, tenant_id: str = "default", limit: int = 20) -> dict[str, Any]:
-        from app.ui.middle.explainability_read_model import build_topn_quality_snapshot
+        from app.services.explainability_read_model import build_topn_quality_snapshot
 
         rankings = self.get_target_rankings(tenant_id=tenant_id, limit=limit)
         tickers = [r.ticker for r in rankings]
@@ -1368,7 +1368,7 @@ class DashboardService:
         return base
 
     def get_explain_ranking_movers(self, *, tenant_id: str = "default", top_n: int = 20) -> dict[str, Any]:
-        from app.ui.middle.explainability_rank_trends import build_ranking_movers
+        from app.services.explainability_rank_trends import build_ranking_movers
 
         return build_ranking_movers(self.store.conn, tenant_id=tenant_id, top_n=int(top_n))
 
@@ -1379,14 +1379,14 @@ class DashboardService:
         ticker: str,
         last_n: int = 10,
     ) -> dict[str, Any]:
-        from app.ui.middle.explainability_rank_trends import build_outcome_trend_last_n
+        from app.services.explainability_rank_trends import build_outcome_trend_last_n
 
         return build_outcome_trend_last_n(
             self.store.conn, tenant_id=tenant_id, ticker=ticker, last_n=int(last_n)
         )
 
     def get_explain_weekly_performance(self, *, tenant_id: str = "default") -> dict[str, Any]:
-        from app.ui.middle.explainability_rank_trends import build_weekly_performance_summary
+        from app.services.explainability_rank_trends import build_weekly_performance_summary
 
         return build_weekly_performance_summary(self.store.conn, tenant_id=tenant_id)
 
@@ -1397,7 +1397,7 @@ class DashboardService:
         ticker: str,
         max_snapshots: int = 10,
     ) -> dict[str, Any]:
-        from app.ui.middle.explainability_rank_trends import build_rank_history_series
+        from app.services.explainability_rank_trends import build_rank_history_series
 
         return build_rank_history_series(
             self.store.conn,

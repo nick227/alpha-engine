@@ -7,8 +7,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from app.ui.middle.explainability_constants import DEFAULT_MAX_RANK_DEPTH, MIN_SAMPLE_N
-from app.ui.middle.explainability_read_model import sqlite_table_exists
+from app.services.explainability_constants import DEFAULT_MAX_RANK_DEPTH, MIN_SAMPLE_N
+from app.services.explainability_read_model import sqlite_table_exists
 
 
 def _rank_delta_movement(rank_delta: int) -> str:
@@ -32,6 +32,8 @@ def _ranks_at_timestamp(
         SELECT UPPER(TRIM(ticker)) AS ticker, score, conviction
         FROM ranking_snapshots
         WHERE tenant_id = ? AND timestamp = ?
+          AND score IS NOT NULL
+          AND conviction IS NOT NULL
         ORDER BY score DESC, ticker ASC
         LIMIT ?
         """,

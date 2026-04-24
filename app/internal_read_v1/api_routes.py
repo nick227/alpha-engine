@@ -34,15 +34,18 @@ from app.internal_read_v1.regime_read import build_regime_payload
 from app.internal_read_v1.data_health_read import build_data_health_compact
 from app.internal_read_v1.intelligence_read import (
     get_consensus_signals,
+    get_engine_calendar,
+    get_prediction_context,
     get_prediction_run_latest,
     get_regime_performance,
+    get_strategy_performance,
     get_strategy_stability,
     get_system_heartbeat,
     get_ticker_accuracy,
     get_ticker_attribution,
     list_strategies_catalog,
 )
-from app.ui.middle.dashboard_service import DashboardService
+from app.services.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -161,6 +164,14 @@ def api_strategy_stability(request: Request, strategy_id: str, tenant_id: str = 
     return out
 
 
+@router.get("/strategies/{strategy_id}/performance")
+def api_strategy_performance(request: Request, strategy_id: str, tenant_id: str = "default") -> dict[str, Any]:
+    out = get_strategy_performance(_svc(request).store.conn, tenant_id=tenant_id, strategy_id=strategy_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    return out
+
+
 @router.get("/performance/regime")
 def api_performance_regime(request: Request, tenant_id: str = "default") -> dict[str, Any]:
     return get_regime_performance(_svc(request).store.conn, tenant_id=tenant_id)
@@ -216,6 +227,43 @@ def api_prediction_runs_latest(
     out = get_prediction_run_latest(_svc(request).store.conn, tenant_id=tenant_id, timeframe=timeframe)
     if out is None:
         raise HTTPException(status_code=404, detail="no prediction runs")
+    return out
+
+
+@router.get("/predictions/{prediction_id}/context")
+def api_prediction_context(request: Request, prediction_id: str, tenant_id: str = "default") -> dict[str, Any]:
+    out = get_prediction_context(_svc(request).store.conn, tenant_id=tenant_id, prediction_id=prediction_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="prediction not found")
+    return out
+
+
+@router.get("/engine/calendar")
+def api_engine_calendar(
+    request: Request,
+    tenant_id: str = "default",
+    month: str | None = None,
+    limit: int = 50,
+    distribution: str = "actual",
+    min_days: int = 12,
+) -> dict[str, Any]:
+    dist = str(distribution).strip().lower()
+    if dist not in {"actual", "uniform"}:
+        raise HTTPException(status_code=400, detail="invalid distribution; use actual or uniform")
+    current_month = datetime.utcnow().strftime("%Y-%m")
+    requested_month = str(month).strip() if month is not None else current_month
+    adjusted = requested_month != current_month
+    out = get_engine_calendar(
+        _svc(request).store.conn,
+        tenant_id=tenant_id,
+        month=current_month,
+        limit=limit,
+        distribution=dist,
+        min_days=min_days,
+    )
+    out["requestedMonth"] = requested_month
+    out["servedMonth"] = current_month
+    out["requestAdjustedToCurrentMonth"] = adjusted
     return out
 
 
@@ -315,8 +363,14 @@ def api_recommendations_ticker(
         _svc(request).store.conn, tenant_id=tenant_id, mode=mode_key, ticker=sym
     )
     if row is None:
-        raise HTTPException(status_code=404, detail="no recommendation for ticker")
-    return row
+        return {
+            "found": False,
+            "ticker": sym,
+            "tenant_id": tenant_id,
+            "mode": mode_key,
+            "message": "no recommendation for ticker",
+        }
+    return {"found": True, **row}
 
 
 @router.get("/recommendations/under/{price_cap}")

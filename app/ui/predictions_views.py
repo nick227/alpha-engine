@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.ui.middle.dashboard_service import DashboardService, arrow
+from app.services.dashboard_service import DashboardService, arrow
 from app.ui.theme import COLORS
 
 

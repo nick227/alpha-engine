@@ -3,7 +3,7 @@ from __future__ import annotations
 import plotly.graph_objects as go
 import streamlit as st
 
-from app.ui.middle.dashboard_service import DashboardService, PredictionAnalyticsQuery
+from app.services.dashboard_service import DashboardService, PredictionAnalyticsQuery
 
 
 def backtest_strategy_analysis_main(

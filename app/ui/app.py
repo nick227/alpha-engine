@@ -19,7 +19,7 @@ if str(_REPO_ROOT) not in sys.path:
 if __name__ == "app":
     __path__ = [str(_REPO_ROOT / "app")]
 
-from app.ui.middle.dashboard_service import DashboardService  # noqa: E402
+from app.services.dashboard_service import DashboardService  # noqa: E402
 from app.ui.audit import audit_main  # noqa: E402
 from app.ui.dashboard_compact import dashboard_compact_main  # noqa: E402
 from app.ui.intelligence_hub import intelligence_hub_main  # noqa: E402
