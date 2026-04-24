@@ -1501,7 +1501,7 @@ class AlphaRepository:
         Preserves admitted/shortlisted; bumps seen→recurring after repeated contact.
         multiplier_score is promotion-side only (see app.discovery.candidate_queue_tags).
         """
-        from app.discovery.candidate_queue_tags import compute_multiplier_score, merge_strategy_tags_json
+        from app.core.candidate_scoring import compute_multiplier_score, merge_strategy_tags_json
 
         sym = str(ticker).strip().upper()
         if not sym:
