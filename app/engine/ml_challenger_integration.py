@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from app.db.repository import AlphaRepository
+from app.engine.meta_ranker_runner import run_meta_ranker_shadow
 
 ML_CHALLENGER_ENABLED = str(os.getenv("ML_CHALLENGER_ENABLED", "1")).strip().lower() not in {
     "0",
@@ -37,15 +38,6 @@ def _load_json_dict(raw: Any) -> dict[str, Any]:
     except Exception:
         payload = {}
     return payload if isinstance(payload, dict) else {}
-
-
-def _score_row(md: dict[str, Any]) -> float:
-    avg_score = float(md.get("avg_score") or md.get("raw_score") or 0.0)
-    claim_count = float(md.get("claim_count") or 1.0)
-    overlap = float(md.get("overlap_count") or 1.0)
-    days_seen = float(md.get("days_seen") or 1.0)
-    # Lightweight challenger score: blends existing deterministic evidence.
-    return _clamp((avg_score * 0.7) + (min(claim_count, 5.0) * 0.07) + (overlap * 0.04) + (min(days_seen, 10.0) * 0.02), 0.0, 1.0)
 
 
 def _safe_float(v: Any, fallback: float = 0.0) -> float:
@@ -313,33 +305,16 @@ def run_ml_challenger_meta_ranker(
         tenant_id=str(tenant_id),
     )
 
-    updated_rows: list[dict[str, Any]] = []
-    scores: list[float] = []
-    for r in rows:
-        md = _load_json_dict(r.get("metadata_json"))
-        score = _score_row(md)
-        scores.append(score)
-        ml_block = {
-            "experiment_class": ML_CHALLENGER_CLASS_KEY,
-            "experiment_key": str(experiment_key),
-            "score": score,
-            "mode": "parallel_challenger",
-            "non_replacing": True,
-            "as_of_date": str(as_of_date),
-        }
-        md["ml_challenger"] = ml_block
-        updated_rows.append(
-            {
-                "as_of_date": str(r["as_of_date"]),
-                "symbol": str(r["symbol"]),
-                "source": str(r.get("source") or "discovery"),
-                "metadata_json": json.dumps(md, sort_keys=True),
-            }
-        )
-
-    if updated_rows:
-        repo.update_prediction_queue_metadata_many(rows=updated_rows, tenant_id=str(tenant_id))
-    cohort_symbols = [str(r.get("symbol") or "").strip().upper() for r in rows if str(r.get("symbol") or "").strip()]
+    shadow = run_meta_ranker_shadow(
+        repo=repo,
+        as_of_date=str(as_of_date),
+        tenant_id=str(tenant_id),
+        experiment_class=ML_CHALLENGER_CLASS_KEY,
+        experiment_key=str(experiment_key),
+    )
+    updated_rows = list(shadow.get("updated_rows") or [])
+    scores = [float(x) for x in (shadow.get("scores") or [])]
+    cohort_symbols = [str(s) for s in (shadow.get("selected_symbols") or [])]
     cohort_count = repo.insert_experiment_cohort_items(
         run_id=str(run_id),
         class_key=ML_CHALLENGER_CLASS_KEY,
@@ -371,6 +346,7 @@ def run_ml_challenger_meta_ranker(
             "symbol_count": int(cohort_count),
         },
         "realized": realized,
+        "filters": dict(shadow.get("dropped") or {}),
     }
     promotion = (
         _evaluate_promotion(
