@@ -528,6 +528,115 @@ class DashboardService:
             "promotion": promotion,
         }
 
+    def get_meta_ranker_alt_data_coverage(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str | None = None,
+        source: str | None = None,
+        limit: int = 30,
+    ) -> dict[str, Any]:
+        n = max(1, min(365, int(limit)))
+        where = ["tenant_id = ?"]
+        params: list[Any] = [str(tenant_id)]
+        if as_of_date:
+            where.append("as_of_date = ?")
+            params.append(str(as_of_date))
+        if source:
+            where.append("source = ?")
+            params.append(str(source))
+
+        rows = self.store.conn.execute(
+            f"""
+            SELECT as_of_date, source, COUNT(*) AS symbols, AVG(quality_score) AS avg_quality
+            FROM alt_data_daily
+            WHERE {' AND '.join(where)}
+            GROUP BY as_of_date, source
+            ORDER BY as_of_date DESC, source ASC
+            LIMIT ?
+            """,
+            (*params, n),
+        ).fetchall()
+
+        out = [
+            {
+                "as_of_date": str(r["as_of_date"]),
+                "source": str(r["source"]),
+                "symbols": int(r["symbols"] or 0),
+                "avgQuality": (float(r["avg_quality"]) if r["avg_quality"] is not None else None),
+            }
+            for r in rows
+        ]
+
+        latest_run = self.store.conn.execute(
+            """
+            SELECT run_id, metadata_json, created_at
+            FROM experiment_results
+            WHERE tenant_id = ? AND class_key = 'ml_model' AND experiment_key = 'ml_meta_ranker_v1'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (str(tenant_id),),
+        ).fetchone()
+        latest = None
+        if latest_run:
+            try:
+                md = json.loads(str(latest_run["metadata_json"] or "{}"))
+            except Exception:
+                md = {}
+            if not isinstance(md, dict):
+                md = {}
+            latest = {
+                "run_id": str(latest_run["run_id"]),
+                "created_at": str(latest_run["created_at"] or ""),
+                "alt_data": md.get("alt_data"),
+                "alt_data_ingest": md.get("alt_data_ingest"),
+            }
+
+        run_rows = self.store.conn.execute(
+            """
+            SELECT run_id, metadata_json, created_at
+            FROM experiment_results
+            WHERE tenant_id = ? AND class_key = 'ml_model' AND experiment_key = 'ml_meta_ranker_v1'
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(tenant_id), n),
+        ).fetchall()
+        runs: list[dict[str, Any]] = []
+        for rr in run_rows:
+            try:
+                md = json.loads(str(rr["metadata_json"] or "{}"))
+            except Exception:
+                md = {}
+            if not isinstance(md, dict):
+                md = {}
+            ingest = md.get("alt_data_ingest")
+            if not isinstance(ingest, dict):
+                ingest = {}
+            runs.append(
+                {
+                    "run_id": str(rr["run_id"]),
+                    "created_at": str(rr["created_at"] or ""),
+                    "as_of_date": ingest.get("as_of_date") or (md.get("cohort") or {}).get("as_of_date"),
+                    "mode": ingest.get("mode"),
+                    "source": ingest.get("source"),
+                    "written": ingest.get("written"),
+                    "requested_symbols": ingest.get("requested_symbols"),
+                    "coverage": ingest.get("coverage"),
+                    "enabled": ingest.get("enabled"),
+                }
+            )
+
+        return {
+            "tenant_id": tenant_id,
+            "as_of_date": as_of_date,
+            "source": source,
+            "rows": out,
+            "runs": runs,
+            "latest_challenger_run": latest,
+        }
+
     def get_experiment_leaderboard(
         self,
         *,

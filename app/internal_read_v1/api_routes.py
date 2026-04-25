@@ -309,6 +309,23 @@ def api_experiments_meta_ranker_promotion_readiness(
     )
 
 
+@router.get("/experiments/meta-ranker/alt-data/coverage")
+def api_experiments_meta_ranker_alt_data_coverage(
+    request: Request,
+    tenant_id: str = "default",
+    as_of_date: str | None = None,
+    source: str | None = None,
+    limit: int = 30,
+) -> dict[str, Any]:
+    n = max(1, min(365, int(limit)))
+    return _svc(request).get_meta_ranker_alt_data_coverage(
+        tenant_id=tenant_id,
+        as_of_date=as_of_date,
+        source=source,
+        limit=n,
+    )
+
+
 @router.get("/consensus/signals")
 def api_consensus_signals(
     request: Request,
