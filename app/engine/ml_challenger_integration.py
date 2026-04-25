@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from typing import Any
 
 from app.db.repository import AlphaRepository
@@ -26,6 +27,15 @@ ML_PROMOTION_SHARPE_DELTA = float(os.getenv("ML_PROMOTION_SHARPE_DELTA", "0.10")
 ML_PROMOTION_WINRATE_DELTA = float(os.getenv("ML_PROMOTION_WINRATE_DELTA", "0.00"))
 ML_PROMOTION_DRAWDOWN_DELTA = float(os.getenv("ML_PROMOTION_DRAWDOWN_DELTA", "0.00"))
 ML_PROMOTION_MIN_REALIZED_SAMPLES = int(os.getenv("ML_PROMOTION_MIN_REALIZED_SAMPLES", "25"))
+ML_PROMOTION_SIGNIFICANCE_ENABLED = str(os.getenv("ML_PROMOTION_SIGNIFICANCE_ENABLED", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+ML_PROMOTION_BOOTSTRAP_ITERATIONS = int(os.getenv("ML_PROMOTION_BOOTSTRAP_ITERATIONS", "500"))
+ML_PROMOTION_MIN_EFFECT_RETURN = float(os.getenv("ML_PROMOTION_MIN_EFFECT_RETURN", "0.0025"))
+ML_PROMOTION_MIN_EFFECT_WINRATE = float(os.getenv("ML_PROMOTION_MIN_EFFECT_WINRATE", "0.01"))
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -99,6 +109,97 @@ def _sharpe_from_series(vals: list[float]) -> float | None:
     if std <= 1e-12:
         return None
     return mean_val / std
+
+
+def _bootstrap_delta_ci(
+    *,
+    a: list[float],
+    b: list[float],
+    iters: int = ML_PROMOTION_BOOTSTRAP_ITERATIONS,
+    seed: int = 7,
+) -> tuple[float, float] | None:
+    if not a or not b:
+        return None
+    rng = random.Random(int(seed))
+    deltas: list[float] = []
+    n_a = len(a)
+    n_b = len(b)
+    for _ in range(max(100, int(iters))):
+        sample_a = [a[rng.randrange(0, n_a)] for _ in range(n_a)]
+        sample_b = [b[rng.randrange(0, n_b)] for _ in range(n_b)]
+        deltas.append((sum(sample_a) / n_a) - (sum(sample_b) / n_b))
+    deltas.sort()
+    lo_idx = max(0, int(0.025 * len(deltas)) - 1)
+    hi_idx = min(len(deltas) - 1, int(0.975 * len(deltas)) - 1)
+    return float(deltas[lo_idx]), float(deltas[hi_idx])
+
+
+def _wilson_ci(p: float, n: int, z: float = 1.96) -> tuple[float, float] | None:
+    if n <= 0:
+        return None
+    p = max(0.0, min(1.0, float(p)))
+    denom = 1.0 + (z * z) / n
+    center = (p + ((z * z) / (2.0 * n))) / denom
+    margin = (z / denom) * ((p * (1.0 - p) / n) + ((z * z) / (4.0 * n * n))) ** 0.5
+    return float(center - margin), float(center + margin)
+
+
+def _evaluate_significance(
+    *,
+    challenger_returns: list[float],
+    baseline_returns: list[float],
+    challenger_win_rate: float | None,
+    baseline_win_rate: float | None,
+    challenger_n: int,
+    baseline_n: int,
+) -> dict[str, Any]:
+    if not ML_PROMOTION_SIGNIFICANCE_ENABLED:
+        return {"enabled": False, "passed": True, "reason": "significance_disabled"}
+
+    if not challenger_returns or not baseline_returns:
+        return {"enabled": True, "passed": False, "reason": "insufficient_return_samples"}
+
+    ret_ci = _bootstrap_delta_ci(a=challenger_returns, b=baseline_returns)
+    if ret_ci is None:
+        return {"enabled": True, "passed": False, "reason": "return_ci_unavailable"}
+    ret_delta = (sum(challenger_returns) / len(challenger_returns)) - (sum(baseline_returns) / len(baseline_returns))
+
+    if challenger_win_rate is None or baseline_win_rate is None:
+        return {"enabled": True, "passed": False, "reason": "insufficient_winrate_samples"}
+
+    win_delta = float(challenger_win_rate) - float(baseline_win_rate)
+    win_ci_ch = _wilson_ci(float(challenger_win_rate), int(challenger_n))
+    win_ci_bs = _wilson_ci(float(baseline_win_rate), int(baseline_n))
+    if win_ci_ch is None or win_ci_bs is None:
+        return {"enabled": True, "passed": False, "reason": "winrate_ci_unavailable"}
+    win_delta_ci = (float(win_ci_ch[0] - win_ci_bs[1]), float(win_ci_ch[1] - win_ci_bs[0]))
+
+    ret_sig = float(ret_ci[0]) > 0.0
+    win_sig = float(win_delta_ci[0]) > 0.0
+    ret_effect = float(ret_delta) >= float(ML_PROMOTION_MIN_EFFECT_RETURN)
+    win_effect = float(win_delta) >= float(ML_PROMOTION_MIN_EFFECT_WINRATE)
+
+    passed = bool(ret_sig and win_sig and ret_effect and win_effect)
+    return {
+        "enabled": True,
+        "passed": passed,
+        "reason": ("passed" if passed else "not_significant_or_small_effect"),
+        "return_delta": float(ret_delta),
+        "return_delta_ci": [float(ret_ci[0]), float(ret_ci[1])],
+        "winrate_delta": float(win_delta),
+        "winrate_delta_ci": [float(win_delta_ci[0]), float(win_delta_ci[1])],
+        "checks": {
+            "return_significant": bool(ret_sig),
+            "winrate_significant": bool(win_sig),
+            "return_effect": bool(ret_effect),
+            "winrate_effect": bool(win_effect),
+        },
+        "thresholds": {
+            "min_effect_return": float(ML_PROMOTION_MIN_EFFECT_RETURN),
+            "min_effect_winrate": float(ML_PROMOTION_MIN_EFFECT_WINRATE),
+            "bootstrap_iterations": int(ML_PROMOTION_BOOTSTRAP_ITERATIONS),
+        },
+    }
 
 
 def _evaluate_promotion(
@@ -177,12 +278,21 @@ def _evaluate_promotion(
             "metrics": metrics,
         }
 
-    passed = (
+    threshold_passed = (
         float(ch["sharpe"]) > float(bs["sharpe"]) + float(ML_PROMOTION_SHARPE_DELTA)
         and float(ch["drawdown"]) < float(bs["drawdown"]) + float(ML_PROMOTION_DRAWDOWN_DELTA)
         and float(ch["win_rate"]) > float(bs["win_rate"]) + float(ML_PROMOTION_WINRATE_DELTA)
     )
-    if passed:
+    significance = _evaluate_significance(
+        challenger_returns=ml_returns,
+        baseline_returns=base_returns,
+        challenger_win_rate=ch.get("win_rate"),
+        baseline_win_rate=bs.get("win_rate"),
+        challenger_n=len(ml_returns),
+        baseline_n=len(base_returns),
+    )
+    promoted = bool(threshold_passed and bool(significance.get("passed", False)))
+    if promoted:
         repo.set_experiment_status(
             class_key=ML_CHALLENGER_CLASS_KEY,
             experiment_key=str(experiment_key),
@@ -190,9 +300,15 @@ def _evaluate_promotion(
             tenant_id=str(tenant_id),
         )
     return {
-        "promoted": bool(passed),
-        "reason": ("passed_thresholds" if passed else "thresholds_not_met"),
+        "promoted": promoted,
+        "reason": (
+            "passed_thresholds_and_significance"
+            if promoted
+            else ("thresholds_not_met" if not threshold_passed else "significance_not_met")
+        ),
         "window_days": int(window_days),
+        "threshold_passed": bool(threshold_passed),
+        "significance": significance,
         "thresholds": {
             "sharpe_delta": float(ML_PROMOTION_SHARPE_DELTA),
             "drawdown_delta": float(ML_PROMOTION_DRAWDOWN_DELTA),
