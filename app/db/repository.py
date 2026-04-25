@@ -2565,6 +2565,24 @@ class AlphaRepository:
         self.conn.commit()
         return rid
 
+    def set_experiment_status(
+        self,
+        *,
+        class_key: str,
+        experiment_key: str,
+        status: str,
+        tenant_id: str = "default",
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE experiments
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE tenant_id = ? AND class_key = ? AND experiment_key = ?
+            """,
+            (str(status), str(tenant_id), str(class_key), str(experiment_key)),
+        )
+        self.conn.commit()
+
     def prediction_queue_status_counts(
         self,
         *,
