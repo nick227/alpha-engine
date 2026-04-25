@@ -411,6 +411,91 @@ class DashboardService:
         )
         return out[:n]
 
+    def get_experiment_summary(
+        self,
+        *,
+        tenant_id: str = "default",
+        horizon: str = "5d",
+        lookback_days: int = 14,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        rows = self.get_experiment_trends(
+            tenant_id=tenant_id,
+            horizon=horizon,
+            class_key=None,
+            experiment_key=None,
+            limit=max(limit, lookback_days * 50),
+        )
+
+        day_cutoff = None
+        day_values = sorted({str(r.get("day") or "") for r in rows if str(r.get("day") or "")})
+        if day_values and lookback_days > 0 and len(day_values) > lookback_days:
+            day_cutoff = day_values[-lookback_days]
+
+        filtered = [
+            r for r in rows
+            if r.get("day")
+            and (day_cutoff is None or str(r["day"]) >= str(day_cutoff))
+        ]
+
+        by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for r in filtered:
+            key = (str(r.get("classKey") or ""), str(r.get("experimentKey") or ""))
+            by_key.setdefault(key, []).append(r)
+
+        movers: list[dict[str, Any]] = []
+        for (class_key, experiment_key), series in by_key.items():
+            if not series:
+                continue
+            ordered = sorted(series, key=lambda x: str(x.get("day") or ""))
+            first = ordered[0]
+            last = ordered[-1]
+            first_ret = first.get("metricReturn")
+            last_ret = last.get("metricReturn")
+            delta_ret = None
+            if first_ret is not None and last_ret is not None:
+                delta_ret = float(last_ret) - float(first_ret)
+            last_win = last.get("winRate")
+            movers.append(
+                {
+                    "classKey": class_key,
+                    "experimentKey": experiment_key,
+                    "startDay": first.get("day"),
+                    "endDay": last.get("day"),
+                    "startReturn": first_ret,
+                    "endReturn": last_ret,
+                    "deltaReturn": delta_ret,
+                    "latestWinRate": last_win,
+                    "points": len(ordered),
+                }
+            )
+
+        movers.sort(
+            key=lambda x: (
+                -999999.0 if x["deltaReturn"] is None else -float(x["deltaReturn"]),
+                -999999.0 if x["endReturn"] is None else -float(x["endReturn"]),
+            )
+        )
+
+        def _avg(vals: list[float | None]) -> float | None:
+            kept = [float(v) for v in vals if v is not None]
+            return (sum(kept) / len(kept)) if kept else None
+
+        overall = {
+            "rows": len(filtered),
+            "seriesCount": len(by_key),
+            "avgReturn": _avg([r.get("metricReturn") for r in filtered]),
+            "avgWinRate": _avg([r.get("winRate") for r in filtered]),
+        }
+        return {
+            "tenant_id": tenant_id,
+            "horizon": horizon,
+            "lookbackDays": int(lookback_days),
+            "overall": overall,
+            "bestMovers": movers[:10],
+            "worstMovers": list(reversed(movers[-10:])) if movers else [],
+        }
+
     def list_tickers(self, *, tenant_id: str = "default") -> list[str]:
         """Active universe: static (YAML) ∪ candidate_queue status=admitted."""
         try:

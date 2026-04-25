@@ -229,6 +229,29 @@ def api_experiments_trends(
     }
 
 
+@router.get("/experiments/summary")
+def api_experiments_summary(
+    request: Request,
+    tenant_id: str = "default",
+    horizon: str = "5d",
+    lookback_days: int = 14,
+    limit: int = 200,
+) -> dict[str, Any]:
+    hz = str(horizon).strip().lower()
+    if hz not in {"5d", "20d"}:
+        raise HTTPException(status_code=400, detail="invalid horizon; use 5d or 20d")
+    if lookback_days <= 0:
+        raise HTTPException(status_code=400, detail="lookback_days must be > 0")
+    n = max(1, min(1000, limit))
+    lb = max(1, min(365, int(lookback_days)))
+    return _svc(request).get_experiment_summary(
+        tenant_id=tenant_id,
+        horizon=hz,
+        lookback_days=lb,
+        limit=n,
+    )
+
+
 @router.get("/consensus/signals")
 def api_consensus_signals(
     request: Request,
