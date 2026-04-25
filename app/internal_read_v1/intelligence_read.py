@@ -370,28 +370,31 @@ def get_system_heartbeat(conn: sqlite3.Connection, *, tenant_id: str, limit: int
 
 
 def get_prediction_run_latest(conn: sqlite3.Connection, *, tenant_id: str, timeframe: str | None) -> dict[str, Any] | None:
-    if timeframe:
-        row = conn.execute(
-            """
-            SELECT id, ingress_start, ingress_end, prediction_start, prediction_end, timeframe, regime, created_at
-            FROM prediction_runs
-            WHERE tenant_id = ? AND timeframe = ?
-            ORDER BY prediction_end DESC, created_at DESC
-            LIMIT 1
-            """,
-            (tenant_id, str(timeframe)),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            """
-            SELECT id, ingress_start, ingress_end, prediction_start, prediction_end, timeframe, regime, created_at
-            FROM prediction_runs
-            WHERE tenant_id = ?
-            ORDER BY prediction_end DESC, created_at DESC
-            LIMIT 1
-            """,
-            (tenant_id,),
-        ).fetchone()
+    try:
+        if timeframe:
+            row = conn.execute(
+                """
+                SELECT id, ingress_start, ingress_end, prediction_start, prediction_end, timeframe, regime, created_at
+                FROM prediction_runs
+                WHERE tenant_id = ? AND timeframe = ?
+                ORDER BY prediction_end DESC, created_at DESC
+                LIMIT 1
+                """,
+                (tenant_id, str(timeframe)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT id, ingress_start, ingress_end, prediction_start, prediction_end, timeframe, regime, created_at
+                FROM prediction_runs
+                WHERE tenant_id = ?
+                ORDER BY prediction_end DESC, created_at DESC
+                LIMIT 1
+                """,
+                (tenant_id,),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return None
     if not row:
         return None
     ingress_start = _parse_iso_dt(str(row["ingress_start"]))

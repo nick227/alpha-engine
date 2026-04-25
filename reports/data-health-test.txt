@@ -1,5 +1,5 @@
 DATA HEALTH: WARNING
-Generated: 2026-04-23 07:40 UTC
+Generated: 2026-04-25 23:17 UTC
 
 heartbeat: fresh
 latest run: 3.0h ago
@@ -8,13 +8,13 @@ ranking/top: 3 rows
 AAPL quote: present
 
 runtime identity (environment alignment):
-db_path: C:\Users\Administrator\AppData\Local\Temp\pytest-of-Administrator\pytest-352\test_data_health_critical_surf0\data_health.db
+db_path: C:\Users\Administrator\AppData\Local\Temp\pytest-of-Administrator\pytest-377\test_data_health_critical_surf0\data_health.db
 db_exists: yes
-db_modified_utc: 2026-04-23 07:40:28 UTC
-db_size_bytes: 528384
-git_commit: df22bb0
+db_modified_utc: 2026-04-25 23:17:11 UTC
+db_size_bytes: 651264
+git_commit: 3f11324
 pipeline_script: scripts/windows/run_daily_pipeline.bat
-pipeline_script_mtime_utc: 2026-04-23 07:00:51 UTC
+pipeline_script_mtime_utc: 2026-04-24 00:53:48 UTC
 
 quality:
 runStatus: FAILED
@@ -41,11 +41,11 @@ coverage SLA (target ≥90% fresh 1d bars on expected universe):
   ratio: 13.0%  status: FAIL
 
 stage freshness (latest warehouse timestamps):
-  max 1d bar (universe tickers): 2026-04-23T07:40:27.034636+00:00
+  max 1d bar (universe tickers): 2026-04-25T23:17:10.060490+00:00
   max prediction timestamp: none
-  max ranking_snapshots batch: 2026-04-23T07:40:27.034636+00:00
-  max consensus_signals: 2026-04-23 07:40:27
-  max candidate_queue last_seen_at: 2026-04-23T07:40:27.034636+00:00
+  max ranking_snapshots batch: 2026-04-25T23:17:10.060490+00:00
+  max consensus_signals: 2026-04-25 23:17:11
+  max candidate_queue last_seen_at: 2026-04-25T23:17:10.060490+00:00
 
 pipeline funnel (warehouse):
 candidate_queue symbols: 3
@@ -53,7 +53,7 @@ candidate_queue symbols: 3
 predictions rows (all time): 0
 predictions rows (last 7d): 0
 predictions distinct tickers (last 7d): 0
-latest ranking snapshot ts: 2026-04-23T07:40:27.034636+00:00
+latest ranking snapshot ts: 2026-04-25T23:17:10.060490+00:00
 ranking symbols (latest DB batch): 3
 ranking/top response rows: 3
 house_recommendations rows (balanced, DB): 3
@@ -96,7 +96,7 @@ response keys:
 /api/predictions/runs/latest keys: consensusStalenessMinutes, coverageRatio, createdAt, degradedReasons, expectedUniverseCount, id, ingestLatencySec, ingressEnd, ingressStart, predictLatencySec, predictionBatchCoverageRatio, predictionEnd, predictionStart, predictions7dCount, rankingUniverseCount, recommendationUniqueCount, regime, runQuality, runStatus, stalenessMinutes, tenant_id, timeframe
 /api/recommendations/latest keys: consumerExperience, intelligenceConfidenceTier, mode, pipelineSignals, recommendations, selectionPreference, tenant_id
 /api/recommendations/best keys: action, asOf, avoidIf, confidence, consumerExperience, entryZone, horizon, intelligenceConfidenceTier, mode, pipelineSignals, risk, score, selectionDiagnostics, selectionPreference, thesis, ticker
-/ranking/top keys: as_of, as_of_note, consumerExperience, intelligenceConfidenceTier, maxFragility, pipelineSignals, rankedUnderDegradedRun, rankingProvenance, rankings, runQuality, runStatus, tenant_id
+/ranking/top keys: as_of, as_of_note, consumerExperience, factorVersion, intelligenceConfidenceTier, maxFragility, notActionable, pipelineSignals, rankedUnderDegradedRun, rankingKind, rankingProvenance, rankings, runQuality, runStatus, tenant_id
 /api/quote/AAPL keys: price, ticker, time, timeframe
 
 consumer response simulation:
@@ -105,7 +105,7 @@ consumer response simulation:
 {
   "loops": [
     {
-      "createdAt": "2026-04-23T07:30:27.034636+00:00",
+      "createdAt": "2026-04-25T23:07:10.060490+00:00",
       "loopType": "live",
       "notes": "fresh heartbeat",
       "status": "ok"
@@ -119,7 +119,7 @@ consumer response simulation:
 {
   "consensusStalenessMinutes": 0,
   "coverageRatio": 0.1304,
-  "createdAt": "2026-04-23T04:40:27.034636+00:00",
+  "createdAt": "2026-04-25T20:17:10.060490+00:00",
   "degradedReasons": [
     "LOW_BAR_COVERAGE",
     "LOW_UNIVERSE_COVERAGE",
@@ -130,12 +130,12 @@ consumer response simulation:
   "expectedUniverseCount": 23,
   "id": "run_health_1",
   "ingestLatencySec": 600,
-  "ingressEnd": "2026-04-23T04:30:27.034636+00:00",
-  "ingressStart": "2026-04-23T04:20:27.034636+00:00",
+  "ingressEnd": "2026-04-25T20:07:10.060490+00:00",
+  "ingressStart": "2026-04-25T19:57:10.060490+00:00",
   "predictLatencySec": 540,
   "predictionBatchCoverageRatio": 0.1304,
-  "predictionEnd": "2026-04-23T04:40:27.034636+00:00",
-  "predictionStart": "2026-04-23T04:31:27.034636+00:00",
+  "predictionEnd": "2026-04-25T20:17:10.060490+00:00",
+  "predictionStart": "2026-04-25T20:08:10.060490+00:00",
   "predictions7dCount": 0,
   "rankingUniverseCount": 3,
   "recommendationUniqueCount": 0,
@@ -154,7 +154,7 @@ consumer response simulation:
   "recommendations": [
     {
       "action": "BUY",
-      "asOf": "2026-04-23T07:40:28.043837+00:00",
+      "asOf": "2026-04-25T23:17:11.443942+00:00",
       "avoidIf": [
         "Breaks below 171.8145",
         "Broad market shifts to risk-off"
@@ -188,7 +188,7 @@ consumer response simulation:
     },
     {
       "action": "BUY",
-      "asOf": "2026-04-23T07:40:28.043837+00:00",
+      "asOf": "2026-04-25T23:17:11.443942+00:00",
       "avoidIf": [
         "Breaks below 439.1887",
         "Broad market shifts to risk-off"
@@ -210,7 +210,7 @@ consumer response simulation:
 ```json
 {
   "action": "BUY",
-  "asOf": "2026-04-23T07:40:28.050973+00:00",
+  "asOf": "2026-04-25T23:17:11.460043+00:00",
   "avoidIf": [
     "Breaks below 171.8145",
     "Broad market shifts to risk-off"
@@ -264,46 +264,67 @@ consumer response simulation:
   "rankings": [
     {
       "attribution": {},
+      "changes": [
+        {
+          "key": "score_change",
+          "label": "Score vs Previous Snapshot",
+          "trend": "new",
+          "value": null
+        },
+        {
+          "key": "rank_change",
+          "label": "Rank vs Previous Snapshot",
+          "trend": "new",
+          "value": null
+        }
+      ],
       "conviction": 0.7,
+      "dailyChangePct": 1.7143,
+      "drivers": [
+        {
+          "direction": "positive",
+          "key": "ranking_score",
+          "label": "Ranking Score",
+          "percentile": 82,
+          "value": 0.65,
+          "weight": 0.5
+        },
+        {
+          "direction": "positive",
+          "key": "conviction",
+          "label": "Conviction",
+          "percentile": 70,
+          "value": 0.7,
+          "weight": 0.3
+        },
+        {
+          "direction": "positive",
+          "key": "stability",
+          "label": "Ranking Stability",
+          "percentile": 0,
+          "value": 0.0,
+          "weight": 0.2
+        }
+      ],
       "edgeScore": 0.0,
+      "edgeScorePercentile": 0,
+      "factorVersion": "ranking_factors_v1",
       "fragilityScore": 1.0,
-      "regime": "NORMAL",
-      "score": 0.65,
-      "ticker": "AAPL",
-      "timestamp": "2026-04-23T07:40:27.034636+00:00"
-    },
-    {
-      "attribution": {},
-      "conviction": 0.7,
-      "edgeScore": 0.0,
-      "fragilityScore": 1.0,
-      "regime": "NORMAL",
-      "score": 0.65,
-      "ticker": "SPY",
-      "timestamp": "2026-04-23T07:40:27.034636+00:00"
-    },
-    {
-      "attribution": {},
-      "conviction": 0.7,
-      "edgeScore": 0.0,
-      "fragilityScore": 1.0,
-      "regime": "NORMAL",
-      "score": 0.65,
-      "ticker": "QQQ",
-      "timestamp": "2026-04-23T07:40:27.034636+00:00"
-    }
-  ],
-  "runQuality": 0.0,
-  "runStatus": "FAILED",
-  "tenant_id": "default"
-}
+      "notActionable": true,
+      "peerCount": 3,
+      "predictionId": null,
+      "rank": 1,
+      "rankContext": {
+        "basis": [
+          "Score is modestly above current peer median (+0.00)",
+... [truncated]
 ```
 /api/quote/AAPL preview:
 ```json
 {
   "price": 178.0,
   "ticker": "AAPL",
-  "time": "2026-04-23T07:40:27.034636+00:00",
+  "time": "2026-04-25T23:17:10.060490+00:00",
   "timeframe": "1d"
 }
 ```

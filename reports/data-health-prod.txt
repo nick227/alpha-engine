@@ -1,13 +1,13 @@
 DATA HEALTH (PROD): PASS
-Generated: 2026-04-24 15:00 UTC
+Generated: 2026-04-25 15:02 UTC
 
-pipeline last run: OK finished_at=Thu 04/23/2026_10:03:37.87
+pipeline last run: OK finished_at=Fri 04/24/2026_10:01:10.45
 
 runtime identity:
   db_path: C:\wamp64\www\alpha-engine-poc\data\alpha.db
-  db_modified_utc: 2026-04-24 11:33:46 UTC
-  db_size_bytes: 5931999232
-  git_commit: ded91d2
+  db_modified_utc: 2026-04-25 08:54:14 UTC
+  db_size_bytes: 5932003328
+  git_commit: 3f11324
   pipeline_script_mtime_utc: 2026-04-24 00:53:48 UTC
 
 reconciliation (market data):
@@ -54,9 +54,9 @@ B+ output quality scorecard:
   · prediction repeat pressure (7d): 0.0%
 
 api responses (TestClient → production DB):
-  heartbeat: stale/missing (15273m ago)
+  heartbeat: stale/missing (16715m ago)
   latest run: 0m ago  runStatus=DEGRADED  runQuality=0.60  coverageRatio=100.00%
-  recommendations/latest: 10 rows, 10 unique tickers  conf avg/min/max: 39.8/29.0/58.0%
+  recommendations/latest: 10 rows, 10 unique tickers  conf avg/min/max: 39.7/29.0/58.0%
   ranking/top: 21 rows  rankingProvenance: live_prediction
   quote/AAPL: present
   megacap_share: 0%  sector_diversity: 2 unique sectors
@@ -100,7 +100,7 @@ response previews:
 /api/predictions/runs/latest preview:
 ```json
 {
-  "consensusStalenessMinutes": 1998,
+  "consensusStalenessMinutes": 3439,
   "coverageRatio": 1.0,
   "createdAt": "2026-04-23 05:43:04",
   "degradedReasons": [
@@ -117,7 +117,7 @@ response previews:
   "predictionBatchCoverageRatio": 0.3387,
   "predictionEnd": "2026-05-22T00:00:00+00:00",
   "predictionStart": "2026-04-22T00:00:00+00:00",
-  "predictions7dCount": 21,
+  "predictions7dCount": 2,
   "rankingUniverseCount": 21,
   "recommendationUniqueCount": 21,
   "regime": null,
@@ -135,7 +135,7 @@ response previews:
   "recommendations": [
     {
       "action": "BUY",
-      "asOf": "2026-04-24T15:01:03.705830+00:00",
+      "asOf": "2026-04-25T15:02:03.371498+00:00",
       "avoidIf": [
         "Breaks below 133.9864",
         "Broad market shifts to risk-off"
@@ -169,7 +169,7 @@ response previews:
     },
     {
       "action": "BUY",
-      "asOf": "2026-04-24T15:01:03.705830+00:00",
+      "asOf": "2026-04-25T15:02:03.371498+00:00",
       "avoidIf": [
         "Breaks below 187.133",
         "Broad market shifts to risk-off"
@@ -190,7 +190,7 @@ response previews:
 ```json
 {
   "action": "BUY",
-  "asOf": "2026-04-24T15:01:06.473977+00:00",
+  "asOf": "2026-04-25T15:02:03.983166+00:00",
   "avoidIf": [
     "Breaks below 133.9864",
     "Broad market shifts to risk-off"
@@ -262,6 +262,7 @@ response previews:
         }
       ],
       "conviction": 1.0,
+      "dailyChangePct": -0.6922,
       "drivers": [
         {
           "direction": "positive",
@@ -297,7 +298,6 @@ response previews:
         },
         {
           "direction": "positive",
-          "key": "attribution_strategy_we
 ... [truncated]
 ```
 /api/quote/AAPL preview:

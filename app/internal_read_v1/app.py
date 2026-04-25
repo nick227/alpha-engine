@@ -552,16 +552,19 @@ def _load_recent_snapshot_rank_maps(
     tenant_id: str,
     max_snapshots: int = 5,
 ) -> list[dict[str, Any]]:
-    ts_rows = conn.execute(
-        """
-        SELECT DISTINCT timestamp
-        FROM ranking_snapshots
-        WHERE tenant_id = ?
-        ORDER BY timestamp DESC
-        LIMIT ?
-        """,
-        (tenant_id, int(max_snapshots)),
-    ).fetchall()
+    try:
+        ts_rows = conn.execute(
+            """
+            SELECT DISTINCT timestamp
+            FROM ranking_snapshots
+            WHERE tenant_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (tenant_id, int(max_snapshots)),
+        ).fetchall()
+    except Exception:
+        return []
     timestamps = [str(r["timestamp"]) for r in ts_rows if r["timestamp"] is not None]
     out: list[dict[str, Any]] = []
     for ts in timestamps:

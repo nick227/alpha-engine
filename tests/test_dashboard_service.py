@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from app.ui.middle.dashboard_service import DashboardService
+from app.services.dashboard_service import DashboardService
 
 
 def test_dashboard_service_smoke() -> None:

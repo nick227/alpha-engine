@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.engine.prediction_sync import score_sync
-from app.ui.middle.dashboard_service import DashboardService
+from app.services.dashboard_service import DashboardService
 
 
 def test_score_sync_basic_alignment() -> None:

@@ -13,7 +13,7 @@ sys.path.append(str(Path(__file__).resolve().parent))
 
 from internal_read_inventory.endpoints import ENDPOINTS, ENDPOINTS_BY_ID, REGISTERED_GET_PATHS
 
-_EXCLUDED_PATHS = {"/openapi.json", "/docs", "/redoc"}
+_EXCLUDED_PATHS = {"/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}
 
 
 def _runtime_get_paths() -> set[str]:

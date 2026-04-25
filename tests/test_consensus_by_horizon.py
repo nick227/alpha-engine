@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from app.ui.middle.engine_read_store import EngineReadStore
+from app.services.engine_read_store import EngineReadStore
 
 
 def _mk_db(path: str) -> sqlite3.Connection:

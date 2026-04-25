@@ -637,6 +637,77 @@ class DashboardService:
             "latest_challenger_run": latest,
         }
 
+    def get_meta_ranker_strategy_queue_share(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str | None = None,
+        status: str = "pending",
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        n = max(1, min(500, int(limit)))
+        if as_of_date is None:
+            row = self.store.conn.execute(
+                """
+                SELECT MAX(as_of_date) AS as_of_date
+                FROM prediction_queue
+                WHERE tenant_id = ?
+                """,
+                (str(tenant_id),),
+            ).fetchone()
+            as_of = str(row["as_of_date"]) if row and row["as_of_date"] is not None else None
+        else:
+            as_of = str(as_of_date)
+        if not as_of:
+            return {"tenant_id": tenant_id, "as_of_date": None, "status": str(status), "total": 0, "rows": []}
+
+        raw = self.store.conn.execute(
+            """
+            SELECT metadata_json
+            FROM prediction_queue
+            WHERE tenant_id = ? AND as_of_date = ? AND status = ?
+            """,
+            (str(tenant_id), str(as_of), str(status)),
+        ).fetchall()
+
+        counts: dict[str, int] = {}
+        queue_paths: dict[str, dict[str, int]] = {}
+        total = 0
+        for r in raw:
+            try:
+                md = json.loads(str(r["metadata_json"] or "{}"))
+            except Exception:
+                md = {}
+            if not isinstance(md, dict):
+                md = {}
+            strategy = str(md.get("strategy") or md.get("primary_strategy") or "unattributed").strip() or "unattributed"
+            queue_path = str(md.get("queue_path") or "unknown").strip() or "unknown"
+            counts[strategy] = counts.get(strategy, 0) + 1
+            bucket = queue_paths.get(strategy)
+            if bucket is None:
+                bucket = {}
+                queue_paths[strategy] = bucket
+            bucket[queue_path] = bucket.get(queue_path, 0) + 1
+            total += 1
+
+        rows = [
+            {
+                "strategy": strategy,
+                "count": count,
+                "share": (float(count) / float(total)) if total > 0 else 0.0,
+                "queue_paths": queue_paths.get(strategy) or {},
+            }
+            for strategy, count in counts.items()
+        ]
+        rows.sort(key=lambda x: (-int(x["count"]), str(x["strategy"])))
+        return {
+            "tenant_id": tenant_id,
+            "as_of_date": as_of,
+            "status": str(status),
+            "total": int(total),
+            "rows": rows[:n],
+        }
+
     def get_experiment_leaderboard(
         self,
         *,

@@ -87,6 +87,15 @@ There are two families of endpoints:
 - `GET /api/strategies/catalog`
 - `GET /api/strategies/{strategy_id}/stability`
 - `GET /api/strategies/{strategy_id}/performance`
+- `GET /api/experiments/leaderboard`
+- `GET /api/experiments/trends`
+- `GET /api/experiments/summary`
+- `GET /api/experiments/meta-ranker/latest`
+- `GET /api/experiments/meta-ranker/intents/latest`
+- `GET /api/experiments/meta-ranker/intents/replay`
+- `GET /api/experiments/meta-ranker/promotion-readiness`
+- `GET /api/experiments/meta-ranker/alt-data/coverage`
+- `GET /api/experiments/meta-ranker/strategy-queue-share`
 - `GET /api/performance/regime`
 - `GET /api/consensus/signals`
 - `GET /api/ticker/{symbol}/attribution`
@@ -224,6 +233,70 @@ Plus top-level:
 - Why it matters: provides a single strategy-performance read without client-side endpoint stitching
 - Refresh behavior: updates as strategy scoring/stability/performance aggregation writes persist
 - Depth: deep (merged strategy profile + reliability + realized performance signal)
+
+### `/api/experiments/leaderboard`, `/api/experiments/trends`, `/api/experiments/summary`
+
+- Source: `experiment_results` (ML/deterministic run metrics) plus strategy rollups used by read models
+- Focus:
+  - compare deterministic strategies and ML challengers on shared horizons (`5d`, `20d`)
+  - expose rank ordering, time-series movement, and compact mover summaries
+- Why it matters: single experiment comparison layer without client-side metric stitching
+- Refresh behavior: updates when experiment runs write results
+- Depth: deep (cross-experiment performance lifecycle)
+
+### `/api/experiments/meta-ranker/latest`
+
+- Source: `prediction_queue.metadata_json` (`ml_challenger` block)
+- Focus:
+  - latest challenger scoring output (`baseScore`, `pOutperform`, `pFail`, `finalRankScore`)
+  - penalties (`crowdingPenalty`, `regimeMismatchPenalty`)
+  - strategy attribution on each symbol (`strategy`)
+- Refresh behavior: updates as nightly challenger shadow run writes queue metadata
+- Depth: deep (symbol-level challenger explainability)
+
+### `/api/experiments/meta-ranker/intents/latest` and `/api/experiments/meta-ranker/intents/replay`
+
+- Source:
+  - latest: `trade_intents`
+  - replay: `trade_intents` joined to realized outcomes (`discovery_outcomes`)
+- Focus:
+  - deterministic entry/exit intent contracts generated from challenger selections
+  - replay lens on realized outcomes versus intended trades
+- Why it matters: transparent challenger-to-realized path for audit and promotion decisions
+- Refresh behavior: updates as new challenger runs create intents and as outcomes mature
+- Depth: deep (intent provenance + realized validation)
+
+### `/api/experiments/meta-ranker/promotion-readiness`
+
+- Source: latest challenger `experiment_results.metadata_json` gates and realized label rollups
+- Focus:
+  - consolidated gate card (`data_quality`, sample readiness, threshold, significance, promoted flag)
+  - one operational decision payload (`ready`, `reason`, gate details)
+- Why it matters: avoids manual gate reconstruction across multiple datasets
+- Refresh behavior: updates when challenger runs write promotion metadata and realized labels refresh
+- Depth: deep (governance and promotion control plane)
+
+### `/api/experiments/meta-ranker/alt-data/coverage`
+
+- Source:
+  - `alt_data_daily` grouped by `as_of_date` and `source`
+  - recent challenger `experiment_results` metadata (`alt_data`, `alt_data_ingest`)
+- Focus:
+  - per-day/per-source symbol counts and average quality
+  - run-level ingestion diagnostics (`written`, `requested_symbols`, `coverage`, `mode`)
+- Why it matters: compare low-cost alt-data mode quality before judging alpha impact
+- Refresh behavior: updates when ingestion writes `alt_data_daily` and challenger runs persist metadata
+- Depth: medium-deep (data quality and readiness lens)
+
+### `/api/experiments/meta-ranker/strategy-queue-share`
+
+- Source: `prediction_queue.metadata_json`
+- Focus:
+  - strategy attribution share in current queue (`count`, `share`)
+  - queue routing context by strategy (`queue_paths` breakdown such as `watchlist`, `diversity_topup`)
+- Why it matters: verifies multi-strategy intake is operationally represented in queued candidates
+- Refresh behavior: updates whenever queue assembly writes/updates metadata
+- Depth: medium-deep (routing diversity observability)
 
 ### `/api/performance/regime`
 

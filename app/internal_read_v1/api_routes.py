@@ -326,6 +326,23 @@ def api_experiments_meta_ranker_alt_data_coverage(
     )
 
 
+@router.get("/experiments/meta-ranker/strategy-queue-share")
+def api_experiments_meta_ranker_strategy_queue_share(
+    request: Request,
+    tenant_id: str = "default",
+    as_of_date: str | None = None,
+    status: str = "pending",
+    limit: int = 50,
+) -> dict[str, Any]:
+    n = max(1, min(500, int(limit)))
+    return _svc(request).get_meta_ranker_strategy_queue_share(
+        tenant_id=tenant_id,
+        as_of_date=as_of_date,
+        status=status,
+        limit=n,
+    )
+
+
 @router.get("/consensus/signals")
 def api_consensus_signals(
     request: Request,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from uuid import uuid4
 
-from app.ui.middle.explainability_rank_trends import build_ranking_movers
+from app.services.explainability_rank_trends import build_ranking_movers
 
 
 def test_build_ranking_movers_skips_null_scores_in_legacy_snapshot_rows() -> None:

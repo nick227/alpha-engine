@@ -56,6 +56,7 @@ Key endpoint families:
 - **Market**: `/api/quote/{ticker}`, `/api/history/{ticker}`, `/api/candles/{ticker}`, `/api/stats/{ticker}`, `/api/company/{ticker}`
 - **Recommendations**: `/api/recommendations/latest`, `/api/recommendations/best`, `/api/recommendations/{ticker}`, `/api/recommendations/under/{price_cap}`
 - **Strategy/Model**: `/api/strategies/catalog`, `/api/strategies/{strategy_id}/stability`, `/api/strategies/{strategy_id}/performance`
+- **Experiments/Meta-Ranker**: `/api/experiments/leaderboard`, `/api/experiments/trends`, `/api/experiments/summary`, `/api/experiments/meta-ranker/latest`, `/api/experiments/meta-ranker/intents/latest`, `/api/experiments/meta-ranker/intents/replay`, `/api/experiments/meta-ranker/promotion-readiness`, `/api/experiments/meta-ranker/alt-data/coverage`, `/api/experiments/meta-ranker/strategy-queue-share`
 - **Consensus/Attribution/Accuracy**: `/api/consensus/signals`, `/api/ticker/{symbol}/attribution`, `/api/ticker/{symbol}/accuracy`
 - **Ops/Freshness**: `/api/system/heartbeat`, `/api/system/data-health`, `/api/predictions/runs/latest`, `/api/predictions/{prediction_id}/context`, `/api/engine/calendar`
 - **Ranking Explainability**: `/ranking/top`, `/ranking/movers`, `/ticker/{symbol}/why`, `/ticker/{symbol}/performance`
