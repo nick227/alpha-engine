@@ -200,6 +200,35 @@ def api_experiments_leaderboard(
     }
 
 
+@router.get("/experiments/trends")
+def api_experiments_trends(
+    request: Request,
+    tenant_id: str = "default",
+    horizon: str = "5d",
+    class_key: str | None = None,
+    experiment_key: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    n = max(1, min(1000, limit))
+    hz = str(horizon).strip().lower()
+    if hz not in {"5d", "20d"}:
+        raise HTTPException(status_code=400, detail="invalid horizon; use 5d or 20d")
+    rows = _svc(request).get_experiment_trends(
+        tenant_id=tenant_id,
+        horizon=hz,
+        class_key=class_key,
+        experiment_key=experiment_key,
+        limit=n,
+    )
+    return {
+        "tenant_id": tenant_id,
+        "horizon": hz,
+        "class_key": class_key,
+        "experiment_key": experiment_key,
+        "rows": rows,
+    }
+
+
 @router.get("/consensus/signals")
 def api_consensus_signals(
     request: Request,

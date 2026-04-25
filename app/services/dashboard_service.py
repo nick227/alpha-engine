@@ -311,6 +311,106 @@ class DashboardService:
         )
         return out[:n]
 
+    def get_experiment_trends(
+        self,
+        *,
+        tenant_id: str = "default",
+        horizon: str = "5d",
+        class_key: str | None = None,
+        experiment_key: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        hz = str(horizon).strip().lower()
+        if hz not in {"5d", "20d"}:
+            hz = "5d"
+        n = max(1, min(1000, int(limit)))
+        forecast_days = 5 if hz == "5d" else 20
+        metric_col = "metric_5d_return" if hz == "5d" else "metric_20d_return"
+
+        where_parts = ["er.tenant_id = ?"]
+        params: list[Any] = [str(tenant_id)]
+        if class_key:
+            where_parts.append("er.class_key = ?")
+            params.append(str(class_key))
+        if experiment_key:
+            where_parts.append("er.experiment_key = ?")
+            params.append(str(experiment_key))
+
+        ml_rows = self.store.conn.execute(
+            f"""
+            SELECT
+              substr(COALESCE(erun.completed_at, erun.started_at, er.created_at), 1, 10) AS day,
+              er.class_key AS class_key,
+              er.experiment_key AS experiment_key,
+              er.{metric_col} AS metric_return,
+              er.win_rate AS win_rate,
+              er.drawdown AS drawdown,
+              er.turnover AS turnover,
+              er.created_at AS created_at
+            FROM experiment_results er
+            LEFT JOIN experiment_runs erun
+              ON erun.id = er.run_id AND erun.tenant_id = er.tenant_id
+            WHERE {" AND ".join(where_parts)}
+            ORDER BY day DESC, er.created_at DESC
+            LIMIT ?
+            """,
+            (*params, n),
+        ).fetchall()
+
+        det_where = ["ps.tenant_id = ?", "ps.forecast_days = ?"]
+        det_params: list[Any] = [str(tenant_id), int(forecast_days)]
+        if class_key and str(class_key) != "deterministic_strategy":
+            det_rows = []
+        else:
+            if experiment_key:
+                det_where.append("ps.strategy_id = ?")
+                det_params.append(str(experiment_key))
+            det_rows = self.store.conn.execute(
+                f"""
+                SELECT
+                  substr(ps.created_at, 1, 10) AS day,
+                  'deterministic_strategy' AS class_key,
+                  ps.strategy_id AS experiment_key,
+                  AVG(ps.total_return_actual) AS metric_return,
+                  AVG(ps.direction_hit_rate) AS win_rate,
+                  AVG(ps.magnitude_error) AS drawdown,
+                  NULL AS turnover,
+                  MAX(ps.created_at) AS created_at
+                FROM prediction_scores ps
+                WHERE {" AND ".join(det_where)}
+                GROUP BY substr(ps.created_at, 1, 10), ps.strategy_id
+                ORDER BY day DESC, created_at DESC
+                LIMIT ?
+                """,
+                (*det_params, n),
+            ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for row in [*(ml_rows or []), *(det_rows or [])]:
+            out.append(
+                {
+                    "day": str(row["day"] or ""),
+                    "classKey": str(row["class_key"]),
+                    "experimentKey": str(row["experiment_key"]),
+                    "metricReturn": (float(row["metric_return"]) if row["metric_return"] is not None else None),
+                    "winRate": (float(row["win_rate"]) if row["win_rate"] is not None else None),
+                    "drawdown": (float(row["drawdown"]) if row["drawdown"] is not None else None),
+                    "turnover": (float(row["turnover"]) if row["turnover"] is not None else None),
+                    "horizon": hz,
+                    "createdAt": str(row["created_at"] or ""),
+                }
+            )
+
+        out.sort(
+            key=lambda r: (
+                str(r["day"]),
+                str(r["classKey"]),
+                str(r["experimentKey"]),
+            ),
+            reverse=True,
+        )
+        return out[:n]
+
     def list_tickers(self, *, tenant_id: str = "default") -> list[str]:
         """Active universe: static (YAML) ∪ candidate_queue status=admitted."""
         try:
