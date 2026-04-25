@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from functools import lru_cache
+import json
 
 from app.services.engine_read_store import (
     ChampionRow,
@@ -222,6 +223,84 @@ class DashboardService:
 
     def list_tenants(self) -> list[str]:
         return self.store.list_tenants()
+
+    def get_meta_ranker_latest(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        n = max(1, min(2000, int(limit)))
+        if as_of_date is None:
+            row = self.store.conn.execute(
+                """
+                SELECT MAX(as_of_date) AS as_of_date
+                FROM prediction_queue
+                WHERE tenant_id = ?
+                """,
+                (str(tenant_id),),
+            ).fetchone()
+            as_of = str(row["as_of_date"]) if row and row["as_of_date"] is not None else None
+        else:
+            as_of = str(as_of_date)
+        if not as_of:
+            return {"tenant_id": tenant_id, "as_of_date": None, "rows": []}
+
+        rows = self.store.conn.execute(
+            """
+            SELECT symbol, source, status, metadata_json
+            FROM prediction_queue
+            WHERE tenant_id = ? AND as_of_date = ?
+            ORDER BY priority DESC, created_at DESC, symbol ASC
+            LIMIT ?
+            """,
+            (str(tenant_id), str(as_of), int(n)),
+        ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                md = json.loads(str(r["metadata_json"] or "{}"))
+            except Exception:
+                md = {}
+            if not isinstance(md, dict):
+                md = {}
+            ml = md.get("ml_challenger")
+            if not isinstance(ml, dict):
+                continue
+            penalties = ml.get("penalties") if isinstance(ml.get("penalties"), dict) else {}
+            out.append(
+                {
+                    "symbol": str(r["symbol"]),
+                    "source": str(r["source"]),
+                    "status": str(r["status"]),
+                    "strategy": md.get("strategy") or md.get("primary_strategy"),
+                    "experimentClass": ml.get("experiment_class"),
+                    "experimentKey": ml.get("experiment_key"),
+                    "baseScore": ml.get("base_score"),
+                    "pOutperform": ml.get("p_outperform"),
+                    "pFail": ml.get("p_fail"),
+                    "finalRankScore": ml.get("final_rank_score") if ml.get("final_rank_score") is not None else ml.get("score"),
+                    "crowdingPenalty": penalties.get("crowding"),
+                    "regimeMismatchPenalty": penalties.get("regime_mismatch"),
+                    "as_of_date": ml.get("as_of_date") or as_of,
+                    "mode": ml.get("mode"),
+                    "nonReplacing": bool(ml.get("non_replacing", True)),
+                }
+            )
+
+        out.sort(
+            key=lambda x: (
+                -999999.0 if x["finalRankScore"] is None else -float(x["finalRankScore"]),
+                str(x["symbol"]),
+            )
+        )
+        return {
+            "tenant_id": tenant_id,
+            "as_of_date": as_of,
+            "rows": out[:n],
+        }
 
     def get_experiment_leaderboard(
         self,
