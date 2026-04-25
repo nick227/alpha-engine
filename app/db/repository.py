@@ -642,6 +642,24 @@ class AlphaRepository:
         CREATE INDEX IF NOT EXISTS idx_experiment_cohort_lookup
           ON experiment_cohort_items(tenant_id, class_key, experiment_key, as_of_date, symbol);
 
+        CREATE TABLE IF NOT EXISTS experiment_realized_labels (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            run_id TEXT NOT NULL,
+            class_key TEXT NOT NULL,
+            experiment_key TEXT NOT NULL,
+            as_of_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            horizon_days INTEGER NOT NULL,
+            return_pct REAL NOT NULL,
+            is_win INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, run_id, class_key, experiment_key, symbol, horizon_days)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_experiment_realized_lookup
+          ON experiment_realized_labels(tenant_id, class_key, experiment_key, horizon_days, as_of_date);
+
         CREATE TABLE IF NOT EXISTS candidate_queue (
             tenant_id TEXT NOT NULL DEFAULT 'default',
             ticker TEXT NOT NULL,
@@ -2632,6 +2650,83 @@ class AlphaRepository:
         )
         self.conn.commit()
         return len(rows)
+
+    def refresh_experiment_realized_labels_for_run(
+        self,
+        *,
+        run_id: str,
+        class_key: str,
+        experiment_key: str,
+        tenant_id: str = "default",
+    ) -> int:
+        cohort_rows = self.conn.execute(
+            """
+            SELECT as_of_date, symbol
+            FROM experiment_cohort_items
+            WHERE tenant_id = ? AND run_id = ? AND class_key = ? AND experiment_key = ?
+            """,
+            (str(tenant_id), str(run_id), str(class_key), str(experiment_key)),
+        ).fetchall()
+        if not cohort_rows:
+            return 0
+
+        inserted = 0
+        for c in cohort_rows:
+            as_of = str(c["as_of_date"])
+            sym = str(c["symbol"]).strip().upper()
+            outcome_rows = self.conn.execute(
+                """
+                SELECT horizon_days, return_pct
+                FROM discovery_outcomes
+                WHERE tenant_id = ?
+                  AND watchlist_date = ?
+                  AND symbol = ?
+                  AND horizon_days IN (5, 20)
+                  AND return_pct IS NOT NULL
+                """,
+                (str(tenant_id), as_of, sym),
+            ).fetchall()
+            for o in outcome_rows:
+                ret = float(o["return_pct"])
+                hz = int(o["horizon_days"])
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO experiment_realized_labels
+                      (id, tenant_id, run_id, class_key, experiment_key, as_of_date, symbol, horizon_days, return_pct, is_win)
+                    VALUES (
+                      COALESCE(
+                        (
+                          SELECT id FROM experiment_realized_labels
+                          WHERE tenant_id = ? AND run_id = ? AND class_key = ? AND experiment_key = ? AND symbol = ? AND horizon_days = ?
+                          LIMIT 1
+                        ),
+                        ?
+                      ),
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        str(tenant_id),
+                        str(run_id),
+                        str(class_key),
+                        str(experiment_key),
+                        sym,
+                        hz,
+                        str(uuid4()),
+                        str(tenant_id),
+                        str(run_id),
+                        str(class_key),
+                        str(experiment_key),
+                        as_of,
+                        sym,
+                        hz,
+                        ret,
+                        1 if ret > 0.0 else 0,
+                    ),
+                )
+                inserted += 1
+        self.conn.commit()
+        return inserted
 
     def prediction_queue_status_counts(
         self,

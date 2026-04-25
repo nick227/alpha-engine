@@ -117,35 +117,20 @@ def _evaluate_promotion(
     """
     ml_rows = repo.conn.execute(
         """
-        SELECT metric_5d_return, win_rate, drawdown, metadata_json
-        FROM experiment_results
+        SELECT return_pct, is_win
+        FROM experiment_realized_labels
         WHERE tenant_id = ?
           AND class_key = ?
           AND experiment_key = ?
-          AND created_at >= datetime('now', '-' || ? || ' days')
-        ORDER BY created_at ASC
+          AND horizon_days = 5
+          AND as_of_date >= date('now', '-' || ? || ' days')
+        ORDER BY as_of_date ASC
         """,
         (str(tenant_id), ML_CHALLENGER_CLASS_KEY, str(experiment_key), int(window_days)),
     ).fetchall()
-    ml_returns: list[float] = []
-    ml_wins: list[float] = []
-    ml_dd: list[float] = []
-    for r in ml_rows:
-        md = _load_json_dict(r["metadata_json"])
-        realized = md.get("realized") if isinstance(md, dict) else {}
-        h5 = realized.get("h5") if isinstance(realized, dict) else {}
-        sample_n = int(h5.get("sample_count") or 0) if isinstance(h5, dict) else 0
-        if sample_n < int(ML_PROMOTION_MIN_REALIZED_SAMPLES):
-            continue
-        ret = h5.get("avg_return")
-        win = h5.get("win_rate")
-        dd = h5.get("drawdown")
-        if ret is not None:
-            ml_returns.append(float(ret))
-        if win is not None:
-            ml_wins.append(float(win))
-        if dd is not None:
-            ml_dd.append(float(dd))
+    ml_returns = [float(r["return_pct"]) for r in ml_rows if r["return_pct"] is not None]
+    ml_wins = [float(r["is_win"]) for r in ml_rows if r["is_win"] is not None]
+    ml_dd = [float(x) for x in ml_returns]
 
     baseline_rows = repo.conn.execute(
         """
@@ -182,7 +167,7 @@ def _evaluate_promotion(
     has_required = all(
         ch.get(k) is not None and bs.get(k) is not None
         for k in ("sharpe", "win_rate", "drawdown")
-    )
+    ) and len(ml_returns) >= int(ML_PROMOTION_MIN_REALIZED_SAMPLES)
     if not has_required:
         return {
             "promoted": False,
@@ -262,6 +247,42 @@ def _compute_realized_metrics(
     }
 
 
+def _compute_realized_metrics_from_labels(
+    *,
+    repo: AlphaRepository,
+    run_id: str,
+    tenant_id: str,
+    experiment_key: str,
+) -> dict[str, Any]:
+    rows = repo.conn.execute(
+        """
+        SELECT horizon_days, return_pct, is_win
+        FROM experiment_realized_labels
+        WHERE tenant_id = ? AND run_id = ? AND class_key = ? AND experiment_key = ?
+        """,
+        (str(tenant_id), str(run_id), ML_CHALLENGER_CLASS_KEY, str(experiment_key)),
+    ).fetchall()
+    h5_vals = [float(r["return_pct"]) for r in rows if int(r["horizon_days"]) == 5]
+    h20_vals = [float(r["return_pct"]) for r in rows if int(r["horizon_days"]) == 20]
+
+    def summarize(vals: list[float]) -> dict[str, Any]:
+        if not vals:
+            return {"sample_count": 0, "avg_return": None, "win_rate": None, "drawdown": None, "sharpe": None}
+        wins = [1.0 if v > 0.0 else 0.0 for v in vals]
+        return {
+            "sample_count": len(vals),
+            "avg_return": (sum(vals) / len(vals)),
+            "win_rate": (sum(wins) / len(wins)),
+            "drawdown": min(vals),
+            "sharpe": _sharpe_from_series(vals),
+        }
+
+    return {
+        "h5": summarize(h5_vals),
+        "h20": summarize(h20_vals),
+    }
+
+
 def run_ml_challenger_meta_ranker(
     *,
     repo: AlphaRepository,
@@ -323,13 +344,19 @@ def run_ml_challenger_meta_ranker(
         symbols=cohort_symbols,
         tenant_id=str(tenant_id),
     )
+    labels_inserted = repo.refresh_experiment_realized_labels_for_run(
+        run_id=str(run_id),
+        class_key=ML_CHALLENGER_CLASS_KEY,
+        experiment_key=str(experiment_key),
+        tenant_id=str(tenant_id),
+    )
 
     feature_attribution = _compute_feature_attribution(rows)
-    realized = _compute_realized_metrics(
+    realized = _compute_realized_metrics_from_labels(
         repo=repo,
+        run_id=str(run_id),
         tenant_id=str(tenant_id),
-        as_of_date=str(as_of_date),
-        cohort_symbols=cohort_symbols,
+        experiment_key=str(experiment_key),
     )
     avg_score = (sum(scores) / len(scores)) if scores else None
     metric_5d = realized.get("h5", {}).get("avg_return")
@@ -344,6 +371,9 @@ def run_ml_challenger_meta_ranker(
         "cohort": {
             "as_of_date": str(as_of_date),
             "symbol_count": int(cohort_count),
+        },
+        "labels": {
+            "inserted": int(labels_inserted),
         },
         "realized": realized,
         "filters": dict(shadow.get("dropped") or {}),
