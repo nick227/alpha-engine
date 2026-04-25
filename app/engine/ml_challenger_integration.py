@@ -7,6 +7,7 @@ from typing import Any
 
 from app.db.repository import AlphaRepository
 from app.engine.meta_ranker_runner import run_meta_ranker_shadow
+from app.engine.meta_ranker_trade_intents import build_and_store_trade_intents
 
 ML_CHALLENGER_ENABLED = str(os.getenv("ML_CHALLENGER_ENABLED", "1")).strip().lower() not in {
     "0",
@@ -460,6 +461,17 @@ def run_ml_challenger_meta_ranker(
         symbols=cohort_symbols,
         tenant_id=str(tenant_id),
     )
+    intent_summary = build_and_store_trade_intents(
+        repo=repo,
+        run_id=str(run_id),
+        class_key=ML_CHALLENGER_CLASS_KEY,
+        experiment_key=str(experiment_key),
+        as_of_date=str(as_of_date),
+        tenant_id=str(tenant_id),
+        selected_symbols=cohort_symbols,
+        score_map=dict(shadow.get("score_details") or {}),
+        horizons=(5, 20),
+    )
     labels_inserted = repo.refresh_experiment_realized_labels_for_run(
         run_id=str(run_id),
         class_key=ML_CHALLENGER_CLASS_KEY,
@@ -488,6 +500,7 @@ def run_ml_challenger_meta_ranker(
             "as_of_date": str(as_of_date),
             "symbol_count": int(cohort_count),
         },
+        "trade_intents": intent_summary,
         "labels": {
             "inserted": int(labels_inserted),
         },

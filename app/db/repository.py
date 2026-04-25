@@ -660,6 +660,31 @@ class AlphaRepository:
         CREATE INDEX IF NOT EXISTS idx_experiment_realized_lookup
           ON experiment_realized_labels(tenant_id, class_key, experiment_key, horizon_days, as_of_date);
 
+        CREATE TABLE IF NOT EXISTS trade_intents (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            run_id TEXT NOT NULL,
+            class_key TEXT NOT NULL,
+            experiment_key TEXT NOT NULL,
+            as_of_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            horizon_days INTEGER NOT NULL,
+            entry_date TEXT,
+            entry_price REAL,
+            exit_date TEXT,
+            exit_price REAL,
+            entry_price_model TEXT NOT NULL DEFAULT 'next_day_open',
+            exit_price_model TEXT NOT NULL DEFAULT 'horizon_close',
+            intent_status TEXT NOT NULL DEFAULT 'planned',
+            score_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, run_id, class_key, experiment_key, symbol, horizon_days)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_trade_intents_lookup
+          ON trade_intents(tenant_id, class_key, experiment_key, as_of_date, symbol, horizon_days);
+
         CREATE TABLE IF NOT EXISTS candidate_queue (
             tenant_id TEXT NOT NULL DEFAULT 'default',
             ticker TEXT NOT NULL,
@@ -2727,6 +2752,49 @@ class AlphaRepository:
                 inserted += 1
         self.conn.commit()
         return inserted
+
+    def upsert_trade_intents(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        tenant_id: str = "default",
+    ) -> int:
+        if not rows:
+            return 0
+        payload = []
+        for r in rows:
+            payload.append(
+                (
+                    str(r.get("id") or uuid4()),
+                    str(tenant_id),
+                    str(r.get("run_id")),
+                    str(r.get("class_key")),
+                    str(r.get("experiment_key")),
+                    str(r.get("as_of_date")),
+                    str(r.get("symbol")).upper(),
+                    int(r.get("horizon_days") or 5),
+                    r.get("entry_date"),
+                    r.get("entry_price"),
+                    r.get("exit_date"),
+                    r.get("exit_price"),
+                    str(r.get("entry_price_model") or "next_day_open"),
+                    str(r.get("exit_price_model") or "horizon_close"),
+                    str(r.get("intent_status") or "planned"),
+                    str(r.get("score_json") or "{}"),
+                    str(r.get("metadata_json") or "{}"),
+                )
+            )
+        self.conn.executemany(
+            """
+            INSERT OR REPLACE INTO trade_intents
+              (id, tenant_id, run_id, class_key, experiment_key, as_of_date, symbol, horizon_days,
+               entry_date, entry_price, exit_date, exit_price, entry_price_model, exit_price_model, intent_status, score_json, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            payload,
+        )
+        self.conn.commit()
+        return len(payload)
 
     def prediction_queue_status_counts(
         self,

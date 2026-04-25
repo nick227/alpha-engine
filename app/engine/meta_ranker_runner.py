@@ -47,6 +47,7 @@ def run_meta_ranker_shadow(
 
     updates: list[dict[str, Any]] = []
     scored_rows: list[dict[str, Any]] = []
+    score_details: dict[str, dict[str, Any]] = {}
     for row in rows:
         p_out, p_fail = predict_meta_ranker_probs(row)
         fused = combine_meta_ranker_score(row=row, p_outperform=p_out, p_fail=p_fail)
@@ -80,6 +81,13 @@ def run_meta_ranker_shadow(
                 "final_rank_score": final_score,
             }
         )
+        score_details[str(row["symbol"])] = {
+            "base_score": float(row.get("base_score") or 0.0),
+            "p_outperform": float(p_out),
+            "p_fail": float(p_fail),
+            "final_rank_score": final_score,
+            "penalties": fused["penalties"],
+        }
 
     repo.update_prediction_queue_metadata_many(rows=updates, tenant_id=str(tenant_id))
     scored_rows.sort(key=lambda r: -float(r["final_rank_score"]))
@@ -88,6 +96,7 @@ def run_meta_ranker_shadow(
         "updated_rows": updates,
         "selected_symbols": selected,
         "scores": [float(r["final_rank_score"]) for r in scored_rows],
+        "score_details": score_details,
         "dropped": dropped,
         "quality": quality,
     }
