@@ -658,11 +658,13 @@ def main(argv: list[str] | None = None) -> int:
 
                 supplement_summary: dict[str, Any] = {}
                 diversity_topup_summary: dict[str, Any] = {}
+                ml_challenger_summary: dict[str, Any] = {}
                 if not bool(args.no_threshold_supplement):
                     from app.engine.discovery_integration import (
                         merge_strategy_threshold_queue,
                         supplement_prediction_queue_from_discovery,
                     )
+                    from app.engine.ml_challenger_integration import run_ml_challenger_meta_ranker
 
                     supplement_summary = supplement_prediction_queue_from_discovery(
                         repo=repo,
@@ -676,6 +678,11 @@ def main(argv: list[str] | None = None) -> int:
                     diversity_topup_summary = merge_strategy_threshold_queue(
                         repo=repo,
                         disc_summary=disc_summary,
+                        as_of_date=asof,
+                        tenant_id=str(args.tenant_id),
+                    )
+                    ml_challenger_summary = run_ml_challenger_meta_ranker(
+                        repo=repo,
                         as_of_date=asof,
                         tenant_id=str(args.tenant_id),
                     )
@@ -757,6 +764,7 @@ def main(argv: list[str] | None = None) -> int:
                         },
                         "threshold_supplement": supplement_summary,
                         "strategy_diversity_topup": diversity_topup_summary,
+                        "ml_challenger": ml_challenger_summary,
                         "admission": admission_summary,
                         "watchlist_size": len(wl),
                         "stats_rows": len(all_rows),

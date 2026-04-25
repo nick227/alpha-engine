@@ -177,6 +177,29 @@ def api_performance_regime(request: Request, tenant_id: str = "default") -> dict
     return get_regime_performance(_svc(request).store.conn, tenant_id=tenant_id)
 
 
+@router.get("/experiments/leaderboard")
+def api_experiments_leaderboard(
+    request: Request,
+    tenant_id: str = "default",
+    horizon: str = "5d",
+    limit: int = 50,
+) -> dict[str, Any]:
+    n = max(1, min(500, limit))
+    hz = str(horizon).strip().lower()
+    if hz not in {"5d", "20d"}:
+        raise HTTPException(status_code=400, detail="invalid horizon; use 5d or 20d")
+    rows = _svc(request).get_experiment_leaderboard(
+        tenant_id=tenant_id,
+        horizon=hz,
+        limit=n,
+    )
+    return {
+        "tenant_id": tenant_id,
+        "horizon": hz,
+        "rows": rows,
+    }
+
+
 @router.get("/consensus/signals")
 def api_consensus_signals(
     request: Request,

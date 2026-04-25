@@ -223,6 +223,94 @@ class DashboardService:
     def list_tenants(self) -> list[str]:
         return self.store.list_tenants()
 
+    def get_experiment_leaderboard(
+        self,
+        *,
+        tenant_id: str = "default",
+        horizon: str = "5d",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        hz = str(horizon).strip().lower()
+        if hz not in {"5d", "20d"}:
+            hz = "5d"
+        n = max(1, min(500, int(limit)))
+        metric_col = "metric_5d_return" if hz == "5d" else "metric_20d_return"
+
+        ml_rows = self.store.conn.execute(
+            f"""
+            WITH latest_runs AS (
+              SELECT class_key, experiment_key, MAX(started_at) AS max_started_at
+              FROM experiment_runs
+              WHERE tenant_id = ?
+              GROUP BY class_key, experiment_key
+            ),
+            latest_run_ids AS (
+              SELECT er.id, er.class_key, er.experiment_key
+              FROM experiment_runs er
+              JOIN latest_runs lr
+                ON lr.class_key = er.class_key
+               AND lr.experiment_key = er.experiment_key
+               AND lr.max_started_at = er.started_at
+              WHERE er.tenant_id = ?
+            )
+            SELECT
+              r.class_key,
+              r.experiment_key,
+              r."""
+            + metric_col
+            + """ AS metric_return,
+              r.win_rate,
+              r.drawdown,
+              r.turnover,
+              r.metadata_json,
+              r.created_at AS updated_at
+            FROM experiment_results r
+            JOIN latest_run_ids lid ON lid.id = r.run_id
+            WHERE r.tenant_id = ?
+            """,
+            (str(tenant_id), str(tenant_id), str(tenant_id)),
+        ).fetchall()
+
+        det_rows = self.store.conn.execute(
+            """
+            SELECT
+              'deterministic_strategy' AS class_key,
+              sp.strategy_id AS experiment_key,
+              sp.avg_return AS metric_return,
+              sp.accuracy AS win_rate,
+              NULL AS drawdown,
+              NULL AS turnover,
+              '{}' AS metadata_json,
+              sp.updated_at AS updated_at
+            FROM strategy_performance sp
+            WHERE sp.tenant_id = ? AND LOWER(sp.horizon) = ?
+            """,
+            (str(tenant_id), hz),
+        ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for row in [*(ml_rows or []), *(det_rows or [])]:
+            out.append(
+                {
+                    "classKey": str(row["class_key"]),
+                    "experimentKey": str(row["experiment_key"]),
+                    "metricReturn": (float(row["metric_return"]) if row["metric_return"] is not None else None),
+                    "winRate": (float(row["win_rate"]) if row["win_rate"] is not None else None),
+                    "drawdown": (float(row["drawdown"]) if row["drawdown"] is not None else None),
+                    "turnover": (float(row["turnover"]) if row["turnover"] is not None else None),
+                    "metadataJson": str(row["metadata_json"] or "{}"),
+                    "updatedAt": str(row["updated_at"] or ""),
+                    "horizon": hz,
+                }
+            )
+        out.sort(
+            key=lambda r: (
+                -999999.0 if r["metricReturn"] is None else -float(r["metricReturn"]),
+                -999999.0 if r["winRate"] is None else -float(r["winRate"]),
+            )
+        )
+        return out[:n]
+
     def list_tickers(self, *, tenant_id: str = "default") -> list[str]:
         """Active universe: static (YAML) ∪ candidate_queue status=admitted."""
         try:

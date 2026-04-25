@@ -562,6 +562,72 @@ class AlphaRepository:
         CREATE INDEX IF NOT EXISTS idx_prediction_jobs_recent
           ON prediction_jobs(tenant_id, started_at DESC);
 
+        CREATE TABLE IF NOT EXISTS experiment_classes (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            class_key TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            description TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, class_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS experiments (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            class_key TEXT NOT NULL,
+            experiment_key TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'sandbox',
+            version TEXT NOT NULL DEFAULT 'v1',
+            config_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, class_key, experiment_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS experiment_runs (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            class_key TEXT NOT NULL,
+            experiment_key TEXT NOT NULL,
+            as_of_date TEXT,
+            status TEXT NOT NULL DEFAULT 'running',
+            started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS experiment_results (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            run_id TEXT NOT NULL,
+            class_key TEXT NOT NULL,
+            experiment_key TEXT NOT NULL,
+            metric_5d_return REAL,
+            metric_20d_return REAL,
+            win_rate REAL,
+            drawdown REAL,
+            turnover REAL,
+            regime_json TEXT NOT NULL DEFAULT '{}',
+            calibration_json TEXT NOT NULL DEFAULT '{}',
+            overlap_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_experiments_lookup
+          ON experiments(tenant_id, class_key, experiment_key, active);
+
+        CREATE INDEX IF NOT EXISTS idx_experiment_runs_lookup
+          ON experiment_runs(tenant_id, class_key, experiment_key, started_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_experiment_results_lookup
+          ON experiment_results(tenant_id, class_key, experiment_key, created_at DESC);
+
         CREATE TABLE IF NOT EXISTS candidate_queue (
             tenant_id TEXT NOT NULL DEFAULT 'default',
             ticker TEXT NOT NULL,
@@ -2282,6 +2348,222 @@ class AlphaRepository:
                 payload,
             )
         self.conn.commit()
+
+    def update_prediction_queue_metadata_many(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        tenant_id: str = "default",
+    ) -> None:
+        """
+        Bulk metadata-only updates for prediction_queue.
+
+        Each row must include: as_of_date, symbol, source, metadata_json.
+        """
+        if not rows:
+            return
+        payload = []
+        for r in rows:
+            payload.append(
+                (
+                    str(r.get("metadata_json") or "{}"),
+                    str(tenant_id),
+                    str(r.get("as_of_date")),
+                    str(r.get("symbol") or "").upper(),
+                    str(r.get("source") or "discovery"),
+                )
+            )
+        self.conn.executemany(
+            """
+            UPDATE prediction_queue
+            SET metadata_json = ?
+            WHERE tenant_id = ? AND as_of_date = ? AND symbol = ? AND source = ?
+            """,
+            payload,
+        )
+        self.conn.commit()
+
+    def upsert_experiment_class(
+        self,
+        *,
+        class_key: str,
+        display_name: str,
+        description: str = "",
+        active: bool = True,
+        tenant_id: str = "default",
+    ) -> str:
+        row = self.conn.execute(
+            """
+            SELECT id
+            FROM experiment_classes
+            WHERE tenant_id = ? AND class_key = ?
+            """,
+            (str(tenant_id), str(class_key)),
+        ).fetchone()
+        rid = str(row["id"]) if row is not None else str(uuid4())
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO experiment_classes
+              (id, tenant_id, class_key, display_name, description, active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM experiment_classes WHERE id = ?), CURRENT_TIMESTAMP))
+            """,
+            (
+                rid,
+                str(tenant_id),
+                str(class_key),
+                str(display_name),
+                str(description),
+                1 if bool(active) else 0,
+                rid,
+            ),
+        )
+        self.conn.commit()
+        return rid
+
+    def upsert_experiment(
+        self,
+        *,
+        class_key: str,
+        experiment_key: str,
+        display_name: str,
+        status: str = "sandbox",
+        version: str = "v1",
+        config_json: str = "{}",
+        metadata_json: str = "{}",
+        active: bool = True,
+        tenant_id: str = "default",
+    ) -> str:
+        row = self.conn.execute(
+            """
+            SELECT id, created_at
+            FROM experiments
+            WHERE tenant_id = ? AND class_key = ? AND experiment_key = ?
+            """,
+            (str(tenant_id), str(class_key), str(experiment_key)),
+        ).fetchone()
+        rid = str(row["id"]) if row is not None else str(uuid4())
+        created_at = str(row["created_at"]) if row is not None else None
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO experiments
+              (id, tenant_id, class_key, experiment_key, display_name, status, version, config_json, metadata_json, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                rid,
+                str(tenant_id),
+                str(class_key),
+                str(experiment_key),
+                str(display_name),
+                str(status),
+                str(version),
+                str(config_json or "{}"),
+                str(metadata_json or "{}"),
+                1 if bool(active) else 0,
+                created_at or datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self.conn.commit()
+        return rid
+
+    def start_experiment_run(
+        self,
+        *,
+        class_key: str,
+        experiment_key: str,
+        as_of_date: str | None = None,
+        metadata_json: str = "{}",
+        tenant_id: str = "default",
+    ) -> str:
+        run_id = str(uuid4())
+        self.conn.execute(
+            """
+            INSERT INTO experiment_runs (id, tenant_id, class_key, experiment_key, as_of_date, status, started_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, 'running', CURRENT_TIMESTAMP, ?)
+            """,
+            (
+                run_id,
+                str(tenant_id),
+                str(class_key),
+                str(experiment_key),
+                (str(as_of_date) if as_of_date else None),
+                str(metadata_json or "{}"),
+            ),
+        )
+        self.conn.commit()
+        return run_id
+
+    def finish_experiment_run(
+        self,
+        *,
+        run_id: str,
+        status: str,
+        metadata_json: str | None = None,
+        tenant_id: str = "default",
+    ) -> None:
+        if metadata_json is None:
+            self.conn.execute(
+                """
+                UPDATE experiment_runs
+                SET status = ?, completed_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND tenant_id = ?
+                """,
+                (str(status), str(run_id), str(tenant_id)),
+            )
+        else:
+            self.conn.execute(
+                """
+                UPDATE experiment_runs
+                SET status = ?, completed_at = CURRENT_TIMESTAMP, metadata_json = ?
+                WHERE id = ? AND tenant_id = ?
+                """,
+                (str(status), str(metadata_json), str(run_id), str(tenant_id)),
+            )
+        self.conn.commit()
+
+    def insert_experiment_result(
+        self,
+        *,
+        run_id: str,
+        class_key: str,
+        experiment_key: str,
+        metric_5d_return: float | None = None,
+        metric_20d_return: float | None = None,
+        win_rate: float | None = None,
+        drawdown: float | None = None,
+        turnover: float | None = None,
+        regime_json: str = "{}",
+        calibration_json: str = "{}",
+        overlap_json: str = "{}",
+        metadata_json: str = "{}",
+        tenant_id: str = "default",
+    ) -> str:
+        rid = str(uuid4())
+        self.conn.execute(
+            """
+            INSERT INTO experiment_results
+              (id, tenant_id, run_id, class_key, experiment_key, metric_5d_return, metric_20d_return, win_rate, drawdown, turnover, regime_json, calibration_json, overlap_json, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rid,
+                str(tenant_id),
+                str(run_id),
+                str(class_key),
+                str(experiment_key),
+                metric_5d_return,
+                metric_20d_return,
+                win_rate,
+                drawdown,
+                turnover,
+                str(regime_json or "{}"),
+                str(calibration_json or "{}"),
+                str(overlap_json or "{}"),
+                str(metadata_json or "{}"),
+            ),
+        )
+        self.conn.commit()
+        return rid
 
     def prediction_queue_status_counts(
         self,
