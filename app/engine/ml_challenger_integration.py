@@ -347,7 +347,9 @@ def run_ml_challenger_meta_ranker(
         },
         "realized": realized,
         "filters": dict(shadow.get("dropped") or {}),
+        "data_quality": dict(shadow.get("quality") or {}),
     }
+    quality_passed = bool((result_meta.get("data_quality") or {}).get("passed", True))
     promotion = (
         _evaluate_promotion(
             repo=repo,
@@ -355,8 +357,12 @@ def run_ml_challenger_meta_ranker(
             experiment_key=str(experiment_key),
             window_days=int(ML_PROMOTION_WINDOW_DAYS),
         )
-        if ML_PROMOTION_ENABLED
-        else {"promoted": False, "reason": "promotion_disabled"}
+        if ML_PROMOTION_ENABLED and quality_passed
+        else {
+            "promoted": False,
+            "reason": ("promotion_disabled" if not ML_PROMOTION_ENABLED else "data_quality_gate_failed"),
+            "data_quality_passed": bool(quality_passed),
+        }
     )
     result_meta["promotion"] = promotion
     repo.insert_experiment_result(

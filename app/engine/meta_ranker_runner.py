@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from app.db.repository import AlphaRepository
+from app.engine.meta_ranker_data_quality import evaluate_meta_ranker_data_quality
 from app.engine.meta_ranker_features import build_meta_ranker_feature_rows
 from app.engine.meta_ranker_fusion import combine_meta_ranker_score
 from app.engine.meta_ranker_model import predict_meta_ranker_probs
@@ -39,7 +40,10 @@ def run_meta_ranker_shadow(
             "selected_symbols": [],
             "scores": [],
             "dropped": dropped,
+            "quality": evaluate_meta_ranker_data_quality([]),
         }
+
+    quality = evaluate_meta_ranker_data_quality(rows)
 
     updates: list[dict[str, Any]] = []
     scored_rows: list[dict[str, Any]] = []
@@ -85,4 +89,5 @@ def run_meta_ranker_shadow(
         "selected_symbols": selected,
         "scores": [float(r["final_rank_score"]) for r in scored_rows],
         "dropped": dropped,
+        "quality": quality,
     }

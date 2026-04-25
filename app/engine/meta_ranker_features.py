@@ -68,6 +68,23 @@ def _strategy_stats(conn: Any, *, tenant_id: str, strategy: str) -> tuple[float,
     return win, decay
 
 
+def _latest_sector(conn: Any, *, tenant_id: str, symbol: str) -> str:
+    row = conn.execute(
+        """
+        SELECT sector
+        FROM fundamentals_snapshot
+        WHERE tenant_id = ? AND ticker = ?
+        ORDER BY as_of_date DESC
+        LIMIT 1
+        """,
+        (str(tenant_id), str(symbol)),
+    ).fetchone()
+    if not row or row["sector"] is None:
+        return "unknown"
+    sector = str(row["sector"]).strip()
+    return sector if sector else "unknown"
+
+
 def _infer_regime(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "neutral"
@@ -135,6 +152,7 @@ def build_meta_ranker_feature_rows(
         volatility_20d = float(math.sqrt(sum(x * x for x in rets) / len(rets))) if rets else 0.0
 
         strategy_win, strategy_decay = _strategy_stats(repo.conn, tenant_id=str(tenant_id), strategy=strategy)
+        sector = _latest_sector(repo.conn, tenant_id=str(tenant_id), symbol=symbol)
         prepared.append(
             {
                 "as_of_date": str(row["as_of_date"]),
@@ -150,6 +168,7 @@ def build_meta_ranker_feature_rows(
                 "momentum_20d": momentum_20d,
                 "volatility_20d": volatility_20d,
                 "strategy": strategy,
+                "sector": sector,
                 "strategy_win_rate": strategy_win,
                 "strategy_decay": strategy_decay,
             }
