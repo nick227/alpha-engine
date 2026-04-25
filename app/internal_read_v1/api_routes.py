@@ -297,6 +297,18 @@ def api_experiments_meta_ranker_intents_replay(
     )
 
 
+@router.get("/experiments/meta-ranker/promotion-readiness")
+def api_experiments_meta_ranker_promotion_readiness(
+    request: Request,
+    tenant_id: str = "default",
+    experiment_key: str = "ml_meta_ranker_v1",
+) -> dict[str, Any]:
+    return _svc(request).get_meta_ranker_promotion_readiness(
+        tenant_id=tenant_id,
+        experiment_key=experiment_key,
+    )
+
+
 @router.get("/consensus/signals")
 def api_consensus_signals(
     request: Request,

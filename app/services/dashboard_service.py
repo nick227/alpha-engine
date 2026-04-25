@@ -432,6 +432,102 @@ class DashboardService:
             "summary": summary,
         }
 
+    def get_meta_ranker_promotion_readiness(
+        self,
+        *,
+        tenant_id: str = "default",
+        experiment_key: str = "ml_meta_ranker_v1",
+    ) -> dict[str, Any]:
+        row = self.store.conn.execute(
+            """
+            SELECT run_id, metadata_json, created_at
+            FROM experiment_results
+            WHERE tenant_id = ? AND class_key = 'ml_model' AND experiment_key = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (str(tenant_id), str(experiment_key)),
+        ).fetchone()
+        if not row:
+            return {
+                "tenant_id": tenant_id,
+                "experiment_key": str(experiment_key),
+                "ready": False,
+                "reason": "no_experiment_results",
+            }
+
+        try:
+            meta = json.loads(str(row["metadata_json"] or "{}"))
+        except Exception:
+            meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+
+        data_quality = meta.get("data_quality")
+        if not isinstance(data_quality, dict):
+            data_quality = {}
+        quality_passed = bool(data_quality.get("passed", False))
+
+        realized = meta.get("realized")
+        if not isinstance(realized, dict):
+            realized = {}
+        h5 = realized.get("h5") if isinstance(realized.get("h5"), dict) else {}
+        h20 = realized.get("h20") if isinstance(realized.get("h20"), dict) else {}
+        h5_n = int(h5.get("sample_count") or 0)
+        h20_n = int(h20.get("sample_count") or 0)
+
+        promotion = meta.get("promotion")
+        if not isinstance(promotion, dict):
+            promotion = {}
+        promoted = bool(promotion.get("promoted", False))
+        threshold_passed = bool(promotion.get("threshold_passed", False))
+        significance = promotion.get("significance")
+        if not isinstance(significance, dict):
+            significance = {}
+        significance_passed = bool(significance.get("passed", False)) if significance else False
+
+        min_required = int(promotion.get("min_realized_samples") or 0)
+        sample_ready = (h5_n >= min_required) if min_required > 0 else (h5_n > 0)
+
+        ready = bool(quality_passed and sample_ready and threshold_passed and significance_passed and promoted)
+        reason = str(promotion.get("reason") or "")
+        if not reason:
+            if not quality_passed:
+                reason = "data_quality_gate_failed"
+            elif not sample_ready:
+                reason = "insufficient_realized_samples"
+            elif not threshold_passed:
+                reason = "thresholds_not_met"
+            elif not significance_passed:
+                reason = "significance_not_met"
+            elif promoted:
+                reason = "promotion_ready"
+            else:
+                reason = "not_ready"
+
+        return {
+            "tenant_id": tenant_id,
+            "experiment_key": str(experiment_key),
+            "run_id": str(row["run_id"]),
+            "as_of_timestamp": str(row["created_at"] or ""),
+            "ready": ready,
+            "reason": reason,
+            "gates": {
+                "data_quality_passed": quality_passed,
+                "sample_readiness_passed": sample_ready,
+                "threshold_passed": threshold_passed,
+                "significance_passed": significance_passed,
+                "promoted_flag": promoted,
+            },
+            "realized_samples": {
+                "h5": h5_n,
+                "h20": h20_n,
+                "min_required_h5": min_required,
+            },
+            "data_quality": data_quality,
+            "promotion": promotion,
+        }
+
     def get_experiment_leaderboard(
         self,
         *,
