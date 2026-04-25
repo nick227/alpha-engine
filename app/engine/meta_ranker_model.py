@@ -27,6 +27,11 @@ def predict_meta_ranker_probs(row: dict) -> tuple[float, float]:
     decay = float(row.get("strategy_decay") or 0.0)
     claims = _clamp(float(row.get("claim_count") or 1.0) / 5.0, 0.0, 1.0)
     overlap = _clamp(float(row.get("overlap_count") or 1.0) / 5.0, 0.0, 1.0)
+    alt = row.get("alt_features") if isinstance(row.get("alt_features"), dict) else {}
+    alt_sent = float(alt.get("news_sentiment_1d") or 0.0)
+    alt_search = float(alt.get("search_interest_z") or 0.0)
+    alt_signal = _clamp((0.5 * alt_sent) + (0.2 * alt_search), -1.0, 1.0)
+    alt_quality = _clamp(float(row.get("alt_quality") or 0.0), 0.0, 1.0)
 
     out_logit = (
         -0.25
@@ -39,6 +44,7 @@ def predict_meta_ranker_probs(row: dict) -> tuple[float, float]:
         + (0.20 * decay)
         + (0.20 * claims)
         + (0.15 * overlap)
+        + (0.25 * alt_signal * alt_quality)
         - (1.10 * vol)
     )
     fail_logit = (
@@ -50,6 +56,7 @@ def predict_meta_ranker_probs(row: dict) -> tuple[float, float]:
         - (0.45 * win)
         + (1.25 * vol)
         + (0.25 * max(0.0, claims - 0.6))
+        - (0.20 * alt_signal * alt_quality)
     )
     p_out = _clamp(_sigmoid(out_logit), 0.0, 1.0)
     p_fail = _clamp(_sigmoid(fail_logit), 0.0, 1.0)

@@ -685,6 +685,22 @@ class AlphaRepository:
         CREATE INDEX IF NOT EXISTS idx_trade_intents_lookup
           ON trade_intents(tenant_id, class_key, experiment_key, as_of_date, symbol, horizon_days);
 
+        CREATE TABLE IF NOT EXISTS alt_data_daily (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            as_of_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'proxy_free',
+            feature_json TEXT NOT NULL DEFAULT '{}',
+            quality_score REAL NOT NULL DEFAULT 0.0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, as_of_date, symbol, source)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_alt_data_daily_lookup
+          ON alt_data_daily(tenant_id, as_of_date, symbol, source);
+
         CREATE TABLE IF NOT EXISTS candidate_queue (
             tenant_id TEXT NOT NULL DEFAULT 'default',
             ticker TEXT NOT NULL,
@@ -2790,6 +2806,45 @@ class AlphaRepository:
               (id, tenant_id, run_id, class_key, experiment_key, as_of_date, symbol, horizon_days,
                entry_date, entry_price, exit_date, exit_price, entry_price_model, exit_price_model, intent_status, score_json, metadata_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            payload,
+        )
+        self.conn.commit()
+        return len(payload)
+
+    def upsert_alt_data_daily(
+        self,
+        *,
+        as_of_date: str,
+        rows: list[dict[str, Any]],
+        tenant_id: str = "default",
+    ) -> int:
+        if not rows:
+            return 0
+        payload = []
+        for r in rows:
+            source = str(r.get("source") or "proxy_free")
+            symbol = str(r.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            payload.append(
+                (
+                    str(uuid4()),
+                    str(tenant_id),
+                    str(as_of_date),
+                    symbol,
+                    source,
+                    str(r.get("feature_json") or "{}"),
+                    float(r.get("quality_score") or 0.0),
+                )
+            )
+        if not payload:
+            return 0
+        self.conn.executemany(
+            """
+            INSERT OR REPLACE INTO alt_data_daily
+              (id, tenant_id, as_of_date, symbol, source, feature_json, quality_score, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
             payload,
         )

@@ -29,7 +29,7 @@ def run_meta_ranker_shadow(
     experiment_class: str,
     experiment_key: str,
 ) -> dict[str, Any]:
-    rows, dropped = build_meta_ranker_feature_rows(
+    rows, dropped, alt_summary = build_meta_ranker_feature_rows(
         repo=repo,
         as_of_date=str(as_of_date),
         tenant_id=str(tenant_id),
@@ -41,6 +41,7 @@ def run_meta_ranker_shadow(
             "scores": [],
             "dropped": dropped,
             "quality": evaluate_meta_ranker_data_quality([]),
+            "alt_data": alt_summary,
         }
 
     quality = evaluate_meta_ranker_data_quality(rows)
@@ -99,4 +100,5 @@ def run_meta_ranker_shadow(
         "score_details": score_details,
         "dropped": dropped,
         "quality": quality,
+        "alt_data": alt_summary,
     }

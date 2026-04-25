@@ -6,6 +6,7 @@ import random
 from typing import Any
 
 from app.db.repository import AlphaRepository
+from app.engine.alt_data_ingest import ingest_alt_data_snapshot
 from app.engine.meta_ranker_runner import run_meta_ranker_shadow
 from app.engine.meta_ranker_trade_intents import build_and_store_trade_intents
 
@@ -435,6 +436,14 @@ def run_ml_challenger_meta_ranker(
         limit=5000,
         tenant_id=str(tenant_id),
     )
+    pre_symbols = [str(r.get("symbol") or "").strip().upper() for r in rows if str(r.get("symbol") or "").strip()]
+    alt_data_summary = ingest_alt_data_snapshot(
+        repo=repo,
+        as_of_date=str(as_of_date),
+        tenant_id=str(tenant_id),
+        symbols=pre_symbols,
+        source="proxy_free",
+    )
     run_id = repo.start_experiment_run(
         class_key=ML_CHALLENGER_CLASS_KEY,
         experiment_key=str(experiment_key),
@@ -506,6 +515,8 @@ def run_ml_challenger_meta_ranker(
         },
         "realized": realized,
         "filters": dict(shadow.get("dropped") or {}),
+        "alt_data": dict(shadow.get("alt_data") or {}),
+        "alt_data_ingest": alt_data_summary,
         "data_quality": dict(shadow.get("quality") or {}),
     }
     quality_passed = bool((result_meta.get("data_quality") or {}).get("passed", True))

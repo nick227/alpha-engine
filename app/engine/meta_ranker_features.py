@@ -9,6 +9,7 @@ from app.db.repository import AlphaRepository
 
 META_RANKER_MIN_LIQUIDITY = float(os.getenv("META_RANKER_MIN_LIQUIDITY", "1000000"))
 META_RANKER_MIN_CONFIDENCE = float(os.getenv("META_RANKER_MIN_CONFIDENCE", "0.42"))
+META_RANKER_ALT_DATA_MODE = str(os.getenv("META_RANKER_ALT_DATA_MODE", "off")).strip().lower()
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -85,6 +86,29 @@ def _latest_sector(conn: Any, *, tenant_id: str, symbol: str) -> str:
     return sector if sector else "unknown"
 
 
+def _load_alt_features(conn: Any, *, tenant_id: str, as_of_date: str, symbol: str) -> tuple[dict[str, float], float]:
+    row = conn.execute(
+        """
+        SELECT feature_json, quality_score
+        FROM alt_data_daily
+        WHERE tenant_id = ? AND as_of_date = ? AND symbol = ?
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (str(tenant_id), str(as_of_date), str(symbol)),
+    ).fetchone()
+    if not row:
+        return {}, 0.0
+    try:
+        payload = json.loads(str(row["feature_json"] or "{}"))
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    out = {str(k): _safe_float(v) for k, v in payload.items()}
+    return out, _safe_float(row["quality_score"], 0.0)
+
+
 def _infer_regime(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "neutral"
@@ -102,7 +126,7 @@ def build_meta_ranker_feature_rows(
     repo: AlphaRepository,
     as_of_date: str,
     tenant_id: str = "default",
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any]]:
     queue_rows = repo.list_prediction_queue(
         as_of_date=str(as_of_date),
         status="pending",
@@ -111,6 +135,8 @@ def build_meta_ranker_feature_rows(
     )
     prepared: list[dict[str, Any]] = []
     dropped = {"illiquid": 0, "stale": 0, "weak_confidence": 0}
+    alt_rows = 0
+    alt_quality_scores: list[float] = []
 
     for row in queue_rows:
         symbol = str(row.get("symbol") or "").strip().upper()
@@ -153,6 +179,15 @@ def build_meta_ranker_feature_rows(
 
         strategy_win, strategy_decay = _strategy_stats(repo.conn, tenant_id=str(tenant_id), strategy=strategy)
         sector = _latest_sector(repo.conn, tenant_id=str(tenant_id), symbol=symbol)
+        alt_features, alt_quality = _load_alt_features(
+            repo.conn,
+            tenant_id=str(tenant_id),
+            as_of_date=str(as_of_date),
+            symbol=symbol,
+        )
+        if alt_features:
+            alt_rows += 1
+            alt_quality_scores.append(float(alt_quality))
         prepared.append(
             {
                 "as_of_date": str(row["as_of_date"]),
@@ -171,11 +206,20 @@ def build_meta_ranker_feature_rows(
                 "sector": sector,
                 "strategy_win_rate": strategy_win,
                 "strategy_decay": strategy_decay,
+                "alt_features": alt_features,
+                "alt_quality": float(alt_quality),
             }
         )
 
     if not prepared:
-        return [], dropped
+        return [], dropped, {
+            "mode": META_RANKER_ALT_DATA_MODE,
+            "enabled": META_RANKER_ALT_DATA_MODE not in {"off", "none", "baseline"},
+            "coverage": 0.0,
+            "avg_quality": None,
+            "rows_with_alt": 0,
+            "total_rows": 0,
+        }
 
     # Queue-relative sector strength proxy: z-score of 20d momentum.
     mean_m20 = sum(float(r["momentum_20d"]) for r in prepared) / len(prepared)
@@ -195,4 +239,14 @@ def build_meta_ranker_feature_rows(
         )
         r["base_score"] = _clamp(base_score, 0.0, 1.0)
 
-    return prepared, dropped
+    alt_enabled = META_RANKER_ALT_DATA_MODE not in {"off", "none", "baseline"}
+    coverage = (alt_rows / len(prepared)) if prepared else 0.0
+    alt_summary = {
+        "mode": META_RANKER_ALT_DATA_MODE,
+        "enabled": alt_enabled,
+        "coverage": float(coverage),
+        "avg_quality": ((sum(alt_quality_scores) / len(alt_quality_scores)) if alt_quality_scores else None),
+        "rows_with_alt": int(alt_rows),
+        "total_rows": int(len(prepared)),
+    }
+    return prepared, dropped, alt_summary
