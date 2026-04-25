@@ -267,6 +267,36 @@ def api_experiments_meta_ranker_latest(
     )
 
 
+@router.get("/experiments/meta-ranker/intents/latest")
+def api_experiments_meta_ranker_intents_latest(
+    request: Request,
+    tenant_id: str = "default",
+    as_of_date: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    n = max(1, min(2000, int(limit)))
+    return _svc(request).get_meta_ranker_intents_latest(
+        tenant_id=tenant_id,
+        as_of_date=as_of_date,
+        limit=n,
+    )
+
+
+@router.get("/experiments/meta-ranker/intents/replay")
+def api_experiments_meta_ranker_intents_replay(
+    request: Request,
+    tenant_id: str = "default",
+    as_of_date: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    n = max(1, min(2000, int(limit)))
+    return _svc(request).get_meta_ranker_intent_replay(
+        tenant_id=tenant_id,
+        as_of_date=as_of_date,
+        limit=n,
+    )
+
+
 @router.get("/consensus/signals")
 def api_consensus_signals(
     request: Request,

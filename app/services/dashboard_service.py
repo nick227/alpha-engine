@@ -302,6 +302,136 @@ class DashboardService:
             "rows": out[:n],
         }
 
+    def get_meta_ranker_intents_latest(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        n = max(1, min(2000, int(limit)))
+        if as_of_date is None:
+            row = self.store.conn.execute(
+                """
+                SELECT MAX(as_of_date) AS as_of_date
+                FROM trade_intents
+                WHERE tenant_id = ?
+                """,
+                (str(tenant_id),),
+            ).fetchone()
+            as_of = str(row["as_of_date"]) if row and row["as_of_date"] is not None else None
+        else:
+            as_of = str(as_of_date)
+        if not as_of:
+            return {"tenant_id": tenant_id, "as_of_date": None, "rows": []}
+
+        rows = self.store.conn.execute(
+            """
+            SELECT symbol, horizon_days, entry_date, entry_price, exit_date, exit_price,
+                   entry_price_model, exit_price_model, intent_status, score_json, metadata_json,
+                   class_key, experiment_key, run_id, created_at
+            FROM trade_intents
+            WHERE tenant_id = ? AND as_of_date = ?
+            ORDER BY created_at DESC, symbol ASC, horizon_days ASC
+            LIMIT ?
+            """,
+            (str(tenant_id), str(as_of), int(n)),
+        ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                score = json.loads(str(r["score_json"] or "{}"))
+            except Exception:
+                score = {}
+            if not isinstance(score, dict):
+                score = {}
+            try:
+                meta = json.loads(str(r["metadata_json"] or "{}"))
+            except Exception:
+                meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            out.append(
+                {
+                    "symbol": str(r["symbol"]),
+                    "horizonDays": int(r["horizon_days"]),
+                    "entryDate": r["entry_date"],
+                    "entryPrice": (float(r["entry_price"]) if r["entry_price"] is not None else None),
+                    "exitDate": r["exit_date"],
+                    "exitPrice": (float(r["exit_price"]) if r["exit_price"] is not None else None),
+                    "entryPriceModel": str(r["entry_price_model"]),
+                    "exitPriceModel": str(r["exit_price_model"]),
+                    "intentStatus": str(r["intent_status"]),
+                    "classKey": str(r["class_key"]),
+                    "experimentKey": str(r["experiment_key"]),
+                    "runId": str(r["run_id"]),
+                    "score": score,
+                    "metadata": meta,
+                    "createdAt": str(r["created_at"] or ""),
+                }
+            )
+        return {"tenant_id": tenant_id, "as_of_date": as_of, "rows": out[:n]}
+
+    def get_meta_ranker_intent_replay(
+        self,
+        *,
+        tenant_id: str = "default",
+        as_of_date: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        n = max(1, min(2000, int(limit)))
+        base = self.get_meta_ranker_intents_latest(
+            tenant_id=tenant_id,
+            as_of_date=as_of_date,
+            limit=n,
+        )
+        if not base.get("as_of_date"):
+            return {
+                **base,
+                "summary": {
+                    "rows": 0,
+                    "rowsWithRealized": 0,
+                    "avgRealizedReturn": None,
+                    "winRate": None,
+                },
+            }
+
+        out: list[dict[str, Any]] = []
+        realized_vals: list[float] = []
+        wins = 0
+        for row in base.get("rows", []):
+            symbol = str(row.get("symbol") or "").strip().upper()
+            hz = int(row.get("horizonDays") or 0)
+            res = self.store.conn.execute(
+                """
+                SELECT return_pct
+                FROM discovery_outcomes
+                WHERE tenant_id = ? AND watchlist_date = ? AND symbol = ? AND horizon_days = ?
+                LIMIT 1
+                """,
+                (str(tenant_id), str(base["as_of_date"]), symbol, hz),
+            ).fetchone()
+            realized = float(res["return_pct"]) if res and res["return_pct"] is not None else None
+            if realized is not None:
+                realized_vals.append(realized)
+                if realized > 0.0:
+                    wins += 1
+            out.append({**row, "realizedReturn": realized})
+
+        summary = {
+            "rows": len(out),
+            "rowsWithRealized": len(realized_vals),
+            "avgRealizedReturn": ((sum(realized_vals) / len(realized_vals)) if realized_vals else None),
+            "winRate": ((wins / len(realized_vals)) if realized_vals else None),
+        }
+        return {
+            "tenant_id": tenant_id,
+            "as_of_date": base["as_of_date"],
+            "rows": out,
+            "summary": summary,
+        }
+
     def get_experiment_leaderboard(
         self,
         *,
