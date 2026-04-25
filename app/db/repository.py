@@ -628,6 +628,20 @@ class AlphaRepository:
         CREATE INDEX IF NOT EXISTS idx_experiment_results_lookup
           ON experiment_results(tenant_id, class_key, experiment_key, created_at DESC);
 
+        CREATE TABLE IF NOT EXISTS experiment_cohort_items (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
+            run_id TEXT NOT NULL,
+            class_key TEXT NOT NULL,
+            experiment_key TEXT NOT NULL,
+            as_of_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_experiment_cohort_lookup
+          ON experiment_cohort_items(tenant_id, class_key, experiment_key, as_of_date, symbol);
+
         CREATE TABLE IF NOT EXISTS candidate_queue (
             tenant_id TEXT NOT NULL DEFAULT 'default',
             ticker TEXT NOT NULL,
@@ -2582,6 +2596,42 @@ class AlphaRepository:
             (str(status), str(tenant_id), str(class_key), str(experiment_key)),
         )
         self.conn.commit()
+
+    def insert_experiment_cohort_items(
+        self,
+        *,
+        run_id: str,
+        class_key: str,
+        experiment_key: str,
+        as_of_date: str,
+        symbols: list[str],
+        tenant_id: str = "default",
+    ) -> int:
+        if not symbols:
+            return 0
+        uniq = sorted({str(s).strip().upper() for s in symbols if str(s).strip()})
+        rows = [
+            (
+                str(uuid4()),
+                str(tenant_id),
+                str(run_id),
+                str(class_key),
+                str(experiment_key),
+                str(as_of_date),
+                sym,
+            )
+            for sym in uniq
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO experiment_cohort_items
+              (id, tenant_id, run_id, class_key, experiment_key, as_of_date, symbol)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
 
     def prediction_queue_status_counts(
         self,

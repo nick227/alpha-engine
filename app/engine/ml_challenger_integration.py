@@ -24,6 +24,7 @@ ML_PROMOTION_WINDOW_DAYS = int(os.getenv("ML_PROMOTION_WINDOW_DAYS", "30"))
 ML_PROMOTION_SHARPE_DELTA = float(os.getenv("ML_PROMOTION_SHARPE_DELTA", "0.10"))
 ML_PROMOTION_WINRATE_DELTA = float(os.getenv("ML_PROMOTION_WINRATE_DELTA", "0.00"))
 ML_PROMOTION_DRAWDOWN_DELTA = float(os.getenv("ML_PROMOTION_DRAWDOWN_DELTA", "0.00"))
+ML_PROMOTION_MIN_REALIZED_SAMPLES = int(os.getenv("ML_PROMOTION_MIN_REALIZED_SAMPLES", "25"))
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -124,39 +125,55 @@ def _evaluate_promotion(
     """
     ml_rows = repo.conn.execute(
         """
-        SELECT metric_5d_return, win_rate, drawdown
+        SELECT metric_5d_return, win_rate, drawdown, metadata_json
         FROM experiment_results
         WHERE tenant_id = ?
           AND class_key = ?
           AND experiment_key = ?
           AND created_at >= datetime('now', '-' || ? || ' days')
-          AND metric_5d_return IS NOT NULL
         ORDER BY created_at ASC
         """,
         (str(tenant_id), ML_CHALLENGER_CLASS_KEY, str(experiment_key), int(window_days)),
     ).fetchall()
-    ml_returns = [float(r["metric_5d_return"]) for r in ml_rows if r["metric_5d_return"] is not None]
-    ml_wins = [float(r["win_rate"]) for r in ml_rows if r["win_rate"] is not None]
-    ml_dd = [float(r["drawdown"]) for r in ml_rows if r["drawdown"] is not None]
+    ml_returns: list[float] = []
+    ml_wins: list[float] = []
+    ml_dd: list[float] = []
+    for r in ml_rows:
+        md = _load_json_dict(r["metadata_json"])
+        realized = md.get("realized") if isinstance(md, dict) else {}
+        h5 = realized.get("h5") if isinstance(realized, dict) else {}
+        sample_n = int(h5.get("sample_count") or 0) if isinstance(h5, dict) else 0
+        if sample_n < int(ML_PROMOTION_MIN_REALIZED_SAMPLES):
+            continue
+        ret = h5.get("avg_return")
+        win = h5.get("win_rate")
+        dd = h5.get("drawdown")
+        if ret is not None:
+            ml_returns.append(float(ret))
+        if win is not None:
+            ml_wins.append(float(win))
+        if dd is not None:
+            ml_dd.append(float(dd))
 
     baseline_rows = repo.conn.execute(
         """
-        SELECT total_return_actual, direction_hit_rate, magnitude_error
-        FROM prediction_scores
+        SELECT return_pct
+        FROM discovery_outcomes
         WHERE tenant_id = ?
-          AND forecast_days = 5
-          AND created_at >= datetime('now', '-' || ? || ' days')
-        ORDER BY created_at ASC
+          AND horizon_days = 5
+          AND watchlist_date >= date('now', '-' || ? || ' days')
+          AND return_pct IS NOT NULL
+        ORDER BY watchlist_date ASC
         """,
         (str(tenant_id), int(window_days)),
     ).fetchall()
-    base_returns = [float(r["total_return_actual"]) for r in baseline_rows if r["total_return_actual"] is not None]
-    base_wins = [float(r["direction_hit_rate"]) for r in baseline_rows if r["direction_hit_rate"] is not None]
-    base_dd = [float(r["magnitude_error"]) for r in baseline_rows if r["magnitude_error"] is not None]
+    base_returns = [float(r["return_pct"]) for r in baseline_rows if r["return_pct"] is not None]
+    base_wins = [1.0 if x > 0.0 else 0.0 for x in base_returns]
+    base_dd = [float(x) for x in base_returns]
 
     metrics = {
         "challenger": {
-            "sample_count": len(ml_rows),
+            "sample_count": len(ml_returns),
             "sharpe": _sharpe_from_series(ml_returns),
             "win_rate": (sum(ml_wins) / len(ml_wins)) if ml_wins else None,
             "drawdown": (sum(ml_dd) / len(ml_dd)) if ml_dd else None,
@@ -177,8 +194,9 @@ def _evaluate_promotion(
     if not has_required:
         return {
             "promoted": False,
-            "reason": "insufficient_metrics",
+            "reason": "insufficient_realized_metrics",
             "window_days": int(window_days),
+            "min_realized_samples": int(ML_PROMOTION_MIN_REALIZED_SAMPLES),
             "metrics": metrics,
         }
 
@@ -203,7 +221,52 @@ def _evaluate_promotion(
             "drawdown_delta": float(ML_PROMOTION_DRAWDOWN_DELTA),
             "winrate_delta": float(ML_PROMOTION_WINRATE_DELTA),
         },
+        "min_realized_samples": int(ML_PROMOTION_MIN_REALIZED_SAMPLES),
         "metrics": metrics,
+    }
+
+
+def _compute_realized_metrics(
+    *,
+    repo: AlphaRepository,
+    tenant_id: str,
+    as_of_date: str,
+    cohort_symbols: list[str],
+) -> dict[str, Any]:
+    syms = sorted({str(s).strip().upper() for s in cohort_symbols if str(s).strip()})
+    if not syms:
+        return {"h5": {}, "h20": {}}
+    placeholders = ",".join(["?"] * len(syms))
+    rows = repo.conn.execute(
+        f"""
+        SELECT horizon_days, return_pct
+        FROM discovery_outcomes
+        WHERE tenant_id = ?
+          AND watchlist_date = ?
+          AND symbol IN ({placeholders})
+          AND horizon_days IN (5, 20)
+          AND return_pct IS NOT NULL
+        """,
+        (str(tenant_id), str(as_of_date), *syms),
+    ).fetchall()
+
+    def summarize(vals: list[float]) -> dict[str, Any]:
+        if not vals:
+            return {"sample_count": 0, "avg_return": None, "win_rate": None, "drawdown": None, "sharpe": None}
+        wins = [1.0 if v > 0.0 else 0.0 for v in vals]
+        return {
+            "sample_count": len(vals),
+            "avg_return": (sum(vals) / len(vals)),
+            "win_rate": (sum(wins) / len(wins)),
+            "drawdown": min(vals),
+            "sharpe": _sharpe_from_series(vals),
+        }
+
+    h5_vals = [float(r["return_pct"]) for r in rows if int(r["horizon_days"]) == 5]
+    h20_vals = [float(r["return_pct"]) for r in rows if int(r["horizon_days"]) == 20]
+    return {
+        "h5": summarize(h5_vals),
+        "h20": summarize(h20_vals),
     }
 
 
@@ -276,17 +339,38 @@ def run_ml_challenger_meta_ranker(
 
     if updated_rows:
         repo.update_prediction_queue_metadata_many(rows=updated_rows, tenant_id=str(tenant_id))
+    cohort_symbols = [str(r.get("symbol") or "").strip().upper() for r in rows if str(r.get("symbol") or "").strip()]
+    cohort_count = repo.insert_experiment_cohort_items(
+        run_id=str(run_id),
+        class_key=ML_CHALLENGER_CLASS_KEY,
+        experiment_key=str(experiment_key),
+        as_of_date=str(as_of_date),
+        symbols=cohort_symbols,
+        tenant_id=str(tenant_id),
+    )
 
     feature_attribution = _compute_feature_attribution(rows)
+    realized = _compute_realized_metrics(
+        repo=repo,
+        tenant_id=str(tenant_id),
+        as_of_date=str(as_of_date),
+        cohort_symbols=cohort_symbols,
+    )
     avg_score = (sum(scores) / len(scores)) if scores else None
-    proxy_ret = ((avg_score - 0.5) * 0.1) if avg_score is not None else None
-    proxy_win_rate = avg_score if avg_score is not None else None
-    proxy_drawdown = (1.0 - avg_score) if avg_score is not None else None
+    metric_5d = realized.get("h5", {}).get("avg_return")
+    metric_20d = realized.get("h20", {}).get("avg_return")
+    win_rate = realized.get("h5", {}).get("win_rate")
+    drawdown = realized.get("h5", {}).get("drawdown")
     result_meta = {
         "updated_rows": len(updated_rows),
         "avg_challenger_score": avg_score,
         "non_replacing": True,
         "feature_attribution": feature_attribution,
+        "cohort": {
+            "as_of_date": str(as_of_date),
+            "symbol_count": int(cohort_count),
+        },
+        "realized": realized,
     }
     promotion = (
         _evaluate_promotion(
@@ -303,10 +387,10 @@ def run_ml_challenger_meta_ranker(
         run_id=str(run_id),
         class_key=ML_CHALLENGER_CLASS_KEY,
         experiment_key=str(experiment_key),
-        metric_5d_return=proxy_ret,
-        metric_20d_return=proxy_ret,
-        win_rate=proxy_win_rate,
-        drawdown=proxy_drawdown,
+        metric_5d_return=metric_5d,
+        metric_20d_return=metric_20d,
+        win_rate=win_rate,
+        drawdown=drawdown,
         turnover=None,
         regime_json=json.dumps({}),
         calibration_json=json.dumps({"avg_challenger_score": avg_score}),
