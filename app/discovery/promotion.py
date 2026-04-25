@@ -15,6 +15,8 @@ class WatchlistRow:
     days_seen: int
     avg_score: float
     strategies: list[str]
+    primary_strategy: str
+    strategy_scores: dict[str, float]
     playbook_id: str
     prediction_plan: dict[str, Any]
 
@@ -79,9 +81,27 @@ def select_high_conviction(
             "strategies": [s for s in str(r["strategies_csv"] or "").split(",") if s],
         }
 
-    # 2) persistence over trailing window (distinct days)
     symbols = list(by_symbol.keys())
     placeholders = ",".join(["?"] * len(symbols))
+
+    # 1b) per-symbol strategy score details for watchlist queue attribution.
+    strat_rows = conn.execute(
+        f"""
+        SELECT symbol, strategy_type, AVG(score) as strategy_avg_score
+        FROM discovery_candidates
+        WHERE tenant_id = ? AND as_of_date = ? AND symbol IN ({placeholders})
+        GROUP BY symbol, strategy_type
+        """,
+        [str(tenant_id), asof, *symbols],
+    ).fetchall()
+    per_symbol_strategy_scores: dict[str, dict[str, float]] = {}
+    for r in strat_rows:
+        sym = str(r["symbol"])
+        st = str(r["strategy_type"])
+        sc = float(r["strategy_avg_score"] or 0.0)
+        per_symbol_strategy_scores.setdefault(sym, {})[st] = sc
+
+    # 2) persistence over trailing window (distinct days)
     pers = conn.execute(
         f"""
         SELECT symbol, COUNT(DISTINCT as_of_date) as days_seen
@@ -102,6 +122,12 @@ def select_high_conviction(
         ds = int(days_seen_map.get(sym, 0))
         if ds < int(min_days_seen):
             continue
+        strategy_scores = per_symbol_strategy_scores.get(sym, {})
+        if strategy_scores:
+            primary_strategy = max(strategy_scores.items(), key=lambda kv: float(kv[1]))[0]
+        else:
+            # Fallback keeps behavior deterministic even with sparse metadata.
+            primary_strategy = str((payload.get("strategies") or ["unknown"])[0])
         playbook_id, prediction_plan = assign_playbook(list(payload.get("strategies") or []))
         out.append(
             WatchlistRow(
@@ -110,6 +136,8 @@ def select_high_conviction(
                 days_seen=ds,
                 avg_score=float(payload["avg_score"]),
                 strategies=list(payload["strategies"]),
+                primary_strategy=primary_strategy,
+                strategy_scores=dict(strategy_scores),
                 playbook_id=str(playbook_id),
                 prediction_plan=dict(prediction_plan),
             )
@@ -224,7 +252,12 @@ def watchlist_to_queue_rows(rows: list[WatchlistRow], *, source: str = "discover
                         "overlap_count": int(r.overlap_count),
                         "days_seen": int(r.days_seen),
                         "avg_score": float(r.avg_score),
-                        "strategies": list(r.strategies),
+                        "strategy": str(r.primary_strategy),
+                        "primary_strategy": str(r.primary_strategy),
+                        "strategy_scores": dict(r.strategy_scores),
+                        "claiming_strategies": list(r.strategies),
+                        "claim_count": int(len(r.strategies)),
+                        "queue_path": "watchlist",
                     },
                     separators=(",", ":"),
                     sort_keys=True,

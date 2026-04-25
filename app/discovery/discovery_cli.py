@@ -657,8 +657,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
                 supplement_summary: dict[str, Any] = {}
+                diversity_topup_summary: dict[str, Any] = {}
                 if not bool(args.no_threshold_supplement):
-                    from app.engine.discovery_integration import supplement_prediction_queue_from_discovery
+                    from app.engine.discovery_integration import (
+                        merge_strategy_threshold_queue,
+                        supplement_prediction_queue_from_discovery,
+                    )
 
                     supplement_summary = supplement_prediction_queue_from_discovery(
                         repo=repo,
@@ -668,6 +672,12 @@ def main(argv: list[str] | None = None) -> int:
                         target_signals=int(args.supplement_target),
                         min_confidence=float(args.supplement_min_confidence),
                         per_strategy_cap=int(args.supplement_per_strategy_cap),
+                    )
+                    diversity_topup_summary = merge_strategy_threshold_queue(
+                        repo=repo,
+                        disc_summary=disc_summary,
+                        as_of_date=asof,
+                        tenant_id=str(args.tenant_id),
                     )
 
                 # quick counts for observability
@@ -746,6 +756,7 @@ def main(argv: list[str] | None = None) -> int:
                             "pending": int(pq_pending),
                         },
                         "threshold_supplement": supplement_summary,
+                        "strategy_diversity_topup": diversity_topup_summary,
                         "admission": admission_summary,
                         "watchlist_size": len(wl),
                         "stats_rows": len(all_rows),

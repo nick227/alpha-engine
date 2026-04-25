@@ -9,11 +9,13 @@ supplies per-strategy price bands and horizons where we have validated IC.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, timedelta
 from typing import Any
 
 from app.db.repository import AlphaRepository
 from app.discovery.runner import run_discovery
+from app.discovery.strategies.registry import STRATEGIES, THRESHOLDS
 from app.engine.threshold_queue import build_threshold_queue_rows
 
 
@@ -43,6 +45,239 @@ PROMOTED_STRATEGIES: dict[str, dict[str, Any]] = {
         "priority_base": 15,
     },
 }
+
+QUEUE_DIVERSITY_ENABLED = str(os.getenv("QUEUE_DIVERSITY_ENABLED", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+QUEUE_MIN_ROWS_PER_STRATEGY = int(os.getenv("QUEUE_MIN_ROWS_PER_STRATEGY", "2"))
+QUEUE_TOPUP_MAX_TOTAL = int(os.getenv("QUEUE_TOPUP_MAX_TOTAL", "10"))
+QUEUE_TOPUP_ACTIVE_ONLY = str(os.getenv("QUEUE_TOPUP_ACTIVE_ONLY", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+DEFAULT_PER_STRATEGY_CAP = int(os.getenv("ALPHA_PER_STRATEGY_CAP", "22"))
+DEFAULT_MIN_CONFIDENCE = float(os.getenv("ALPHA_MIN_DISCOVERY_CONFIDENCE", "0.42"))
+
+
+def _inactive_strategies() -> set[str]:
+    raw = str(os.getenv("ALPHA_INACTIVE_STRATEGIES", ""))
+    return {s.strip() for s in raw.split(",") if s.strip()}
+
+
+def _active_strategy_list() -> list[str]:
+    names = list(STRATEGIES.keys())
+    if not QUEUE_TOPUP_ACTIVE_ONLY:
+        return names
+    inactive = _inactive_strategies()
+    return [s for s in names if s not in inactive]
+
+
+def _strategy_candidate_top_rows(
+    *,
+    disc_summary: dict[str, Any],
+    strategy_name: str,
+    as_of_str: str,
+    exclude_symbols: set[str],
+    symbol_claims: dict[str, set[str]],
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+    per_strategy_cap: int = DEFAULT_PER_STRATEGY_CAP,
+) -> list[tuple[float, dict[str, Any]]]:
+    """
+    Build eligible queue candidates for one strategy from discovery summary.
+    Returns list[(score, queue_row)] ordered by score desc.
+    """
+    out: list[tuple[float, dict[str, Any]]] = []
+    strategies_block = disc_summary.get("strategies") or {}
+    st_summary = strategies_block.get(strategy_name)
+    if not isinstance(st_summary, dict):
+        return out
+    tops = st_summary.get("top") or []
+    if not isinstance(tops, list):
+        return out
+
+    gate = max(float(THRESHOLDS.get(strategy_name, 0.5)), float(min_confidence))
+    cfg = PROMOTED_STRATEGIES.get(strategy_name) if isinstance(PROMOTED_STRATEGIES.get(strategy_name), dict) else {}
+    min_close = float(cfg.get("min_close", 5.0))
+    max_close = float(cfg.get("max_close", 1e9))
+    direction = str(cfg.get("direction", "UP"))
+    horizon_days = int(cfg.get("horizon_days", 15))
+    priority_base = int(cfg.get("priority_base", 12))
+
+    for c in tops[: int(per_strategy_cap)]:
+        if not isinstance(c, dict):
+            continue
+        raw = float(c.get("score") or 0.0)
+        if raw < gate:
+            continue
+        sym = str(c.get("symbol") or "").strip().upper()
+        if not sym or sym in exclude_symbols:
+            continue
+        meta = c.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        close = float(meta.get("close") or 0.0)
+        if close < min_close or close >= max_close:
+            continue
+        claiming = sorted(symbol_claims.get(sym) or {strategy_name})
+        metadata = {
+            "strategy": strategy_name,
+            "primary_strategy": strategy_name,
+            "claiming_strategies": claiming,
+            "claim_count": int(len(claiming)),
+            "direction": direction,
+            "avg_score": raw,
+            "horizon_days": horizon_days,
+            "close": close,
+            "raw_score": raw,
+            "source_pipeline": "diversity_topup",
+            "as_of_date": as_of_str,
+            "queue_path": "diversity_topup",
+        }
+        priority = priority_base + int((1.0 - raw) * 10)
+        out.append(
+            (
+                raw,
+                {
+                    "symbol": sym,
+                    "source": f"discovery_{strategy_name}",
+                    "priority": priority,
+                    "status": "pending",
+                    "metadata_json": json.dumps(metadata, sort_keys=True),
+                },
+            )
+        )
+    out.sort(key=lambda t: -float(t[0]))
+    return out
+
+
+def _build_symbol_claims(disc_summary: dict[str, Any], *, min_confidence: float) -> dict[str, set[str]]:
+    claims: dict[str, set[str]] = {}
+    strategies_block = disc_summary.get("strategies") or {}
+    if not isinstance(strategies_block, dict):
+        return claims
+    for strategy_name, st_summary in strategies_block.items():
+        if not isinstance(st_summary, dict):
+            continue
+        tops = st_summary.get("top") or []
+        if not isinstance(tops, list):
+            continue
+        gate = max(float(THRESHOLDS.get(str(strategy_name), 0.5)), float(min_confidence))
+        for c in tops:
+            if not isinstance(c, dict):
+                continue
+            raw = float(c.get("score") or 0.0)
+            if raw < gate:
+                continue
+            sym = str(c.get("symbol") or "").strip().upper()
+            if not sym:
+                continue
+            claims.setdefault(sym, set()).add(str(strategy_name))
+    return claims
+
+
+def merge_strategy_threshold_queue(
+    *,
+    repo: AlphaRepository,
+    disc_summary: dict[str, Any],
+    as_of_date: str,
+    tenant_id: str = "default",
+    min_rows_per_strategy: int = QUEUE_MIN_ROWS_PER_STRATEGY,
+    max_total: int = QUEUE_TOPUP_MAX_TOTAL,
+    per_strategy_cap: int = DEFAULT_PER_STRATEGY_CAP,
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+) -> dict[str, Any]:
+    """
+    Diversity top-up after watchlist + supplement writes.
+    - Never overwrites/removes existing queue rows.
+    - Adds rows for underrepresented active strategies, up to max_total.
+    - Skips symbols already present in queue.
+    """
+    if not QUEUE_DIVERSITY_ENABLED or int(max_total) <= 0 or int(min_rows_per_strategy) <= 0:
+        return {"enabled": False, "added": 0, "by_strategy": {}}
+
+    existing_rows = repo.conn.execute(
+        """
+        SELECT symbol, source, metadata_json
+        FROM prediction_queue
+        WHERE tenant_id = ? AND as_of_date = ?
+        """,
+        (str(tenant_id), str(as_of_date)),
+    ).fetchall()
+    existing_symbols = {str(r["symbol"]).strip().upper() for r in existing_rows if r["symbol"]}
+    current_counts: dict[str, int] = {}
+    for r in existing_rows:
+        strategy = None
+        try:
+            md = json.loads(str(r["metadata_json"] or "{}"))
+            if isinstance(md, dict):
+                strategy = md.get("strategy")
+        except Exception:
+            strategy = None
+        if strategy:
+            key = str(strategy)
+            current_counts[key] = current_counts.get(key, 0) + 1
+
+    active_strategies = _active_strategy_list()
+    selected_rows: list[dict[str, Any]] = []
+    added_by_strategy: dict[str, int] = {}
+    slots_left = int(max_total)
+    symbol_claims = _build_symbol_claims(disc_summary, min_confidence=float(min_confidence))
+
+    for strategy_name in active_strategies:
+        if slots_left <= 0:
+            break
+        have = int(current_counts.get(strategy_name, 0))
+        needed = max(0, int(min_rows_per_strategy) - have)
+        if needed <= 0:
+            continue
+
+        candidates = _strategy_candidate_top_rows(
+            disc_summary=disc_summary,
+            strategy_name=strategy_name,
+            as_of_str=str(as_of_date),
+            exclude_symbols=existing_symbols,
+            symbol_claims=symbol_claims,
+            min_confidence=float(min_confidence),
+            per_strategy_cap=int(per_strategy_cap),
+        )
+        if not candidates:
+            continue
+
+        take = min(int(needed), int(slots_left), len(candidates))
+        if take <= 0:
+            continue
+
+        for _score, row in candidates[:take]:
+            sym = str(row["symbol"]).upper()
+            if sym in existing_symbols:
+                continue
+            existing_symbols.add(sym)
+            selected_rows.append(row)
+            added_by_strategy[strategy_name] = added_by_strategy.get(strategy_name, 0) + 1
+            slots_left -= 1
+            if slots_left <= 0:
+                break
+
+    if selected_rows:
+        repo.upsert_prediction_queue(
+            as_of_date=str(as_of_date),
+            rows_in=selected_rows,
+            tenant_id=str(tenant_id),
+        )
+
+    return {
+        "enabled": True,
+        "added": len(selected_rows),
+        "by_strategy": added_by_strategy,
+        "min_rows_per_strategy": int(min_rows_per_strategy),
+        "max_total": int(max_total),
+        "active_strategies": active_strategies,
+    }
 
 
 def _seed_consensus_for_queue_rows(
