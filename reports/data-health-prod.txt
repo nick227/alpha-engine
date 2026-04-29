@@ -1,13 +1,13 @@
 DATA HEALTH (PROD): PASS
-Generated: 2026-04-25 15:02 UTC
+Generated: 2026-04-28 15:00 UTC
 
-pipeline last run: OK finished_at=Fri 04/24/2026_10:01:10.45
+pipeline last run: OK finished_at=Mon 04/27/2026_10:05:42.32
 
 runtime identity:
   db_path: C:\wamp64\www\alpha-engine-poc\data\alpha.db
-  db_modified_utc: 2026-04-25 08:54:14 UTC
-  db_size_bytes: 5932003328
-  git_commit: 3f11324
+  db_modified_utc: 2026-04-28 15:00:38 UTC
+  db_size_bytes: 5932703744
+  git_commit: 5e0a44c
   pipeline_script_mtime_utc: 2026-04-24 00:53:48 UTC
 
 reconciliation (market data):
@@ -24,15 +24,15 @@ coverage SLA (target ≥90% fresh 1d bars on expected universe):
   ratio: 100.0%  status: PASS
 
 stage freshness (latest warehouse timestamps):
-  max 1d bar (universe tickers): 2026-04-24T00:00:00+00:00
+  max 1d bar (universe tickers): 2026-04-28T00:00:00+00:00
   max prediction timestamp: 2026-04-22T09:30:00+00:00
   max ranking_snapshots batch: 2026-04-23T15:03:31.167715+00:00
   max consensus_signals: 2026-04-23 05:42:24
-  max candidate_queue last_seen_at: 2026-04-23T15:02:49.559927+00:00
+  max candidate_queue last_seen_at: 2026-04-26T08:30:16.041653+00:00
 
 pipeline funnel (warehouse):
 candidate_queue symbols: 1106
-  by status: admitted=40, recurring=385, rejected=2, seen=679
+  by status: admitted=40, recurring=634, rejected=2, seen=430
 predictions rows (all time): 62
 predictions rows (last 7d): 2
 predictions distinct tickers (last 7d): 2
@@ -54,9 +54,9 @@ B+ output quality scorecard:
   · prediction repeat pressure (7d): 0.0%
 
 api responses (TestClient → production DB):
-  heartbeat: stale/missing (16715m ago)
+  heartbeat: stale/missing (21033m ago)
   latest run: 0m ago  runStatus=DEGRADED  runQuality=0.60  coverageRatio=100.00%
-  recommendations/latest: 10 rows, 10 unique tickers  conf avg/min/max: 39.7/29.0/58.0%
+  recommendations/latest: 10 rows, 10 unique tickers  conf avg/min/max: 41.8/31.0/61.0%
   ranking/top: 21 rows  rankingProvenance: live_prediction
   quote/AAPL: present
   megacap_share: 0%  sector_diversity: 2 unique sectors
@@ -100,7 +100,7 @@ response previews:
 /api/predictions/runs/latest preview:
 ```json
 {
-  "consensusStalenessMinutes": 3439,
+  "consensusStalenessMinutes": 7758,
   "coverageRatio": 1.0,
   "createdAt": "2026-04-23 05:43:04",
   "degradedReasons": [
@@ -135,12 +135,12 @@ response previews:
   "recommendations": [
     {
       "action": "BUY",
-      "asOf": "2026-04-25T15:02:03.371498+00:00",
+      "asOf": "2026-04-28T15:01:14.813672+00:00",
       "avoidIf": [
         "Breaks below 133.9864",
         "Broad market shifts to risk-off"
       ],
-      "confidence": 58,
+      "confidence": 61,
       "entryZone": [
         137.4219,
         140.1981
@@ -148,13 +148,13 @@ response previews:
       "horizon": "2-6 weeks",
       "mode": "balanced",
       "risk": "High",
-      "score": 0.5796,
+      "score": 0.6063,
       "selectionDiagnostics": {
-        "diversityAdjustedScore": 0.579633,
+        "diversityAdjustedScore": 0.6063,
         "freshnessBonus": 0.0,
-        "preliminaryScore": 0.579633,
-        "recentRepeatCount": 1,
-        "repeatPenalty": 0.333333,
+        "preliminaryScore": 0.6063,
+        "recentRepeatCount": 0,
+        "repeatPenalty": 0.0,
         "sector": "unknown",
         "sectorDiversityPenalty": 0.0,
         "sectorSeenBefore": 0
@@ -169,12 +169,12 @@ response previews:
     },
     {
       "action": "BUY",
-      "asOf": "2026-04-25T15:02:03.371498+00:00",
+      "asOf": "2026-04-28T15:01:14.813672+00:00",
       "avoidIf": [
         "Breaks below 187.133",
         "Broad market shifts to risk-off"
       ],
-      "confidence": 49,
+      "confidence": 52,
       "entryZone": [
         191.9313,
         195.8087
@@ -182,20 +182,21 @@ response previews:
       "horizon": "2-6 weeks",
       "mode": "balanced",
       "risk": "Moderate",
-      "score": 0.4901,
+      "score": 0.5168,
       "selectionDiagnostics": {
+        "divers
 ... [truncated]
 ```
 /api/recommendations/best preview:
 ```json
 {
   "action": "BUY",
-  "asOf": "2026-04-25T15:02:03.983166+00:00",
+  "asOf": "2026-04-28T15:01:16.878753+00:00",
   "avoidIf": [
     "Breaks below 133.9864",
     "Broad market shifts to risk-off"
   ],
-  "confidence": 58,
+  "confidence": 61,
   "consumerExperience": {
     "displayTier": "live_intelligence",
     "message": "",
@@ -218,13 +219,13 @@ response previews:
     "universeExpected": 62
   },
   "risk": "High",
-  "score": 0.5796,
+  "score": 0.6063,
   "selectionDiagnostics": {
-    "diversityAdjustedScore": 0.579633,
+    "diversityAdjustedScore": 0.6063,
     "freshnessBonus": 0.0,
-    "preliminaryScore": 0.579633,
-    "recentRepeatCount": 1,
-    "repeatPenalty": 0.333333,
+    "preliminaryScore": 0.6063,
+    "recentRepeatCount": 0,
+    "repeatPenalty": 0.0,
     "sector": "unknown",
     "sectorDiversityPenalty": 0.0,
     "sectorSeenBefore": 0

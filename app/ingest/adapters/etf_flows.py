@@ -22,8 +22,8 @@ class EtfFlowsAdapter:
         for symbol in symbols:
             etf_fetch = {
                 "kind": "http_json",
-                "url": f"https://financialmodelingprep.com/api/v3/etf-holder/{symbol}",
-                "params": {"apikey": api_key},
+                "url": "https://financialmodelingprep.com/stable/etf/holdings",
+                "params": {"symbol": symbol, "apikey": api_key},
                 "timeout_s": 15,
             }
             

@@ -72,7 +72,7 @@ There are two families of endpoints:
 ### Core market and recommendation reads
 
 - `GET /api/quote/{ticker}`
-- `GET /api/history/{ticker}`
+- `GET /api/history/{ticker}` 
 - `GET /api/candles/{ticker}`
 - `GET /api/company/{ticker}`
 - `GET /api/stats/{ticker}`

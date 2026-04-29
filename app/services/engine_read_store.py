@@ -776,7 +776,7 @@ class EngineReadStore:
                     "as_of_date": str(r["as_of_date"]),
                     "symbol": str(r["symbol"]),
                     "strategy_type": str(r["strategy_type"]),
-                    "score": float(r["score"]),
+                    "score": float(r["score"] or 0.0),
                     "reason": str(r["reason"]),
                     "metadata_json": md_raw,
                     # Common metadata fields for easy table rendering
@@ -974,7 +974,7 @@ class EngineReadStore:
                 symbol = str(r["symbol"]).upper()
                 overlap_count = int(r["overlap_count"])
                 days_seen = int(r["days_seen"])
-                avg_score = float(r["avg_score"])
+                avg_score = float(r["avg_score"] or 0.0)
                 playbook_id = str(r["playbook_id"] or "")
 
                 strategies: list[str] = []
@@ -2051,7 +2051,7 @@ class EngineReadStore:
             return {}
         out: dict[str, float] = {}
         for r in rows:
-            out[str(r["regime"])] = float(r["accuracy"])
+            out[str(r["regime"])] = float(r["accuracy"] or 0.0)
         return out
 
     def _champion_regime_strength(self, *, tenant_id: str) -> tuple[float | None, float | None]: 
@@ -2149,6 +2149,10 @@ class EngineReadStore:
             if row is None:
                 return None
 
+        # Row exists but has no meaningful content — treat as missing.
+        if row["direction"] is None and row["confidence"] is None:
+            return None
+
         # Prefer continuous-learning-derived regime strengths from champions, fallback to global regime_performance.
         high_strength, low_strength = self._champion_regime_strength(tenant_id=tenant_id)
         if high_strength is None or low_strength is None:
@@ -2161,7 +2165,7 @@ class EngineReadStore:
             ticker=str(row["ticker"]),
             timestamp=str(row["timestamp"]),
             direction=str(row["direction"]),
-            confidence=float(row["confidence"]),
+            confidence=float(row["confidence"] or 0.0),
             total_weight=float(row["total_weight"]) if row["total_weight"] is not None else 1.0,
             participating_strategies=int(row["participating_strategies"]) if row["participating_strategies"] is not None else 2,
             active_regime=str(row["regime"]) if row["regime"] is not None else None,
@@ -2264,7 +2268,7 @@ class EngineReadStore:
                     time=str(r["timestamp"]),
                     ticker=str(r["ticker"]),
                     direction=str(r["prediction"]),
-                    confidence=float(r["confidence"]),
+                    confidence=float(r["confidence"] or 0.0),
                     strategy=f"{stype}:{ver}" if ver else stype,
                     regime=str(r["regime"]) if r["regime"] is not None else None,
                     trust=float(r["trust_score"]) if ("trust_score" in r.keys() and r["trust_score"] is not None) else None,
@@ -2432,10 +2436,10 @@ class EngineReadStore:
                 
                 out.append(RankingSnapshotRow(
                     ticker=str(r["ticker"]),
-                    score=float(r["score"]),
-                    conviction=float(r["conviction"]),
+                    score=float(r["score"] or 0.0),
+                    conviction=float(r["conviction"] or 0.0),
                     attribution=attr,
-                    regime=str(r["regime"]),
+                    regime=str(r["regime"] or ""),
                     timestamp=str(r["timestamp"]),
                 ))
             return out

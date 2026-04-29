@@ -28,6 +28,7 @@ from app.ui.explainability_page import explainability_main  # noqa: E402
 from app.ui.ops_data_console import ops_data_console_main  # noqa: E402
 from app.ui.paper_trades import paper_trades_main  # noqa: E402
 from app.ui.shell.filter_state import render_sidebar_filters  # noqa: E402
+from app.ui.shell.nav import get_route  # noqa: E402
 from app.ui.shell.top_bar import render_top_bar  # noqa: E402
 from app.ui.theme import apply_theme  # noqa: E402
 
@@ -38,13 +39,16 @@ def _get_service(db_path: str) -> DashboardService:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Alpha Engine", layout="wide", page_icon="ðŸ“ˆ")
+    st.set_page_config(page_title="Alpha Engine", layout="wide", page_icon="📈")
     apply_theme()
 
     db_path = os.environ.get("ALPHA_DB_PATH", "data/alpha.db")
     service = _get_service(db_path)
 
-    filters = render_sidebar_filters(service)
+    # Read current route from session state before rendering the sidebar so the
+    # sidebar can show only the controls that are relevant to the active view.
+    route = get_route()
+    filters = render_sidebar_filters(service, route=route)
     route = render_top_bar(filters=filters)
 
     if route == "dashboard":
@@ -73,7 +77,7 @@ def main() -> None:
             show_local_controls=False,
         )
         return
-    
+
     if route == "paper":
         paper_trades_main(
             service,
@@ -90,7 +94,7 @@ def main() -> None:
             show_page_header=False,
         )
         return
-    
+
     if route == "ops":
         ops_data_console_main(
             service,

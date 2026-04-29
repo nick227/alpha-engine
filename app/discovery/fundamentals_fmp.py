@@ -33,15 +33,15 @@ def fetch_fmp_fundamentals(symbol: str, *, api_key: str) -> FundamentalsSnapshot
     """
     Minimal fundamentals snapshot using FMP public endpoints.
 
-    - sector/industry/sharesOutstanding: /api/v3/profile/{symbol}
-    - revenue_ttm: sum last 4 quarterly revenues from /api/v3/income-statement/{symbol}?period=quarter
+    - sector/industry/sharesOutstanding: stable/profile?symbol={symbol}
+    - revenue_ttm: sum last 4 quarterly revenues from stable/income-statement?symbol={symbol}&period=quarter
       (fallback: latest annual revenue if quarterly isn't available)
     """
     sym = str(symbol).upper().strip()
     params = {"apikey": api_key}
 
-    profile_url = f"https://financialmodelingprep.com/api/v3/profile/{sym}"
-    profile = _get_json(profile_url, params)
+    profile_url = "https://financialmodelingprep.com/stable/profile"
+    profile = _get_json(profile_url, {**params, "symbol": sym})
     sector = None
     industry = None
     shares = None
@@ -52,8 +52,8 @@ def fetch_fmp_fundamentals(symbol: str, *, api_key: str) -> FundamentalsSnapshot
         shares = p0.get("sharesOutstanding")
 
     revenue_ttm: float | None = None
-    inc_q_url = f"https://financialmodelingprep.com/api/v3/income-statement/{sym}"
-    inc_q = _get_json(inc_q_url, {**params, "period": "quarter", "limit": 8})
+    inc_q_url = "https://financialmodelingprep.com/stable/income-statement"
+    inc_q = _get_json(inc_q_url, {**params, "symbol": sym, "period": "quarter", "limit": 4})
     if isinstance(inc_q, list) and inc_q:
         revs: list[float] = []
         for row in inc_q[:4]:
@@ -66,7 +66,7 @@ def fetch_fmp_fundamentals(symbol: str, *, api_key: str) -> FundamentalsSnapshot
             revenue_ttm = float(sum(revs))
 
     if revenue_ttm is None:
-        inc_a = _get_json(inc_q_url, {**params, "limit": 2})
+        inc_a = _get_json(inc_q_url, {**params, "symbol": sym, "limit": 2})
         if isinstance(inc_a, list) and inc_a:
             row = inc_a[0] if isinstance(inc_a[0], dict) else {}
             if row.get("revenue") is not None:

@@ -20,7 +20,7 @@ class EarningsCalendarAdapter:
         
         earnings_fetch = {
             "kind": "http_json",
-            "url": "https://financialmodelingprep.com/api/v3/earning_calendar",
+            "url": "https://financialmodelingprep.com/stable/earnings-calendar",
             "params": {"date": date_str, "apikey": api_key},
             "timeout_s": 15,
         }
