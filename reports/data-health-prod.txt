@@ -1,13 +1,13 @@
-DATA HEALTH (PROD): PASS
-Generated: 2026-04-28 15:00 UTC
+DATA HEALTH (PROD): WARNING
+Generated: 2026-04-29 15:00 UTC
 
-pipeline last run: OK finished_at=Mon 04/27/2026_10:05:42.32
+pipeline last run: OK finished_at=Tue 04/28/2026_10:01:21.30
 
 runtime identity:
   db_path: C:\wamp64\www\alpha-engine-poc\data\alpha.db
-  db_modified_utc: 2026-04-28 15:00:38 UTC
+  db_modified_utc: 2026-04-28 15:01:20 UTC
   db_size_bytes: 5932703744
-  git_commit: 5e0a44c
+  git_commit: 0ba2620
   pipeline_script_mtime_utc: 2026-04-24 00:53:48 UTC
 
 reconciliation (market data):
@@ -24,7 +24,7 @@ coverage SLA (target ≥90% fresh 1d bars on expected universe):
   ratio: 100.0%  status: PASS
 
 stage freshness (latest warehouse timestamps):
-  max 1d bar (universe tickers): 2026-04-28T00:00:00+00:00
+  max 1d bar (universe tickers): 2026-04-29T00:00:00+00:00
   max prediction timestamp: 2026-04-22T09:30:00+00:00
   max ranking_snapshots batch: 2026-04-23T15:03:31.167715+00:00
   max consensus_signals: 2026-04-23 05:42:24
@@ -34,29 +34,28 @@ pipeline funnel (warehouse):
 candidate_queue symbols: 1106
   by status: admitted=40, recurring=634, rejected=2, seen=430
 predictions rows (all time): 62
-predictions rows (last 7d): 2
-predictions distinct tickers (last 7d): 2
+predictions rows (last 7d): 0
+predictions distinct tickers (last 7d): 0
 latest ranking snapshot ts: 2026-04-23T15:03:31.167715+00:00
 ranking symbols (latest DB batch): 21
 house_recommendations rows (balanced, DB): 21
 ranking provenance (heuristic): live_prediction
 
 full funnel (incident sentence):
-  62 universe → 62 eligible (fresh 1d) → 1106 queued → 2 predicted (7d rows) → 21 ranked (DB) → 21 recommended (DB)
-  likely bottleneck: none
+  62 universe → 62 eligible (fresh 1d) → 1106 queued → 0 predicted (7d rows) → 21 ranked (DB) → 21 recommended (DB)
+  likely bottleneck: discovery → queue → prediction_cli (no predictions in last 7d)
 
 B+ output quality scorecard:
   · bar coverage: 100.0%  (target ≥90% fresh universe)
-  · predictions: 0 rows (24h), 2 rows (7d), 2 distinct tickers (7d)
+  · predictions: 0 rows (24h), 0 rows (7d), 0 distinct tickers (7d)
   · ranking breadth: 21 symbols (latest DB batch) — aim ≥10
   · ranking provenance: live_prediction
   · house_recommendations: 21 rows (balanced) — aim 5–15
-  · prediction repeat pressure (7d): 0.0%
 
 api responses (TestClient → production DB):
-  heartbeat: stale/missing (21033m ago)
+  heartbeat: stale/missing (22473m ago)
   latest run: 0m ago  runStatus=DEGRADED  runQuality=0.60  coverageRatio=100.00%
-  recommendations/latest: 10 rows, 10 unique tickers  conf avg/min/max: 41.8/31.0/61.0%
+  recommendations/latest: 10 rows, 10 unique tickers  conf avg/min/max: 42.7/31.0/61.0%
   ranking/top: 21 rows  rankingProvenance: live_prediction
   quote/AAPL: present
   megacap_share: 0%  sector_diversity: 2 unique sectors
@@ -100,7 +99,7 @@ response previews:
 /api/predictions/runs/latest preview:
 ```json
 {
-  "consensusStalenessMinutes": 7758,
+  "consensusStalenessMinutes": 9198,
   "coverageRatio": 1.0,
   "createdAt": "2026-04-23 05:43:04",
   "degradedReasons": [
@@ -135,7 +134,7 @@ response previews:
   "recommendations": [
     {
       "action": "BUY",
-      "asOf": "2026-04-28T15:01:14.813672+00:00",
+      "asOf": "2026-04-29T15:00:35.556870+00:00",
       "avoidIf": [
         "Breaks below 133.9864",
         "Broad market shifts to risk-off"
@@ -169,7 +168,7 @@ response previews:
     },
     {
       "action": "BUY",
-      "asOf": "2026-04-28T15:01:14.813672+00:00",
+      "asOf": "2026-04-29T15:00:35.556870+00:00",
       "avoidIf": [
         "Breaks below 187.133",
         "Broad market shifts to risk-off"
@@ -191,7 +190,7 @@ response previews:
 ```json
 {
   "action": "BUY",
-  "asOf": "2026-04-28T15:01:16.878753+00:00",
+  "asOf": "2026-04-29T15:00:37.551101+00:00",
   "avoidIf": [
     "Breaks below 133.9864",
     "Broad market shifts to risk-off"
@@ -213,7 +212,7 @@ response previews:
     "barCoverageRatio": 1.0,
     "freshBarCount": 62,
     "predictionPipelineActive": true,
-    "predictionsLast7d": 2,
+    "predictionsLast7d": 0,
     "predictionsTotal": 62,
     "serviceMode": "normal",
     "universeExpected": 62

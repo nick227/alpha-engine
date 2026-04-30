@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, timedelta
+import sqlite3
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.db.repository import AlphaRepository
@@ -75,6 +76,174 @@ def _active_strategy_list() -> list[str]:
         return names
     inactive = _inactive_strategies()
     return [s for s in names if s not in inactive]
+
+
+def _horizon_for(strategy: str) -> int:
+    """Default forecast horizon by strategy (matches threshold_queue logic)."""
+    return {"balance_sheet_survivor": 5, "silent_compounder": 20, "sniper_coil": 5}.get(strategy, 15)
+
+
+def load_recent_discovery_candidates_for_prediction_supplement(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    as_of_str: str,
+    lookback_days: int = 14,
+    active_strategies: list[str] | None = None,
+    per_strategy_cap: int = DEFAULT_PER_STRATEGY_CAP,
+    per_strategy_min: int = QUEUE_MIN_ROWS_PER_STRATEGY,
+    total_cap: int = 60,
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+    promoted_overrides: dict[str, dict[str, Any]] | None = None,
+    exclude_symbols: set[str] | None = None,
+    min_dollar_volume: float = 2_000_000.0,
+    source_pipeline: str = "exploratory_supplement",
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """
+    Read from discovery_candidates (full-universe) and build prediction_queue rows.
+
+    Unlike supplement_prediction_queue_from_discovery (which used disc_summary from
+    the admitted-universe run), this queries every strategy that wrote candidates —
+    so narrative_lag, ownership_vacuum, realness_repricer etc. are no longer starved.
+
+    Two-pass selection:
+      Pass 1 — greedy cross-strategy fill, highest score first.
+      Pass 2 — starvation guard: top-up any strategy below per_strategy_min.
+    """
+    promoted = promoted_overrides or {}
+    excluded = exclude_symbols or set()
+    strategies_to_run = active_strategies or _active_strategy_list()
+    if not strategies_to_run:
+        return [], {}
+
+    cutoff = (datetime.fromisoformat(as_of_str) - timedelta(days=lookback_days)).date().isoformat()
+    placeholders = ",".join("?" * len(strategies_to_run))
+    raw_rows = conn.execute(
+        f"""
+        SELECT strategy_type, symbol, score, metadata_json
+        FROM discovery_candidates
+        WHERE tenant_id = ?
+          AND as_of_date >= ?
+          AND as_of_date <= ?
+          AND strategy_type IN ({placeholders})
+        ORDER BY as_of_date DESC, score DESC
+        """,
+        (tenant_id, cutoff, as_of_str, *strategies_to_run),
+    ).fetchall()
+
+    # Build per-strategy candidate pools, deduping to best score per (symbol, strategy).
+    by_strategy: dict[str, list[tuple[float, str, dict[str, Any]]]] = {}
+    seen_sym_strat: set[tuple[str, str]] = set()
+
+    for r in raw_rows:
+        strategy_name = str(r["strategy_type"] or "").strip()
+        if strategy_name not in strategies_to_run:
+            continue
+        sym = str(r["symbol"] or "").strip().upper()
+        if not sym or sym in excluded:
+            continue
+        key = (sym, strategy_name)
+        if key in seen_sym_strat:
+            continue  # already captured best score (rows sorted DESC)
+        seen_sym_strat.add(key)
+
+        raw = float(r["score"] or 0.0)
+        gate = max(float(THRESHOLDS.get(strategy_name, 0.5)), float(min_confidence))
+        if raw < gate:
+            continue
+
+        try:
+            meta = json.loads(str(r["metadata_json"] or "{}"))
+        except Exception:
+            meta = {}
+        close = float(meta.get("close") or 0.0)
+        dv = float(meta.get("dollar_volume") or 0.0)
+        if dv < min_dollar_volume:
+            continue
+
+        cfg = promoted.get(strategy_name) if isinstance(promoted.get(strategy_name), dict) else {}
+        min_close = float(cfg.get("min_close", 5.0))
+        max_close = float(cfg.get("max_close", 1e9))
+        if close > 0 and (close < min_close or close >= max_close):
+            continue
+
+        direction = str(cfg.get("direction", "UP"))
+        horizon_days = int(cfg.get("horizon_days", _horizon_for(strategy_name)))
+        priority_base = int(cfg.get("priority_base", 12))
+
+        canonical_meta = {
+            "strategy": strategy_name,
+            "primary_strategy": strategy_name,
+            "direction": direction,
+            "avg_score": raw,
+            "horizon_days": horizon_days,
+            "close": close,
+            "dollar_volume": dv,
+            "raw_score": raw,
+            "drivers": meta.get("drivers") or [],
+            "source_pipeline": source_pipeline,
+            "prediction_source": "exploratory",
+            "as_of_date": as_of_str,
+            "queue_path": source_pipeline,
+        }
+        queue_row = {
+            "symbol": sym,
+            "source": f"discovery_{strategy_name}",
+            "priority": priority_base + int((1.0 - raw) * 10),
+            "status": "pending",
+            "metadata_json": json.dumps(canonical_meta, sort_keys=True),
+        }
+        by_strategy.setdefault(strategy_name, []).append((raw, sym, queue_row))
+
+    # Respect per_strategy_cap
+    for strat in by_strategy:
+        by_strategy[strat] = by_strategy[strat][:per_strategy_cap]
+
+    # Pass 1: greedy cross-strategy fill, best score first
+    all_scored: list[tuple[float, str, str, dict[str, Any]]] = []
+    for strat, candidates in by_strategy.items():
+        for score, sym, row in candidates:
+            all_scored.append((score, strat, sym, row))
+    all_scored.sort(key=lambda t: -t[0])
+
+    out: list[dict[str, Any]] = []
+    out_by_strat: dict[str, int] = {}
+    placed_syms: set[str] = set()
+
+    for _score, strat, sym, row in all_scored:
+        if len(out) >= total_cap:
+            break
+        if sym in placed_syms:
+            continue
+        placed_syms.add(sym)
+        out.append(row)
+        out_by_strat[strat] = out_by_strat.get(strat, 0) + 1
+
+    # Pass 2: starvation guard — guaranteed minimum per active strategy
+    if per_strategy_min > 0:
+        for strat in strategies_to_run:
+            if out_by_strat.get(strat, 0) >= per_strategy_min:
+                continue
+            needed = per_strategy_min - out_by_strat.get(strat, 0)
+            for _score, sym, row in by_strategy.get(strat, []):
+                if len(out) >= total_cap or needed <= 0:
+                    break
+                if sym in placed_syms:
+                    continue
+                placed_syms.add(sym)
+                out.append(row)
+                out_by_strat[strat] = out_by_strat.get(strat, 0) + 1
+                needed -= 1
+
+    # Per-strategy health report
+    print(f"[discovery_supplement] source=discovery_candidates lookback={lookback_days}d  total_placed={len(out)}")
+    for strat in strategies_to_run:
+        avail = len(by_strategy.get(strat, []))
+        placed = out_by_strat.get(strat, 0)
+        status = "OK" if placed >= per_strategy_min else ("STARVED" if avail == 0 else "LOW")
+        print(f"  {strat:<30} avail={avail:>4}  placed={placed:>3}  [{status}]")
+
+    return out, out_by_strat
 
 
 def _strategy_candidate_top_rows(
@@ -183,7 +352,7 @@ def _build_symbol_claims(disc_summary: dict[str, Any], *, min_confidence: float)
 def merge_strategy_threshold_queue(
     *,
     repo: AlphaRepository,
-    disc_summary: dict[str, Any],
+    disc_summary: dict[str, Any],  # kept for backward compat — not used
     as_of_date: str,
     tenant_id: str = "default",
     min_rows_per_strategy: int = QUEUE_MIN_ROWS_PER_STRATEGY,
@@ -194,74 +363,48 @@ def merge_strategy_threshold_queue(
     """
     Diversity top-up after watchlist + supplement writes.
     - Never overwrites/removes existing queue rows.
-    - Adds rows for underrepresented active strategies, up to max_total.
-    - Skips symbols already present in queue.
+    - Adds rows only for underrepresented active strategies, up to max_total.
+    - Reads from discovery_candidates (full-universe) rather than disc_summary.
     """
     if not QUEUE_DIVERSITY_ENABLED or int(max_total) <= 0 or int(min_rows_per_strategy) <= 0:
         return {"enabled": False, "added": 0, "by_strategy": {}}
 
     existing_rows = repo.conn.execute(
-        """
-        SELECT symbol, source, metadata_json
-        FROM prediction_queue
-        WHERE tenant_id = ? AND as_of_date = ?
-        """,
+        "SELECT symbol, metadata_json FROM prediction_queue WHERE tenant_id = ? AND as_of_date = ?",
         (str(tenant_id), str(as_of_date)),
     ).fetchall()
     existing_symbols = {str(r["symbol"]).strip().upper() for r in existing_rows if r["symbol"]}
     current_counts: dict[str, int] = {}
     for r in existing_rows:
-        strategy = None
         try:
             md = json.loads(str(r["metadata_json"] or "{}"))
-            if isinstance(md, dict):
-                strategy = md.get("strategy")
+            strategy = md.get("strategy") if isinstance(md, dict) else None
         except Exception:
             strategy = None
         if strategy:
-            key = str(strategy)
-            current_counts[key] = current_counts.get(key, 0) + 1
+            current_counts[str(strategy)] = current_counts.get(str(strategy), 0) + 1
 
     active_strategies = _active_strategy_list()
-    selected_rows: list[dict[str, Any]] = []
-    added_by_strategy: dict[str, int] = {}
-    slots_left = int(max_total)
-    symbol_claims = _build_symbol_claims(disc_summary, min_confidence=float(min_confidence))
+    underrepresented = [
+        s for s in active_strategies
+        if int(current_counts.get(s, 0)) < int(min_rows_per_strategy)
+    ]
+    if not underrepresented:
+        return {"enabled": True, "added": 0, "by_strategy": {}, "active_strategies": active_strategies}
 
-    for strategy_name in active_strategies:
-        if slots_left <= 0:
-            break
-        have = int(current_counts.get(strategy_name, 0))
-        needed = max(0, int(min_rows_per_strategy) - have)
-        if needed <= 0:
-            continue
-
-        candidates = _strategy_candidate_top_rows(
-            disc_summary=disc_summary,
-            strategy_name=strategy_name,
-            as_of_str=str(as_of_date),
-            exclude_symbols=existing_symbols,
-            symbol_claims=symbol_claims,
-            min_confidence=float(min_confidence),
-            per_strategy_cap=int(per_strategy_cap),
-        )
-        if not candidates:
-            continue
-
-        take = min(int(needed), int(slots_left), len(candidates))
-        if take <= 0:
-            continue
-
-        for _score, row in candidates[:take]:
-            sym = str(row["symbol"]).upper()
-            if sym in existing_symbols:
-                continue
-            existing_symbols.add(sym)
-            selected_rows.append(row)
-            added_by_strategy[strategy_name] = added_by_strategy.get(strategy_name, 0) + 1
-            slots_left -= 1
-            if slots_left <= 0:
-                break
+    selected_rows, added_by_strategy = load_recent_discovery_candidates_for_prediction_supplement(
+        repo.conn,
+        tenant_id=str(tenant_id),
+        as_of_str=str(as_of_date),
+        active_strategies=underrepresented,
+        per_strategy_cap=int(per_strategy_cap),
+        per_strategy_min=int(min_rows_per_strategy),
+        total_cap=int(max_total),
+        min_confidence=float(min_confidence),
+        promoted_overrides=PROMOTED_STRATEGIES,
+        exclude_symbols=existing_symbols,
+        source_pipeline="diversity_topup",
+    )
 
     if selected_rows:
         repo.upsert_prediction_queue(
@@ -326,7 +469,7 @@ def _seed_consensus_for_queue_rows(
 def supplement_prediction_queue_from_discovery(
     *,
     repo: AlphaRepository,
-    disc_summary: dict[str, Any],
+    disc_summary: dict[str, Any],  # kept for backward compat — not used
     as_of_date: str,
     tenant_id: str = "default",
     target_signals: int = 120,
@@ -336,22 +479,23 @@ def supplement_prediction_queue_from_discovery(
     """
     After watchlist rows are queued, add threshold-based discovery rows without
     duplicating symbols already present for this as-of date.
+
+    Reads from discovery_candidates (full-universe) rather than disc_summary
+    (admitted-universe) so all strategies get candidates, not just promoted ones.
     """
     ex = repo.conn.execute(
-        """
-        SELECT DISTINCT UPPER(TRIM(symbol)) AS s
-        FROM prediction_queue
-        WHERE tenant_id = ? AND as_of_date = ?
-        """,
+        "SELECT DISTINCT UPPER(TRIM(symbol)) AS s FROM prediction_queue WHERE tenant_id = ? AND as_of_date = ?",
         (tenant_id, as_of_date),
     ).fetchall()
     exclude_symbols = {str(r["s"]) for r in ex if r and r["s"]}
 
-    queue_rows, by_strategy = build_threshold_queue_rows(
-        disc_summary=disc_summary,
+    queue_rows, by_strategy = load_recent_discovery_candidates_for_prediction_supplement(
+        repo.conn,
+        tenant_id=tenant_id,
         as_of_str=as_of_date,
-        target_signals=target_signals,
         per_strategy_cap=per_strategy_cap,
+        per_strategy_min=QUEUE_MIN_ROWS_PER_STRATEGY,
+        total_cap=target_signals,
         min_confidence=min_confidence,
         promoted_overrides=PROMOTED_STRATEGIES,
         exclude_symbols=exclude_symbols,

@@ -149,7 +149,21 @@ def materialize_discovery_predictions_after_run_queue(
         print(f"No processed discovery queue rows needing predictions materialization for {as_of_date}")
         return 0
 
+    print(f"[materialize] {len(rows)} queue rows to process for {as_of_date}")
+    by_strategy_found: dict[str, int] = {}
+    for r in rows:
+        try:
+            strat = json.loads(str(r["metadata_json"] or "{}")).get("strategy", "unknown")
+        except Exception:
+            strat = "unknown"
+        by_strategy_found[strat] = by_strategy_found.get(strat, 0) + 1
+    for strat, n in sorted(by_strategy_found.items()):
+        print(f"  {strat:<30} found={n}")
+
     created = 0
+    skipped_no_price: list[str] = []
+    by_strategy_created: dict[str, int] = {}
+
     for row in rows:
         symbol = row["symbol"]
         metadata = json.loads(row["metadata_json"])
@@ -183,6 +197,7 @@ def materialize_discovery_predictions_after_run_queue(
             ).fetchone()
 
         if not price_row:
+            skipped_no_price.append(f"{symbol}({strategy})")
             continue
 
         entry_price = float(price_row["close"])
@@ -211,10 +226,16 @@ def materialize_discovery_predictions_after_run_queue(
             ),
         )
         created += 1
-        print(f"Materialized: {symbol} {direction} @ ${entry_price:.2f} (conf: {float(avg_score):.3f})")
+        by_strategy_created[strategy] = by_strategy_created.get(strategy, 0) + 1
+        print(f"  [OK] {symbol:<8} {strategy:<28} {direction}  ${entry_price:.2f}  conf={float(avg_score):.3f}")
+
+    if skipped_no_price:
+        print(f"  [SKIP no-price] {', '.join(skipped_no_price)}")
 
     repo.conn.commit()
-    print(f"Materialized {created} discovery predictions for {as_of_date}")
+    print(f"[materialize] created={created}  skipped_no_price={len(skipped_no_price)}")
+    for strat, n in sorted(by_strategy_created.items()):
+        print(f"  {strat:<30} materialized={n}")
     return created
 
 

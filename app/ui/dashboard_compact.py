@@ -15,96 +15,83 @@ def _pill(text: str, *, bg: str, fg: str) -> str:
 
 
 def _build_prediction_row(signal: dict, latest_prices: dict[str, float] | None = None) -> dict:
-    """Build a comprehensive prediction row with all provenance and prescription data."""
+    """Build a display row from a ranking signal. Only shows values we actually have."""
     from datetime import datetime
-    
-    direction = str(signal.get("direction", "")).upper()
+
+    direction = str(signal.get("direction", "BUY")).upper()
     ticker = str(signal.get("ticker", "—"))
-    expected_move = str(signal.get("expected_move", "—"))
-    confidence = float(signal.get("confidence", 0.0) or 0.0)
-    regime = str(signal.get("regime", "—"))
-    strategy = str(signal.get("strategy", "—"))
+    conviction = float(signal.get("conviction", 0.0) or 0.0)
+    regime = str(signal.get("regime") or "—")
+    strategy = str(signal.get("strategy") or "—")
     timestamp = signal.get("timestamp", "")
-    forecast_horizon = signal.get("forecast_horizon", "7d")
-    attribution = signal.get("attribution", {})
-    participating_strategies = signal.get("participating_strategies", 1)
-    
+    forecast_horizon = signal.get("forecast_horizon") or "—"
+    attribution = signal.get("attribution") or {}
+    predicted_return: float | None = signal.get("predicted_return")
+
     is_buy = direction in ("BUY", "UP", "LONG")
     action = "LONG" if is_buy else "SHORT"
-    
-    # Parse timestamp
+
+    # Timestamp age
+    time_str = "—"
     if timestamp:
         try:
-            ts = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-            time_ago = (datetime.now(ts.tzinfo) - ts).days
-            time_str = f"{time_ago}d ago" if time_ago > 0 else "Today"
-            signal_datetime = ts
-        except:
-            time_str = "Recent"
-            signal_datetime = None
-    else:
-        time_str = "Recent"
-        signal_datetime = None
-    
-    # Get current price
+            ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            days_ago = (datetime.now(ts.tzinfo) - ts).days
+            time_str = f"{days_ago}d ago" if days_ago > 0 else "Today"
+        except Exception:
+            pass
+
+    # Price: prefer live close, then recorded entry price, then nothing.
+    current_price: float | None = None
+    price_source = "—"
     if latest_prices and ticker in latest_prices:
         current_price = latest_prices[ticker]
         price_source = "Live"
-    else:
-        current_price = round(150.0 + (hash(ticker) % 350), 2)
-        price_source = "Est."
-    
-    # Calculate target and stop loss
-    move_pct = float(expected_move.replace('+', '').replace('%', '').replace('—', '0'))
-    if not is_buy:
-        move_pct = -move_pct
-    target_price = round(current_price * (1 + move_pct/100), 2)
-    
-    # Calculate stop loss (2% for long, 2% above for short)
-    stop_loss = round(current_price * 0.98, 2) if is_buy else round(current_price * 1.02, 2)
-    
-    # Calculate risk/reward
-    risk = abs(current_price - stop_loss)
-    reward = abs(target_price - current_price)
-    risk_reward = round(reward / risk, 2) if risk > 0 else 0
-    
-    # Get primary driver
+    elif signal.get("entry_price") is not None:
+        current_price = float(signal["entry_price"])
+        price_source = "At signal"
+
+    entry_str = f"${current_price:.2f}" if current_price is not None else "—"
+
+    # Target: only compute when we have both a real price and a real predicted return.
+    target_str = "—"
+    stop_str = "—"
+    rr_str = "—"
+    if current_price is not None and predicted_return is not None:
+        move = predicted_return if is_buy else -predicted_return
+        target_price = round(current_price * (1 + move), 2)
+        stop_loss = round(current_price * 0.98, 2) if is_buy else round(current_price * 1.02, 2)
+        risk = abs(current_price - stop_loss)
+        reward = abs(target_price - current_price)
+        target_str = f"${target_price:.2f}"
+        stop_str = f"${stop_loss:.2f}"
+        rr_str = f"1:{round(reward / risk, 2)}" if risk > 0 else "—"
+
+    # Primary driver from attribution keys — skip internal ranking fields.
+    _INTERNAL_KEYS = {"confidence", "strategy_weight", "conviction", "score"}
+    primary_driver = "Ranking signal"
     if attribution:
-        top_factors = sorted(attribution.items(), key=lambda x: abs(x[1]), reverse=True)
-        primary_driver = top_factors[0][0].replace('_', ' ').title() if top_factors else "Multiple Factors"
-    else:
-        primary_driver = "Pattern Analysis"
-    
-    # Build comprehensive row
+        meaningful = {k: v for k, v in attribution.items() if k.lower() not in _INTERNAL_KEYS}
+        if meaningful:
+            top_key = max(meaningful, key=lambda k: abs(meaningful[k]))
+            primary_driver = top_key.replace("_", " ").title()
+
     return {
-        # Prescription - What to do
         "Action": action,
         "Ticker": ticker,
-        "Entry": f"${current_price:.2f}",
-        "Target": f"${target_price:.2f}",
-        "Stop Loss": f"${stop_loss:.2f}",
-        "Expected": expected_move,
-        "Risk:Reward": f"1:{risk_reward}",
-        
-        # Confidence & Timing
-        "Confidence": confidence,
+        "Entry": entry_str,
+        "Target": target_str,
+        "Stop Loss": stop_str,
+        "Risk:Reward": rr_str,
+        "Conviction": conviction,
+        "Confidence": conviction,  # card renderer reads "Confidence"
         "Horizon": forecast_horizon,
-        
-        # Data Provenance - Where it comes from
         "Strategy": strategy,
-        "Sources": participating_strategies,
-        "Regime": regime.replace('_', ' ').title(),
+        "Regime": regime.replace("_", " ").title(),
         "Signal Age": time_str,
         "Price Src": price_source,
-        
-        # Why - Explanation
         "Primary Driver": primary_driver,
-        
-        # Raw values for sorting
         "_current_price": current_price,
-        "_target_price": target_price,
-        "_stop_loss": stop_loss,
-        "_move_pct": move_pct,
         "_signal": signal,
     }
 
@@ -174,17 +161,19 @@ def _render_signal_card(row: dict, idx: int) -> None:
         conf_color = "#10b981" if confidence >= 0.7 else "#f59e0b" if confidence >= 0.5 else "#6b7280"
         
         # Render card as single vertical flow
+        price_line = entry if target == "—" else f"{entry}  →  {target}"
+        horizon_tag = f" ({horizon})" if horizon != "—" else ""
         st.markdown(f"""
         <div style='padding: 12px 0; border-bottom: 1px solid #e5e7eb;'>
             <div style='margin-bottom: 4px;'>
                 <span style='background: {action_color}; color: white; padding: 4px 12px; border-radius: 4px; font-weight: bold; font-size: 14px;'>{action}</span>
                 <span style='font-size: 20px; font-weight: bold; margin-left: 8px;'>{ticker}</span>
-                <span style='color: {conf_color}; font-weight: 900; font-size: 22px; margin-left: 12px;'>{confidence:.0%} CONF</span>
+                <span style='color: {conf_color}; font-weight: 900; font-size: 22px; margin-left: 12px;'>{confidence:.0%} conviction</span>
                 {badge_html}
             </div>
             <div style='margin-top: 6px;'>
-                <span style='font-size: 16px; font-weight: 600;'>{entry}  -->  {target}</span>
-                <span style='color: #6b7280; font-size: 13px; margin-left: 8px;'>({horizon})</span>
+                <span style='font-size: 16px; font-weight: 600;'>{price_line}</span>
+                <span style='color: #6b7280; font-size: 13px; margin-left: 8px;'>{horizon_tag}</span>
             </div>
             <div style='margin-top: 4px; color: #6b7280; font-size: 13px;'>
                 {why}

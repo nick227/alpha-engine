@@ -1553,80 +1553,89 @@ class DashboardService:
 
     def get_top_ten_signals(self, *, tenant_id: str = "default", limit: int = 10) -> list[dict]:
         """
-        Get top ten signals with ranking, direction, expected move, alpha, strategy, and attribution.
-        Returns a list of dictionaries formatted for the top ten signals display.
+        Return the top-ranked tickers, joined with their latest prediction record for
+        real entry prices, horizons, and predicted returns.
         """
-        # Get latest rankings for top signals
         rankings = self.store.get_latest_rankings(tenant_id=tenant_id, limit=limit)
-        
-        # Get recent signals for strategy information
-        recent_signals = self.store.get_recent_signals(tenant_id=tenant_id, limit=50)
-        
-        # Get consensus data for confidence information
-        consensus_data = {}
-        for signal in recent_signals:
-            if signal.ticker not in consensus_data:
-                consensus = self.store.get_latest_consensus(tenant_id=tenant_id, ticker=signal.ticker)
-                if consensus:
-                    consensus_data[signal.ticker] = {
-                        'confidence': consensus.confidence,
-                        'direction': consensus.direction,
-                        'participating_strategies': consensus.participating_strategies
-                    }
-        
-        # Combine rankings with consensus data to create top ten signals
+        if not rankings:
+            return []
+
+        # Build ticker -> latest prediction map for real price/horizon/return data.
+        ticker_list = [r.ticker for r in rankings]
+        placeholders = ",".join("?" * len(ticker_list))
+        try:
+            pred_rows = self.store.conn.execute(
+                f"""
+                SELECT ticker, direction, confidence, predicted_return,
+                       entry_price, horizon, strategy_id, timestamp
+                FROM predictions
+                WHERE tenant_id = ? AND ticker IN ({placeholders})
+                  AND entry_price IS NOT NULL
+                ORDER BY timestamp DESC
+                """,
+                (tenant_id, *ticker_list),
+            ).fetchall()
+        except Exception:
+            pred_rows = []
+
+        # Keep only the most-recent prediction per ticker.
+        latest_pred: dict[str, object] = {}
+        for row in pred_rows:
+            t = row["ticker"]
+            if t not in latest_pred:
+                latest_pred[t] = row
+
         top_signals = []
         for i, ranking in enumerate(rankings):
-            # Get consensus info for this ticker
-            consensus_info = consensus_data.get(ranking.ticker, {})
-            
-            # Determine direction from consensus or ranking score
-            direction = "BUY" if ranking.score > 0 else "SELL"
-            if consensus_info.get('direction'):
-                direction = consensus_info['direction'].upper()
-            
-            # Calculate expected move based on score and conviction
-            expected_move = abs(ranking.score * ranking.conviction * 100)
-            
-            # Get alpha from ranking score
-            alpha = abs(ranking.score)
-            
-            # Find a recent strategy for this ticker
-            strategy = "unknown"
-            for signal in recent_signals:
-                if signal.ticker == ranking.ticker:
-                    strategy = signal.strategy
-                    break
-            
-            # Determine forecast horizon based on strategy or default to 7d
-            forecast_horizon = "7d"  # Default
-            if "1d" in strategy.lower() or "intraday" in strategy.lower():
-                forecast_horizon = "1d"
-            elif "30d" in strategy.lower() or "monthly" in strategy.lower():
-                forecast_horizon = "30d"
-            
-            # Format the signal with enhanced data
+            pred = latest_pred.get(ranking.ticker)
+
+            # Direction: use prediction if present, otherwise treat ranking as long-only.
+            direction = "BUY"
+            if pred and pred["direction"]:
+                direction = str(pred["direction"]).upper()
+
+            # Entry price: real recorded price from prediction, not fabricated.
+            entry_price: float | None = None
+            if pred and pred["entry_price"]:
+                entry_price = float(pred["entry_price"])
+
+            # Predicted return: use only if the model produced a non-zero forecast.
+            predicted_return: float | None = None
+            if pred and pred["predicted_return"]:
+                pr = float(pred["predicted_return"])
+                if pr != 0.0:
+                    predicted_return = pr
+
+            # Horizon: from prediction record, fall back to ranking-derived label.
+            horizon = "—"
+            if pred and pred["horizon"]:
+                horizon = str(pred["horizon"])
+
+            # Strategy label.
+            strategy = "—"
+            if pred and pred["strategy_id"]:
+                strategy = str(pred["strategy_id"])
+
+            # Conviction is a relative ranking weight, not a calibrated win rate.
+            conviction = ranking.conviction
+
             signal_data = {
-                'rank': i + 1,
-                'direction': direction,
-                'ticker': ranking.ticker,
-                'expected_move': f"{expected_move:+.1f}%",
-                'alpha': alpha,
-                'strategy': strategy,
-                'confidence': consensus_info.get('confidence', ranking.conviction),
-                'score': ranking.score,
-                'conviction': ranking.conviction,
-                'regime': ranking.regime,
-                'timestamp': ranking.timestamp,
-                'forecast_horizon': forecast_horizon,
-                'attribution': ranking.attribution if hasattr(ranking, 'attribution') else {},
-                'participating_strategies': consensus_info.get('participating_strategies', 1)
+                "rank": i + 1,
+                "direction": direction,
+                "ticker": ranking.ticker,
+                "entry_price": entry_price,
+                "predicted_return": predicted_return,
+                "conviction": conviction,
+                "score": ranking.score,
+                "regime": ranking.regime,
+                "timestamp": ranking.timestamp,
+                "forecast_horizon": horizon,
+                "strategy": strategy,
+                "attribution": ranking.attribution if hasattr(ranking, "attribution") else {},
             }
-            
             top_signals.append(signal_data)
-        
-        # Sort by confidence instead of alpha as requested
-        top_signals.sort(key=lambda x: x['confidence'], reverse=True)
+
+        top_signals.sort(key=lambda x: x["conviction"], reverse=True)
         return top_signals[:10]
 
     def _efficiency_view(self, r: StrategyEfficiencyRow) -> StrategyEfficiencyView:
