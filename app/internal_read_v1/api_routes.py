@@ -663,3 +663,81 @@ def api_pipeline_scheduler(request: Request) -> dict[str, Any]:
 
     db_file = os.environ.get("ALPHA_DB_PATH", "data/alpha.db")
     return get_scheduler(db_path=db_file).status()
+
+
+# ── Research publication (P0: local-first research, Railway-published evidence) ──
+
+def _db_file() -> str:
+    import os
+
+    return os.environ.get("ALPHA_DB_PATH", "data/alpha.db")
+
+
+def _write_conn():
+    import sqlite3
+
+    return sqlite3.connect(_db_file(), timeout=30, isolation_level=None)
+
+
+async def _verify_worker(request: Request) -> tuple[str, bytes]:
+    from app.research_publication.contract import verify_request
+
+    body = await request.body()
+    path_qs = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    ok, reason, key_id = verify_request(request.method, path_qs, {k.lower(): v for k, v in request.headers.items()}, body)
+    if not ok:
+        raise HTTPException(status_code=401, detail={"error": "unauthorized", "reason": reason})
+    return str(key_id), body
+
+
+@router.get("/sync/bars")
+async def api_sync_bars(request: Request, tickers: str | None = None, sessions: int = 604) -> dict[str, Any]:
+    """Full-window daily bars for the live universe (bar-sync/v1). Ed25519-signed workers only."""
+    from app.research_publication.service import sync_payload
+
+    await _verify_worker(request)
+    if not 1 <= sessions <= 800:
+        raise HTTPException(status_code=422, detail="sessions must be 1..800")
+    wanted = [t.strip().upper() for t in tickers.split(",")] if tickers else None
+    conn = _write_conn()
+    try:
+        return sync_payload(conn, wanted, sessions)
+    finally:
+        conn.close()
+
+
+@router.post("/research/publications")
+async def api_publish_research(request: Request):
+    """Signed, immutable research publication. Railway re-derives every claim before storing."""
+    from fastapi.responses import JSONResponse
+
+    from app.research_publication.service import publish
+
+    key_id, body = await _verify_worker(request)
+    conn = _write_conn()
+    try:
+        status, out = publish(conn, body, key_id=key_id)
+    finally:
+        conn.close()
+    return JSONResponse(status_code=status, content=out)
+
+
+@router.get("/research/publications/{publication_id}")
+def api_research_publication(request: Request, publication_id: str) -> dict[str, Any]:
+    from app.research_publication.service import publication_record
+
+    out = publication_record(_svc(request).store.conn, publication_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="publication not found")
+    return out
+
+
+@router.get("/research/latest")
+def api_research_latest(request: Request, ticker: str, tenant_id: str = "default") -> dict[str, Any]:
+    """Bot locator: this ticker's prediction in the latest accepted publication, with run gates."""
+    from app.research_publication.service import latest_for_ticker
+
+    if tenant_id != "default":
+        raise HTTPException(status_code=422, detail="unsupported tenant")
+    return latest_for_ticker(_svc(request).store.conn, ticker)
+

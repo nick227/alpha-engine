@@ -332,6 +332,33 @@ ENDPOINTS: tuple[EndpointSpec, ...] = (
         "allowed",
         "normal",
     ),
+    EndpointSpec(
+        "api_sync_bars",
+        "GET",
+        "/api/sync/bars",
+        "api_smoke",
+        "minimal_empty",
+        "allowed",
+        "high",
+    ),
+    EndpointSpec(
+        "api_research_publication",
+        "GET",
+        "/api/research/publications/{publication_id}",
+        "api_smoke",
+        "minimal_empty",
+        "allowed",
+        "normal",
+    ),
+    EndpointSpec(
+        "api_research_latest",
+        "GET",
+        "/api/research/latest",
+        "api_smoke",
+        "minimal_empty",
+        "allowed",
+        "high",
+    ),
 )
 
 
