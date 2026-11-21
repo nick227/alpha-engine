@@ -39,6 +39,12 @@ def _bar(ts: str, close: float, *, high: float | None = None, low: float | None 
     )
 
 
+# The fail-closed recommendation gate requires >=10 ranked and >=5 distinct recommended tickers.
+# Pin a small deterministic universe that satisfies it: sentinels (top-scored) plus filler symbols.
+_FILLER_SYMBOLS = tuple(f"FILL{i:02d}" for i in range(8))
+HEALTH_UNIVERSE = list(SENTINEL_SYMBOLS) + list(_FILLER_SYMBOLS)
+
+
 def _seed_data_health_baseline(db_path: Path, *, now: datetime) -> None:
     from app.db.repository import AlphaRepository
 
@@ -46,15 +52,16 @@ def _seed_data_health_baseline(db_path: Path, *, now: datetime) -> None:
 
     symbols = ("AAPL", "SPY", "QQQ")
     closes = {"AAPL": (175.0, 178.0), "SPY": (530.0, 535.0), "QQQ": (450.0, 455.0)}
-    for sym in symbols:
-        c1, c2 = closes[sym]
+    for sym in HEALTH_UNIVERSE:
+        c1, c2 = closes.get(sym, (50.0, 51.0))
         bars = [
             _bar((now - timedelta(days=1)).isoformat(), c1, high=c1 * 1.03, low=c1 * 0.97),
             _bar(now.isoformat(), c2, high=c2 * 1.02, low=c2 * 0.98),
         ]
         repo.save_price_bars(sym, "1d", bars, tenant_id="default")
 
-    for sym in symbols:
+    for sym in HEALTH_UNIVERSE:
+        is_sentinel = sym in SENTINEL_SYMBOLS
         repo.conn.execute(
             """
             INSERT OR REPLACE INTO candidate_queue
@@ -82,7 +89,7 @@ def _seed_data_health_baseline(db_path: Path, *, now: datetime) -> None:
                 "ws": 0.5,
                 "wq": 0.5,
                 "agreement_bonus": 0.05,
-                "p_final": 0.78,
+                "p_final": 0.78 if is_sentinel else 0.55,
                 "stability_score": 0.82,
             },
             tenant_id="default",
@@ -97,7 +104,7 @@ def _seed_data_health_baseline(db_path: Path, *, now: datetime) -> None:
                 str(uuid4()),
                 "default",
                 sym,
-                0.65,
+                0.65 if is_sentinel else 0.45,
                 0.7,
                 "{}",
                 "NORMAL",
@@ -157,6 +164,30 @@ def _seed_data_health_baseline(db_path: Path, *, now: datetime) -> None:
         ),
     )
 
+    # A genuinely healthy, completed prediction run for the (pinned) universe: fresh predictions
+    # plus a successful run_queue job. The fail-closed recommendation gate requires these;
+    # the fixture satisfies the gate rather than the gate being relaxed.
+    pred_ts = (now - timedelta(hours=3)).isoformat()
+    # run_id is added to `predictions` lazily by the prediction writer (not in the base schema).
+    repo.conn.execute("ALTER TABLE predictions ADD COLUMN run_id TEXT")
+    for sym in HEALTH_UNIVERSE:
+        repo.conn.execute(
+            """
+            INSERT INTO predictions
+              (id, tenant_id, strategy_id, scored_event_id, ticker, timestamp, prediction,
+               confidence, horizon, entry_price, mode, feature_snapshot_json, regime, run_id)
+            VALUES (?, 'default', 'seed_quant', ?, ?, ?, 'up', 0.7, '1d', 100.0, 'backtest', '{}', 'NORMAL', 'run_health_1')
+            """,
+            (f"pred_{sym}", f"evt_{sym}", sym, pred_ts),
+        )
+    repo.conn.execute(
+        """
+        INSERT INTO prediction_jobs (tenant_id, id, job_type, run_id, status, started_at, completed_at)
+        VALUES ('default', 'job_health_1', 'run_queue', 'run_health_1', 'success', ?, ?)
+        """,
+        ((now - timedelta(hours=3, minutes=30)).isoformat(), (now - timedelta(hours=2, minutes=50)).isoformat()),
+    )
+
     repo.conn.commit()
     repo.conn.close()
 
@@ -169,6 +200,14 @@ def data_health_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestC
     monkeypatch.setenv("INTERNAL_READ_INSECURE", "1")
     monkeypatch.delenv("INTERNAL_READ_KEY", raising=False)
     _seed_data_health_baseline(db, now=now)
+    # This lane models a small fixed universe. The production universe now includes the 150-symbol
+    # consumer set, which this fixture does not (and should not) seed bars for.
+    from app.core import pipeline_gates
+    from app.internal_read_v1 import intelligence_read, recommendations
+
+    pinned = list(HEALTH_UNIVERSE)
+    for mod in (pipeline_gates, recommendations, intelligence_read):
+        monkeypatch.setattr(mod, "get_active_universe_tickers", lambda **kw: pinned, raising=False)
     app = _load_app_or_skip()
 
     with TestClient(app) as client:
@@ -816,6 +855,14 @@ def test_data_health_fails_early_when_run_or_heartbeat_stale(
     monkeypatch.setenv("INTERNAL_READ_INSECURE", "1")
     monkeypatch.delenv("INTERNAL_READ_KEY", raising=False)
     _seed_data_health_baseline(db, now=now)
+    # This lane models a small fixed universe. The production universe now includes the 150-symbol
+    # consumer set, which this fixture does not (and should not) seed bars for.
+    from app.core import pipeline_gates
+    from app.internal_read_v1 import intelligence_read, recommendations
+
+    pinned = list(HEALTH_UNIVERSE)
+    for mod in (pipeline_gates, recommendations, intelligence_read):
+        monkeypatch.setattr(mod, "get_active_universe_tickers", lambda **kw: pinned, raising=False)
     app = _load_app_or_skip()
 
     with TestClient(app) as client:

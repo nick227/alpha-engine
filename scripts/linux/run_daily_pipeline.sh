@@ -30,7 +30,6 @@ RANKING_MAX_TICKERS="${ALPHA_RANKING_SNAPSHOT_MAX_TICKERS:-50}"
 
 TODAY=$(date -u +%Y-%m-%d)
 LOG_FILE="logs/daily_pipeline_${TODAY}.log"
-LOCK_FILE="pipeline.lock"
 STATUS_FILE="reports/pipeline-last-status.txt"
 
 mkdir -p logs reports
@@ -48,16 +47,31 @@ if [ ! -f "$DB_FILE" ]; then
     exit 2
 fi
 
-# Acquire run lock
-if [ -f "$LOCK_FILE" ]; then
-    LOCK_TS=$(cat "$LOCK_FILE")
-    log "WARNING: Run lock exists (created: $LOCK_TS). Pipeline execution skipped."
-    echo "SKIPPED step=lock_collision at=$(date -u +%s) lock_created=$LOCK_TS" > "$STATUS_FILE"
-    exit 99
+# Fail-closed preflight, identical to the API/CLI trigger (ALPHA_PIPELINE_ENABLED, storage headroom).
+if ! PREFLIGHT=$("$PYTHON" -c "
+import sys
+from app.jobs.pipeline_control import preflight
+ok, reason, info = preflight(sys.argv[1])
+print(reason or 'ok', info)
+sys.exit(0 if ok else 1)
+" "$DB_FILE" 2>&1); then
+    log "SKIPPED: preflight refused to run: $PREFLIGHT"
+    echo "SKIPPED step=preflight at=$(date -u +%s) detail=$PREFLIGHT" > "$STATUS_FILE"
+    exit 75
 fi
 
-echo "$TODAY $(date -u +%H:%M:%SZ)" > "$LOCK_FILE"
-trap 'rm -f "$LOCK_FILE"' EXIT
+# Acquire single-writer lock: kernel advisory flock on the same file the API/scheduler use
+# (next to the database). The kernel drops it when this process dies, so a crash or redeploy
+# can never leave a stale lock, and the file is never removed or tested for existence.
+LOCK_FILE="${ALPHA_PIPELINE_LOCK_PATH:-$(cd "$(dirname "$DB_FILE")" && pwd)/pipeline.lock}"
+exec 200>>"$LOCK_FILE"
+if ! flock -n 200; then
+    log "WARNING: another pipeline run holds the lock ($LOCK_FILE). Pipeline execution skipped."
+    echo "SKIPPED step=lock_held at=$(date -u +%s)" > "$STATUS_FILE"
+    exit 99
+fi
+: > "$LOCK_FILE"
+echo "{\"pid\": $$, \"host\": \"$(hostname)\", \"locked_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"via\": \"run_daily_pipeline.sh\"}" > "$LOCK_FILE"
 
 log "============================================================"
 log "Alpha Engine Daily Pipeline Started"

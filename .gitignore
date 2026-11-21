@@ -12,3 +12,9 @@ outputs/
 data/
 cache/
 pipeline.lock
+
+# Generated runtime status/health reports (environment-specific; never commit)
+reports/data-health-*.txt
+reports/pipeline-last-status.txt
+reports/system_monitor.txt
+reports/daily_report.txt
