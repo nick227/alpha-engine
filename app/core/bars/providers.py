@@ -318,10 +318,22 @@ class YFinanceBarsProvider:
         return out
 
 
+class NullBarsProvider:
+    name = "null"
+
+    def fetch_bars(self, *, timeframe: str, ticker: str, start: datetime, end: datetime) -> list[OHLCVBar]:
+        return []
+
+
 class MockBarsProvider:
     name = "mock"
 
     def fetch_bars(self, *, timeframe: str, ticker: str, start: datetime, end: datetime) -> list[OHLCVBar]:
+        if str(os.getenv("ALLOW_MOCK_BARS", "false")).lower() != "true":
+            raise RuntimeError(
+                "MockBarsProvider called but ALLOW_MOCK_BARS is not 'true'. "
+                "Mock bars are strictly disabled to prevent outcome data contamination."
+            )
         # Generate fake bars for POC stability
         tf = str(timeframe).strip().lower()
         step = timedelta(minutes=1)
@@ -358,5 +370,12 @@ def build_bars_provider(name: str) -> HistoricalBarsProvider:
     if key in {"yfinance", "yf"}:
         return YFinanceBarsProvider()
     if key in {"mock"}:
+        if str(os.getenv("ALLOW_MOCK_BARS", "false")).lower() != "true":
+            raise RuntimeError(
+                "Mock bars provider requested but ALLOW_MOCK_BARS is not 'true'. "
+                "Mock bars are strictly disabled to prevent outcome data contamination."
+            )
         return MockBarsProvider()
+    if key in {"null", "none", "empty"}:
+        return NullBarsProvider()
     raise ValueError(f"Unknown bars provider: {name}")

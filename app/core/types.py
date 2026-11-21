@@ -103,6 +103,7 @@ class PredictionOutcome:
     evaluated_at: datetime
     exit_reason: str = "horizon"
     mode: str = "backtest"  # backtest | paper | live - keeps corpus clean
+    actual_return: float = 0.0
 
 
 @dataclass(slots=True)

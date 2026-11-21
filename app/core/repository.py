@@ -370,8 +370,8 @@ class Repository(AlphaRepository):
         self.execute(
             """
             INSERT OR REPLACE INTO prediction_outcomes
-              (id, tenant_id, prediction_id, exit_price, return_pct, direction_correct, max_runup, max_drawdown, evaluated_at, exit_reason, residual_alpha)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (id, tenant_id, prediction_id, exit_price, return_pct, direction_correct, max_runup, max_drawdown, evaluated_at, exit_reason, residual_alpha, actual_return)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(out.id),
@@ -385,6 +385,7 @@ class Repository(AlphaRepository):
                 _isoz(out.evaluated_at),
                 str(out.exit_reason),
                 0.0,
+                float(getattr(out, "actual_return", out.return_pct)),
             ),
         )
         if self._tx_depth == 0:
