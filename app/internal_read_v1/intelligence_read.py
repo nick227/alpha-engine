@@ -424,18 +424,21 @@ def get_prediction_run_latest(conn: sqlite3.Connection, *, tenant_id: str, timef
     prediction_end = _parse_iso_dt(str(row["prediction_end"]))
     now = datetime.now(timezone.utc)
 
+    # Writers store *data windows* here (ingress = lookback, prediction = forecast horizon),
+    # not processing timestamps, so window spans are not latencies and prediction_end (a
+    # future forecast date) is not a freshness signal. Use only what is recorded:
+    #   staleness      = now - run creation
+    #   ingest latency = run creation - data cutoff (ingress_end)
+    #   predict latency: processing times are not recorded → None (never guessed)
+    created_at = _parse_iso_dt(str(row["created_at"])) if row["created_at"] else None
     ingest_latency_sec = (
-        max(0, int((ingress_end - ingress_start).total_seconds()))
-        if ingress_start and ingress_end
+        max(0, int((created_at - ingress_end).total_seconds()))
+        if created_at and ingress_end
         else None
     )
-    predict_latency_sec = (
-        max(0, int((prediction_end - prediction_start).total_seconds()))
-        if prediction_start and prediction_end
-        else None
-    )
+    predict_latency_sec = None
     staleness_minutes = (
-        max(0, int((now - prediction_end).total_seconds() / 60)) if prediction_end else None
+        max(0, int((now - created_at).total_seconds() / 60)) if created_at else None
     )
 
     latest_consensus = conn.execute(
