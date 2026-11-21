@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 from dataclasses import asdict
 from datetime import date
@@ -11,7 +12,10 @@ from typing import Any
 from app.core.active_universe import get_active_universe_tickers
 from app.core.target_stocks import get_target_stocks
 from app.db.repository import AlphaRepository
-from app.discovery.fundamentals_fmp import fetch_fmp_fundamentals_batch
+from app.discovery.fundamentals_fmp import (
+    fetch_fallback_fundamentals_batch,
+    fetch_fmp_fundamentals_batch,
+)
 from app.discovery.outcomes import compute_candidate_outcomes, compute_watchlist_outcomes, outcomes_to_repo_rows
 from app.discovery.promotion import select_high_conviction, watchlist_to_queue_rows, watchlist_to_repo_rows
 from app.discovery.runner import format_summary_json, run_discovery
@@ -373,18 +377,14 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 2
-        try:
-            snapshots = fetch_fmp_fundamentals_batch(symbols, api_key=args.api_key)
-        except RuntimeError as e:
-            if "FMP_API_KEY" in str(e):
-                print(
-                    json.dumps(
-                        {"status": "unavailable", "reason": "FMP_API_KEY is not configured", "synced": 0},
-                        indent=2,
-                    )
-                )
-                return 0
-            raise
+        snapshots = []
+        if args.api_key or os.getenv("FMP_API_KEY"):
+            try:
+                snapshots = fetch_fmp_fundamentals_batch(symbols, api_key=args.api_key)
+            except Exception:
+                snapshots = fetch_fallback_fundamentals_batch(symbols)
+        else:
+            snapshots = fetch_fallback_fundamentals_batch(symbols)
 
         repo = AlphaRepository(db_path=str(args.db))
         try:

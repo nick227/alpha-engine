@@ -755,9 +755,15 @@ async def _lifespan(app: FastAPI):
     db = os.environ.get(_ENV_DB, "data/alpha.db")
     svc = DashboardService(db_path=db)
     app.state.service = svc
+    from app.jobs.scheduler import get_scheduler
+
+    scheduler = get_scheduler(db_path=db)
+    if scheduler.is_enabled():
+        scheduler.start()
     try:
         yield
     finally:
+        scheduler.stop()
         svc.close()
 
 

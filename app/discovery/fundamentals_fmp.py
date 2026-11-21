@@ -105,3 +105,71 @@ def fetch_fmp_fundamentals_batch(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(lambda s: fetch_fmp_fundamentals(s, api_key=key), symbols))
 
+
+def fetch_yfinance_fundamentals(symbol: str, *, profiles_dir: str | Path | None = None) -> FundamentalsSnapshot:
+    """
+    Fallback fundamentals snapshot using local on-disk company profiles or yfinance.
+    Authorized legitimate sources without requiring external third-party API keys.
+    """
+    import json
+    from pathlib import Path
+
+    sym = str(symbol).upper().strip()
+    p_dir = Path(profiles_dir or os.getenv("COMPANY_PROFILES_DIR", "data/company_profiles"))
+    p_file = p_dir / f"{sym}.json"
+    sector = None
+    industry = None
+    shares = None
+    revenue_ttm = None
+
+    if p_file.exists():
+        try:
+            with open(p_file, "r", encoding="utf-8") as f:
+                pdata = json.load(f)
+            sector = pdata.get("sector")
+            industry = pdata.get("industry")
+            shares = pdata.get("sharesOutstanding")
+            revenue_ttm = pdata.get("totalRevenue") or pdata.get("revenue_ttm")
+        except Exception:
+            pass
+
+    # Query yfinance info if sector, industry, or shares are still missing
+    if sector is None or industry is None or shares is None:
+        try:
+            import yfinance as yf
+
+            t = yf.Ticker(sym)
+            info = t.info or {}
+            sector = sector or info.get("sector")
+            industry = industry or info.get("industry")
+            shares = shares or info.get("sharesOutstanding")
+            revenue_ttm = revenue_ttm or info.get("totalRevenue")
+        except Exception:
+            pass
+
+    return FundamentalsSnapshot(
+        ticker=sym,
+        as_of_date=date.today().isoformat(),
+        revenue_ttm=(float(revenue_ttm) if revenue_ttm is not None else None),
+        shares_outstanding=(float(shares) if shares is not None else None),
+        sector=(str(sector) if sector else None),
+        industry=(str(industry) if industry else None),
+    )
+
+
+def fetch_fallback_fundamentals_batch(
+    symbols: list[str],
+    *,
+    profiles_dir: str | Path | None = None,
+    max_workers: int = 6,
+) -> list[FundamentalsSnapshot]:
+    """Fetch fundamentals for a list of symbols using local profile cache / yfinance fallback."""
+    if not symbols:
+        return []
+    workers = max(1, min(max_workers, 16))
+    if len(symbols) <= 1:
+        return [fetch_yfinance_fundamentals(symbols[0], profiles_dir=profiles_dir)]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(lambda s: fetch_yfinance_fundamentals(s, profiles_dir=profiles_dir), symbols))
+
+

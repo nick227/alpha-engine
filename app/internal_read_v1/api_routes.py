@@ -609,3 +609,14 @@ def api_pipeline_status(request: Request) -> dict[str, Any]:
     from app.jobs import pipeline_control
 
     return pipeline_control.summary(os.environ.get("ALPHA_DB_PATH", "data/alpha.db"))
+
+
+@router.get("/pipeline/scheduler")
+def api_pipeline_scheduler(request: Request) -> dict[str, Any]:
+    """Scheduler configuration and status."""
+    import os
+
+    from app.jobs.scheduler import get_scheduler
+
+    db_file = os.environ.get("ALPHA_DB_PATH", "data/alpha.db")
+    return get_scheduler(db_path=db_file).status()
