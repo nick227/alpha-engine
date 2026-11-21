@@ -105,11 +105,18 @@ def refresh(db_path: str, *, fetch: Callable[[list[str], int], dict[str, list[tu
             inserted = corrected = unchanged = 0
             conn.execute("BEGIN IMMEDIATE")
             for t, rows in fetched.items():
-                existing = {r[0]: r[1:] for r in conn.execute(
+                # One row per session: legacy rows use several timestamp formats for the
+                # same date. Update the row that already represents a date (canonical
+                # format preferred) in place; insert a canonical row only for new dates.
+                by_date: dict[str, tuple[str, tuple]] = {}
+                for r in conn.execute(
                     "SELECT timestamp, open, high, low, close, volume FROM price_bars WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND timestamp >= ?",
-                    (TENANT, t, rows[0][0]))}
+                    (TENANT, t, rows[0][0][:10])):
+                    d = str(r[0])[:10]
+                    if d not in by_date or str(r[0]).endswith("T00:00:00+00:00"):
+                        by_date[d] = (str(r[0]), tuple(r[1:]))
                 for row in rows:
-                    old = existing.get(row[0])
+                    key, old = by_date.get(row[0][:10], (row[0], None))
                     if old is None:
                         inserted += 1
                     elif any(abs(float(a) - b) > REL_EPS * max(1.0, abs(b)) for a, b in zip(old, row[1:])):
@@ -119,7 +126,7 @@ def refresh(db_path: str, *, fetch: Callable[[list[str], int], dict[str, list[tu
                         continue
                     conn.execute(
                         "INSERT OR REPLACE INTO price_bars (tenant_id, ticker, timeframe, timestamp, open, high, low, close, volume) VALUES (?, ?, '1d', ?, ?, ?, ?, ?, ?)",
-                        (TENANT, t, *row))
+                        (TENANT, t, key, *row[1:]))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
