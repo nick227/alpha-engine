@@ -47,6 +47,7 @@ from app.internal_read_v1.intelligence_read import (
 )
 from app.internal_read_v1.prediction_transparency import prediction_scoreboard, prediction_evidence
 from app.internal_read_v1.pairwise_benchmark import compare_prediction_strategies
+from app.internal_read_v1.research_trace import build_prediction_trace
 from app.services.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -415,6 +416,19 @@ def api_matched_prediction_benchmark(
 @router.get("/predictions/scoreboard")
 def api_prediction_scoreboard(request: Request, tenant_id: str = "default", ticker: str | None = None, horizon: str | None = None, limit: int = 5000) -> dict[str, Any]:
     return prediction_scoreboard(_svc(request).store.conn, tenant_id=tenant_id, ticker=ticker, horizon=horizon, limit=limit)
+
+
+@router.get("/predictions/{prediction_id}/trace")
+def api_prediction_trace(
+    request: Request, prediction_id: str, tenant_id: str = "default"
+) -> dict[str, Any]:
+    """Versioned stored prediction evidence, for capture by a bot decision writer."""
+    out = build_prediction_trace(
+        _svc(request).store.conn, tenant_id=tenant_id, prediction_id=prediction_id
+    )
+    if out is None:
+        raise HTTPException(status_code=404, detail="prediction not found")
+    return out
 
 
 @router.get("/predictions/{prediction_id}/evidence")
