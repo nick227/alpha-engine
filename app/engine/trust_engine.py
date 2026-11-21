@@ -160,6 +160,7 @@ class TrustEngine:
             ret_sql = "NULL as return_pct"
 
         dd_sql = "o.max_drawdown as max_drawdown" if "max_drawdown" in out_cols else "NULL as max_drawdown"
+        quar_sql = "AND (o.is_quarantined = 0 OR o.is_quarantined IS NULL)" if "is_quarantined" in out_cols else ""
 
         rows = conn.execute(
             f"""
@@ -175,6 +176,7 @@ class TrustEngine:
             WHERE p.tenant_id = ?
               AND p.strategy_id = ?
               AND p.horizon = ?
+              {quar_sql}
             ORDER BY o.evaluated_at ASC
             """,
             (str(tenant_id), str(strategy_id), str(horizon)),

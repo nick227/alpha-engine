@@ -338,6 +338,7 @@ def get_ticker_accuracy(conn: sqlite3.Connection, *, tenant_id: str, symbol: str
           ON p.tenant_id = po.tenant_id
          AND p.id = po.prediction_id
         WHERE po.tenant_id = ? AND p.ticker = ?
+          AND (po.is_quarantined = 0 OR po.is_quarantined IS NULL)
         """,
         (tenant_id, ticker),
     ).fetchone()

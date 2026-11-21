@@ -47,7 +47,10 @@ def ensure_prediction_outcomes_schema(conn: sqlite3.Connection) -> None:
               max_drawdown REAL NOT NULL DEFAULT 0.0,
               evaluated_at TEXT NOT NULL,
               exit_reason TEXT NOT NULL DEFAULT 'horizon',
-              residual_alpha REAL NOT NULL DEFAULT 0.0
+              residual_alpha REAL NOT NULL DEFAULT 0.0,
+              is_quarantined INTEGER NOT NULL DEFAULT 0,
+              quarantine_reason TEXT,
+              quarantined_at TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_prediction_outcomes_idem
               ON prediction_outcomes(tenant_id, idempotency_key);
@@ -63,6 +66,9 @@ def ensure_prediction_outcomes_schema(conn: sqlite3.Connection) -> None:
         ("actual_return", "ALTER TABLE prediction_outcomes ADD COLUMN actual_return REAL;"),
         ("max_runup", "ALTER TABLE prediction_outcomes ADD COLUMN max_runup REAL NOT NULL DEFAULT 0.0;"),
         ("max_drawdown", "ALTER TABLE prediction_outcomes ADD COLUMN max_drawdown REAL NOT NULL DEFAULT 0.0;"),
+        ("is_quarantined", "ALTER TABLE prediction_outcomes ADD COLUMN is_quarantined INTEGER NOT NULL DEFAULT 0;"),
+        ("quarantine_reason", "ALTER TABLE prediction_outcomes ADD COLUMN quarantine_reason TEXT;"),
+        ("quarantined_at", "ALTER TABLE prediction_outcomes ADD COLUMN quarantined_at TEXT;"),
     ]
     for col, ddl in additions:
         if col not in cols:

@@ -121,6 +121,7 @@ def build_per_ticker_performance(
                 FROM prediction_outcomes po
                 JOIN predictions p ON p.id = po.prediction_id AND p.tenant_id = po.tenant_id
                 WHERE po.tenant_id = ? AND UPPER(TRIM(p.ticker)) = ?
+                  AND (po.is_quarantined = 0 OR po.is_quarantined IS NULL)
                   AND po.evaluated_at >= datetime('now', ?)
                 GROUP BY p.strategy_id
                 ORDER BY n DESC
@@ -164,6 +165,7 @@ def build_strategy_ticker_matrix(
             FROM prediction_outcomes po
             JOIN predictions p ON p.id = po.prediction_id AND p.tenant_id = po.tenant_id
             WHERE po.tenant_id = ?
+              AND (po.is_quarantined = 0 OR po.is_quarantined IS NULL)
               AND UPPER(TRIM(p.ticker)) IN ({ph})
               AND po.evaluated_at >= datetime('now', ?)
             GROUP BY UPPER(TRIM(p.ticker)), p.strategy_id
