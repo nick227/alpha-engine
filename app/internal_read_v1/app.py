@@ -281,8 +281,8 @@ def _ranking_factors(
                     "label": f"Attribution: {key}",
                     "value": round(val, 4),
                     "percentile": None,
-            "normalizedScore": round(rel, 4),
-            "scoreMethodology": "heuristic_not_percentile_or_probability",
+                    "normalizedScore": round(rel, 4),
+                    "scoreMethodology": "heuristic_not_percentile_or_probability",
                     "direction": "positive" if val >= 0.0 else "negative",
                     "weight": round(rel, 4),
                 }
@@ -294,7 +294,9 @@ def _ranking_factors(
                 "key": "fragile_rank",
                 "label": "Fragile Rank",
                 "value": round(fragility, 4),
-                "percentile": _factor_percentile(fragility),
+                "percentile": None,
+                "normalizedScore": round(fragility, 4),
+                "scoreMethodology": "heuristic_not_percentile_or_probability",
                 "direction": "negative",
             }
         )
@@ -304,7 +306,9 @@ def _ranking_factors(
                 "key": "negative_bias",
                 "label": "Negative Directional Bias",
                 "value": round(abs(score), 4),
-                "percentile": _factor_percentile(min(1.0, abs(score))),
+                "percentile": None,
+                "normalizedScore": round(min(1.0, abs(score)), 4),
+                "scoreMethodology": "heuristic_not_percentile_or_probability",
                 "direction": "negative",
             }
         )
@@ -314,7 +318,9 @@ def _ranking_factors(
                 "key": "pipeline_quality",
                 "label": "Pipeline Quality",
                 "value": round(run_quality, 4),
-                "percentile": _factor_percentile(run_quality),
+                "percentile": None,
+                "normalizedScore": round(run_quality, 4),
+                "scoreMethodology": "heuristic_not_percentile_or_probability",
                 "direction": "negative" if run_quality < 0.9 else "neutral",
             }
         )
@@ -923,11 +929,11 @@ def ranking_top(
                 "peerCount": item["peerCount"],
                 "factorVersion": "ranking_factors_v1",
                 "scoreMethodology": {
-            "score": "relative_priority", "conviction": "heuristic_strength",
-            "edgeScore": "heuristic_blend_not_expected_return", "isProbability": False,
-        },
-        "successProbability": None,
-        "rankingKind": "relative_priority",
+                    "score": "relative_priority", "conviction": "heuristic_strength",
+                    "edgeScore": "heuristic_blend_not_expected_return", "isProbability": False,
+                },
+                "successProbability": None,
+                "rankingKind": "relative_priority",
                 "notActionable": True,
                 "edgeScore": item["edgeScore"],
                 "fragilityScore": item["fragilityScore"],

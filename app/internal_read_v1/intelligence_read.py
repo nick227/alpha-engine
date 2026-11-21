@@ -312,6 +312,9 @@ def get_ticker_attribution(
             "materiality": float(r["materiality"]),
             "direction": str(r["direction"]),
             "confidence": float(r["confidence"]),
+            "confidenceMethodology": {"method": "event_model_score", "isProbability": False},
+            "successProbability": None,
+            "actionable": False,
             "conceptTags": _loads_list(str(r["concept_tags_json"]) if r["concept_tags_json"] is not None else None),
             "explanationTerms": _loads_list(
                 str(r["explanation_terms_json"]) if r["explanation_terms_json"] is not None else None
@@ -699,6 +702,13 @@ def get_engine_calendar(
                 "datePolicy": "actual",
             }
         )
+
+    for event in events:
+        event["confidenceMethodology"] = {
+            "method": "uncalibrated_" + event["type"] + "_score", "isProbability": False,
+        }
+        event["successProbability"] = None
+        event["actionable"] = False
 
     events.sort(key=lambda e: (str(e["date"]), str(e["type"]), str(e["symbol"])), reverse=True)
     trimmed = events[:n]
