@@ -179,7 +179,7 @@ def prediction_evidence(
                    FROM ml_models WHERE tenant_id = ? AND model_id = ? LIMIT 1""",
                 (tenant_id, str(model_id)),
             ).fetchone()
-            if row is not None:
+            if row is not None and str(row["horizon"]) == str(context["horizon"]) and str(row["train_end"]) <= str(context["timestamp"])[:10]:
                 model = {
                     "modelId": str(row["model_id"]), "modelFamily": "ridge_regression",
                     "trainStart": row["train_start"], "trainEnd": row["train_end"],
