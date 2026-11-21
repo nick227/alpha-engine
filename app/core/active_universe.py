@@ -11,6 +11,7 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
+from app.core.bar_freshness import current_tickers, latest_daily_bar_dates
 from app.core.target_stocks import get_target_stocks
 from app.db.repository import AlphaRepository
 
@@ -75,10 +76,29 @@ def get_active_universe_tickers(
     static = set(get_target_stocks(asof=asof))
     consumer = set(get_consumer_universe_tickers())
     if repository is not None:
+        conn = repository.conn
         admitted = set(repository.list_admitted_candidate_tickers(tenant_id))
     elif sqlite_conn is not None:
+        conn = sqlite_conn
         admitted = set(_admitted_from_sqlite(sqlite_conn, tenant_id=tenant_id))
     else:
         repo = AlphaRepository(db_path=db_path or "data/alpha.db")
+        conn = repo.conn
         admitted = set(repo.list_admitted_candidate_tickers(tenant_id))
+    if asof is None and admitted:
+        admitted -= stopped_admitted_tickers(conn, tenant_id=tenant_id, admitted=admitted, reference=static | consumer)
     return sorted(static | admitted | consumer)
+
+
+def stopped_admitted_tickers(
+    conn: sqlite3.Connection, *, tenant_id: str, admitted: set[str], reference: set[str]
+) -> set[str]:
+    """Admitted (dynamic) tickers whose bars stopped while the market's continued
+    (delisted, acquired, halted). Never-ingested admissions are kept so they get ingested;
+    static and consumer lists are curated and never dropped here. Current universe only:
+    historical backfills (asof) keep every admission."""
+    latest = latest_daily_bar_dates(conn, tenant_id=tenant_id, tickers=admitted)
+    current, market = current_tickers(conn, tenant_id=tenant_id, tickers=set(latest), reference=reference)
+    if market is None:
+        return set()
+    return set(latest) - current
