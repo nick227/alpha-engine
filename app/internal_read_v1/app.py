@@ -20,6 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.internal_read_v1.api_routes import router as api_router
+from app.core.active_universe import get_active_universe_tickers
+from app.core.bar_freshness import current_tickers
 from app.core.pipeline_gates import (
     LIMITED_EDGE_SCORE_MULTIPLIER,
     build_ranking_consumer_experience,
@@ -833,14 +835,17 @@ def health(request: Request) -> dict[str, Any]:
         pass
 
     pipeline_status = None
+    pipeline_gate: dict[str, Any] = {"would_run": None, "blocked_reason": None}
     try:
-        # Persistent status on the data volume wins; the repo file is a legacy fallback.
-        from app.jobs.pipeline_control import sentinel_text
+        from app.jobs.pipeline_control import preflight, sentinel_text
 
-        pipeline_status = sentinel_text(str(os.environ.get(_ENV_DB, "data/alpha.db")))
-        status_file = Path(__file__).resolve().parent.parent.parent / "reports" / "pipeline-last-status.txt"
-        if pipeline_status is None and status_file.exists():
-            pipeline_status = f"LEGACY_FILE {status_file.read_text(encoding='utf-8').strip()}"
+        db_file = str(os.environ.get(_ENV_DB, "data/alpha.db"))
+        would_run, blocked_reason, gate_info = preflight(db_file)
+        pipeline_gate = {"would_run": would_run, "blocked_reason": blocked_reason, **gate_info}
+        # Only the persistent status on the data volume is reported; never a repo file.
+        pipeline_status = sentinel_text(db_file) or "NO_RUN_RECORDED"
+        if blocked_reason:
+            pipeline_status += f" blocked={blocked_reason}"
     except Exception:
         pass
 
@@ -849,6 +854,7 @@ def health(request: Request) -> dict[str, Any]:
         "db_path": str(os.environ.get(_ENV_DB, "data/alpha.db")),
         "latest_bar_date": latest_bar_date,
         "pipeline_last_status": pipeline_status,
+        "pipeline_gate": pipeline_gate,
     }
 
 
@@ -883,10 +889,20 @@ def ranking_top(
     peer_count = _latest_snapshot_peer_count(conn, tenant_id=tenant_id, current_ts=current_ts)
     snapshot_windows = _load_recent_snapshot_rank_maps(conn, tenant_id=tenant_id, max_snapshots=5)
     pre_rankings: list[dict[str, Any]] = []
+    # Rank only instruments with a current daily bar (relative to the market's latest bar):
+    # research on delisted, acquired or un-ingested tickers cannot be priced or traded.
+    current, _market_date = current_tickers(
+        conn, tenant_id=tenant_id, tickers={str(r.ticker) for r in rows},
+        reference=set(get_active_universe_tickers(tenant_id=tenant_id, sqlite_conn=conn)),
+    )
+    excluded_no_current_price: list[str] = []
     for r in rows:
+        ticker_key = str(r.ticker).strip().upper()
+        if ticker_key not in current:
+            excluded_no_current_price.append(ticker_key)
+            continue
         base = _ranking_row(r)
         rank_idx = len(pre_rankings) + 1
-        ticker_key = str(r.ticker).strip().upper()
         rank_subdrivers = _load_rank_subdrivers(
             conn,
             tenant_id=tenant_id,
@@ -1073,6 +1089,7 @@ def ranking_top(
         "intelligenceConfidenceTier": final_tier,
         "consumerExperience": consumer_experience,
         "pipelineSignals": pipe,
+        "excludedNoCurrentPrice": sorted(set(excluded_no_current_price)),
         "rankings": rankings,
     }
 
