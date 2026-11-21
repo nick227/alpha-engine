@@ -53,7 +53,11 @@ def _config_path() -> Path:
     override = str(os.getenv("TARGET_STOCKS_CONFIG", "") or "").strip()
     if override:
         return Path(override)
-    return Path("config/target_stocks.yaml")
+    p = Path("config/target_stocks.yaml")
+    if p.exists():
+        return p
+    root_p = Path(__file__).resolve().parent.parent.parent / "config" / "target_stocks.yaml"
+    return root_p if root_p.exists() else p
 
 
 def _load_yaml_rows(path: Path) -> list[Any]:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from pathlib import Path
 from statistics import mean
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -815,9 +816,29 @@ def health(request: Request) -> dict[str, Any]:
         ok = True
     except Exception:
         ok = False
+
+    latest_bar_date = None
+    try:
+        row = svc.store.conn.execute(
+            "SELECT MAX(DATE(timestamp)) FROM price_bars WHERE tenant_id = 'default' AND timeframe = '1d'"
+        ).fetchone()
+        latest_bar_date = str(row[0]) if row and row[0] else None
+    except Exception:
+        pass
+
+    pipeline_status = None
+    try:
+        status_file = Path(__file__).resolve().parent.parent.parent / "reports" / "pipeline-last-status.txt"
+        if status_file.exists():
+            pipeline_status = status_file.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+
     return {
         "status": "ok" if ok else "degraded",
         "db_path": str(os.environ.get(_ENV_DB, "data/alpha.db")),
+        "latest_bar_date": latest_bar_date,
+        "pipeline_last_status": pipeline_status,
     }
 
 

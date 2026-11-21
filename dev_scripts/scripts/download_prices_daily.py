@@ -140,6 +140,12 @@ def _get_last_bar_dates(
     return result
 
 
+ALIAS_MAP: dict[str, str] = {
+    "MMC": "MRSH",
+}
+REVERSE_ALIAS_MAP: dict[str, str] = {v: k for k, v in ALIAS_MAP.items()}
+
+
 def _fetch_batch(
     symbols: list[str], start: date, end: date
 ) -> dict[str, pd.DataFrame]:
@@ -147,7 +153,8 @@ def _fetch_batch(
     Download OHLCV for a batch of symbols via yfinance.
     Returns {symbol: DataFrame} — only symbols with data are included.
     """
-    ticker_str = " ".join(symbols)
+    query_symbols = [ALIAS_MAP.get(s, s) for s in symbols]
+    ticker_str = " ".join(query_symbols)
     try:
         raw = yf.download(
             ticker_str,
@@ -172,16 +179,16 @@ def _fetch_batch(
         # Multi-ticker response
         available = set(raw.columns.get_level_values(1))
         for sym in symbols:
-            sym_upper = sym.upper()
-            if sym_upper not in available:
+            q_sym = ALIAS_MAP.get(sym, sym).upper()
+            if q_sym not in available:
                 continue
             try:
                 # Stack fields for this ticker into a regular DataFrame
-                df = raw.xs(sym_upper, axis=1, level=1).copy()
+                df = raw.xs(q_sym, axis=1, level=1).copy()
             except Exception:
                 continue
             if not df.empty and "Close" in df.columns:
-                out[sym_upper] = df
+                out[sym.upper()] = df
     else:
         # Single-ticker — columns are just field names
         sym = symbols[0].upper()
