@@ -760,6 +760,11 @@ class AlphaRepository:
             except Exception:
                 return set()
 
+        # prediction_outcomes: one definition for fresh and existing DBs (quarantine,
+        # idempotency, horizon columns). Readers filter on is_quarantined.
+        from app.engine.outcome_resolver import ensure_prediction_outcomes_schema
+        ensure_prediction_outcomes_schema(self.conn)
+
         # prediction_runs additions
         pr_cols = cols("prediction_runs")
         if pr_cols and "regime" not in pr_cols:
