@@ -762,9 +762,15 @@ async def _lifespan(app: FastAPI):
     scheduler = get_scheduler(db_path=db)
     if scheduler.is_enabled():
         scheduler.start()
+    from app.jobs.live_bars import LiveBarsScheduler
+
+    live_bars = LiveBarsScheduler(db)
+    if live_bars.is_enabled():
+        live_bars.start()
     try:
         yield
     finally:
+        live_bars.stop()
         scheduler.stop()
         svc.close()
 
@@ -781,6 +787,10 @@ class _InternalKeyMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
         if request.url.path in ("/health", "/docs", "/openapi.json", "/redoc"):
+            return await call_next(request)
+        # Research-worker routes authenticate with an Ed25519 request signature, verified
+        # in the route itself (it needs the exact body); they never accept the read key.
+        if request.url.path in ("/api/sync/bars", "/api/research/publications"):
             return await call_next(request)
         key = os.environ.get(_ENV_KEY, "").strip()
         if not key:
@@ -855,7 +865,17 @@ def health(request: Request) -> dict[str, Any]:
         "latest_bar_date": latest_bar_date,
         "pipeline_last_status": pipeline_status,
         "pipeline_gate": pipeline_gate,
+        "live_bars": _live_bars_summary(str(os.environ.get(_ENV_DB, "data/alpha.db"))),
     }
+
+
+def _live_bars_summary(db_file: str) -> dict[str, Any] | None:
+    from app.jobs.live_bars import read_status
+
+    s = read_status(db_file)
+    if not s:
+        return None
+    return {k: s.get(k) for k in ("state", "reason", "market_date", "inserted", "corrected", "finished_at", "missing")}
 
 
 @app.get("/ranking/top")
