@@ -246,6 +246,7 @@ def test_session_close_is_daily_only_and_live_universe_only(env):
     c = env["client"]
     latest = c.get("/api/market/session-close", params={"ticker": "AAA"}).json()
     assert latest["timeframe"] == "1d" and latest["session"] <= env["today"].isoformat() and latest["close"] > 0
+    assert latest["volume"] > 0 and latest["avgVolume20"] > 0 and latest["avgVolume20"] < latest["volume"]  # seeded volume rises daily
     earlier = c.get("/api/market/session-close", params={"ticker": "AAA", "session": "2026-01-01"})
     assert earlier.status_code in (200, 404)
     if earlier.status_code == 200:
