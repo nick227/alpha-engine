@@ -12,6 +12,8 @@ Exit codes:
 
 from __future__ import annotations
 
+import argparse
+import os
 import sqlite3
 import sys
 import uuid
@@ -22,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DB_PATH = ROOT / "data" / "alpha.db"
+DB_PATH = Path(os.environ.get("ALPHA_DB_PATH", ROOT / "data" / "alpha.db"))
 TENANT_ID = "default"
 
 
@@ -190,7 +192,12 @@ def backfill_prediction_outcomes(conn: sqlite3.Connection) -> int:
 
 
 def main() -> int:
-    conn = sqlite3.connect(str(DB_PATH))
+    parser = argparse.ArgumentParser(description="Auto backfill outcomes")
+    parser.add_argument("--db", default=str(DB_PATH), help="Path to database")
+    args, _ = parser.parse_known_args()
+    db_file = Path(args.db)
+
+    conn = sqlite3.connect(str(db_file))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=5000;")
