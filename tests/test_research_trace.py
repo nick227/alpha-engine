@@ -36,6 +36,7 @@ def test_trace_is_stable_and_verifiable():
     assert a == b
     assert a["schemaVersion"] == TRACE_VERSION
     assert verify_evidence_digest(a["evidence"]["snapshot"], a["evidence"]["sha256"])
+    assert a["evidence"]["canonicalJson"] == json.dumps(a["evidence"]["snapshot"], ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     assert a["decisionReference"]["evidenceSha256"] == a["evidence"]["sha256"]
     assert a["trading"]["actionable"] is False
     assert a["integrity"]["immutableStorageVerified"] is False
