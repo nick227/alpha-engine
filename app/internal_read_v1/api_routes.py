@@ -588,41 +588,24 @@ def api_recommendations_under_price(
 
 
 @router.post("/pipeline/run")
-def api_pipeline_run(request: Request, background: bool = True) -> dict[str, Any]:
-    """Trigger daily processing pipeline with single-writer lock protection."""
-    import threading
-    from app.jobs.daily_pipeline_runner import run_daily_pipeline
-    db_file = os.environ.get("ALPHA_DB_PATH", "data/alpha.db")
-    lock_path = Path("pipeline.lock")
-    if lock_path.exists():
-        try:
-            lock_content = lock_path.read_text(encoding="utf-8").strip()
-        except Exception:
-            lock_content = "active"
-        return {
-            "status": "skipped",
-            "reason": "lock_collision",
-            "message": f"Pipeline is already running (lock created: {lock_content}).",
-        }
+def api_pipeline_run(request: Request, background: bool = True, trigger: str = "api") -> dict[str, Any]:
+    """Trigger the daily pipeline: fail-closed preflight + single-writer flock on the data volume.
 
-    if background:
-        thread = threading.Thread(
-            target=run_daily_pipeline,
-            kwargs={"db_path": db_file},
-            daemon=True,
-            name="daily_pipeline_worker",
-        )
-        thread.start()
-        return {
-            "status": "started",
-            "mode": "background",
-            "db_path": db_file,
-            "message": "Daily pipeline started asynchronously with run lock protection.",
-        }
-    else:
-        rc = run_daily_pipeline(db_path=db_file)
-        return {
-            "status": "complete" if rc == 0 else "failed",
-            "exit_code": rc,
-            "db_path": db_file,
-        }
+    Skips (and records why) when disabled, short on storage, or already running.
+    """
+    import os
+
+    from app.jobs import pipeline_control
+
+    db_file = os.environ.get("ALPHA_DB_PATH", "data/alpha.db")
+    return pipeline_control.start_guarded(db_file, trigger=trigger[:40], background=background)
+
+
+@router.get("/pipeline/status")
+def api_pipeline_status(request: Request) -> dict[str, Any]:
+    """Persistent last-run status, lock state, and whether a run would be allowed now."""
+    import os
+
+    from app.jobs import pipeline_control
+
+    return pipeline_control.summary(os.environ.get("ALPHA_DB_PATH", "data/alpha.db"))

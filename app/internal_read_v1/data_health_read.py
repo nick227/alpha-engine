@@ -29,6 +29,14 @@ def _tri_ratio(ratio: float, *, sla: float, soft: float) -> str:
 
 
 def _read_pipeline_sentinel(repo_root: Path) -> str | None:
+    # Persistent status on the data volume wins over the file shipped in the repo.
+    import os
+
+    from app.jobs.pipeline_control import sentinel_text
+
+    persistent = sentinel_text(os.environ.get("ALPHA_DB_PATH", "data/alpha.db"))
+    if persistent:
+        return persistent
     path = repo_root / "reports" / "pipeline-last-status.txt"
     if not path.is_file():
         return None

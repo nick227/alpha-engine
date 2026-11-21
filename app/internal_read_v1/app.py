@@ -828,9 +828,13 @@ def health(request: Request) -> dict[str, Any]:
 
     pipeline_status = None
     try:
+        # Persistent status on the data volume wins; the repo file is a legacy fallback.
+        from app.jobs.pipeline_control import sentinel_text
+
+        pipeline_status = sentinel_text(str(os.environ.get(_ENV_DB, "data/alpha.db")))
         status_file = Path(__file__).resolve().parent.parent.parent / "reports" / "pipeline-last-status.txt"
-        if status_file.exists():
-            pipeline_status = status_file.read_text(encoding="utf-8").strip()
+        if pipeline_status is None and status_file.exists():
+            pipeline_status = f"LEGACY_FILE {status_file.read_text(encoding='utf-8').strip()}"
     except Exception:
         pass
 

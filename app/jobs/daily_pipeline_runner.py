@@ -128,8 +128,19 @@ def main():
     parser.add_argument("--tenant-id", default="default", help="Tenant ID")
     args = parser.parse_args()
 
-    rc = run_daily_pipeline(db_path=args.db, tenant_id=args.tenant_id)
-    sys.exit(rc)
+    # Same preflight + single-writer lock as the API trigger, so CLI and scheduled runs never overlap.
+    from app.jobs.pipeline_control import start_guarded
+
+    result = start_guarded(
+        args.db,
+        trigger="cli",
+        background=False,
+        runner=lambda db_path: run_daily_pipeline(db_path=db_path, tenant_id=args.tenant_id),
+    )
+    logger.info(f"Pipeline result: {result}")
+    if result.get("status") == "skipped":
+        sys.exit(75)  # EX_TEMPFAIL: not run (disabled, low storage, or already running)
+    sys.exit(result.get("exit_code") or 0)
 
 if __name__ == "__main__":
     main()
