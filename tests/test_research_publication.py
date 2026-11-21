@@ -240,3 +240,16 @@ def test_live_bars_refresh_reconciles_full_window(tmp_path, monkeypatch):
 
     monkeypatch.setattr(live_bars, "MIN_FREE_MB", 10**9)
     assert live_bars.refresh(str(db), fetch=lambda t, d: fetched)["reason"] == "insufficient_storage"
+
+
+def test_session_close_is_daily_only_and_live_universe_only(env):
+    c = env["client"]
+    latest = c.get("/api/market/session-close", params={"ticker": "AAA"}).json()
+    assert latest["timeframe"] == "1d" and latest["session"] <= env["today"].isoformat() and latest["close"] > 0
+    earlier = c.get("/api/market/session-close", params={"ticker": "AAA", "session": "2026-01-01"})
+    assert earlier.status_code in (200, 404)
+    if earlier.status_code == 200:
+        assert earlier.json()["session"] <= "2026-01-01"
+    assert c.get("/api/market/session-close", params={"ticker": "ZZZ"}).status_code == 404
+    assert c.get("/api/market/session-close", params={"ticker": "AAA", "session": "bad"}).status_code == 422
+
