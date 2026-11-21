@@ -29,6 +29,14 @@ def _tri_ratio(ratio: float, *, sla: float, soft: float) -> str:
 
 
 def _read_pipeline_sentinel(repo_root: Path) -> str | None:
+    # Persistent status on the data volume wins over the file shipped in the repo.
+    import os
+
+    from app.jobs.pipeline_control import sentinel_text
+
+    persistent = sentinel_text(os.environ.get("ALPHA_DB_PATH", "data/alpha.db"))
+    if persistent:
+        return persistent
     path = repo_root / "reports" / "pipeline-last-status.txt"
     if not path.is_file():
         return None
@@ -126,6 +134,83 @@ def _profile_ipo_coverage(universe: list[str], base: Path) -> tuple[int, int, fl
     return with_ipo, with_file, round(with_ipo / float(with_file), 4)
 
 
+def _consensus_coverage(
+    conn: sqlite3.Connection, *, tenant_id: str, universe: list[str], max_age_days: int = 7
+) -> tuple[int, int, float, str]:
+    if not universe:
+        return 0, 0, 1.0, "OK"
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    ph = ",".join("?" * len(universe))
+    try:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(DISTINCT ticker) AS n
+            FROM consensus_signals
+            WHERE tenant_id = ?
+              AND created_at >= ?
+              AND UPPER(TRIM(ticker)) IN ({ph})
+            """,
+            (tenant_id, cutoff, *[t.upper() for t in universe]),
+        ).fetchone()
+        n = int(row["n"] or 0) if row else 0
+    except sqlite3.OperationalError:
+        return 0, len(universe), 0.0, "FAIL"
+    exp = len(universe)
+    ratio = round(n / float(exp), 4) if exp else 1.0
+    status = _tri_ratio(ratio, sla=0.85, soft=0.55)
+    return n, exp, ratio, status
+
+
+def _ml_features_coverage(
+    conn: sqlite3.Connection, *, tenant_id: str, max_age_days: int = 14
+) -> dict[str, Any]:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total, SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS fresh FROM ml_learning_rows WHERE tenant_id = ?",
+            (cutoff, tenant_id),
+        ).fetchone()
+        total = int(row["total"] or 0) if row else 0
+        fresh = int(row["fresh"] or 0) if row else 0
+        status = "OK" if fresh > 0 else ("WARN" if total > 0 else "FAIL")
+        return {"status": status, "fresh": fresh, "total": total}
+    except sqlite3.OperationalError:
+        return {"status": "UNAVAILABLE", "fresh": 0, "total": 0}
+
+
+def _strategy_stats_coverage(
+    conn: sqlite3.Connection, *, tenant_id: str
+) -> dict[str, Any]:
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total, SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS active FROM strategies WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+        total = int(row["total"] or 0) if row else 0
+        active = int(row["active"] or 0) if row else 0
+        status = "OK" if active > 0 else ("WARN" if total > 0 else "FAIL")
+        return {"status": status, "total": total, "active": active}
+    except sqlite3.OperationalError:
+        return {"status": "UNAVAILABLE", "total": 0, "active": 0}
+
+
+def _events_coverage(
+    conn: sqlite3.Connection, *, tenant_id: str, max_age_days: int = 7
+) -> dict[str, Any]:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total, SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END) AS fresh FROM raw_events WHERE tenant_id = ?",
+            (cutoff, tenant_id),
+        ).fetchone()
+        total = int(row["total"] or 0) if row else 0
+        fresh = int(row["fresh"] or 0) if row else 0
+        status = "OK" if fresh > 0 else ("WARN" if total > 0 else "FAIL")
+        return {"status": status, "fresh": fresh, "total": total}
+    except sqlite3.OperationalError:
+        return {"status": "UNAVAILABLE", "fresh": 0, "total": 0}
+
+
 def build_data_health_compact(
     conn: sqlite3.Connection,
     *,
@@ -176,6 +261,11 @@ def build_data_health_compact(
     else:
         predictions = "FAIL"
 
+    cn, ce, c_ratio, c_status = _consensus_coverage(conn, tenant_id=tenant_id, universe=universe)
+    ml_feat = _ml_features_coverage(conn, tenant_id=tenant_id)
+    strat_stats = _strategy_stats_coverage(conn, tenant_id=tenant_id)
+    events_stats = _events_coverage(conn, tenant_id=tenant_id)
+
     parts = (prices, fundamentals, profiles, predictions)
     if "FAIL" in parts:
         overall = "FAIL"
@@ -201,4 +291,8 @@ def build_data_health_compact(
         "fundamentals": {"status": fundamentals, "with_recent_row": fn, "expected": fe, "ratio": fund_ratio},
         "profiles": {"status": profiles, "detail": prof_detail},
         "predictions": {"status": predictions, "last_7d": pred_7d, "total": pred_total},
+        "consensus": {"status": c_status, "fresh": cn, "expected": ce, "ratio": c_ratio},
+        "ml_features": ml_feat,
+        "strategy_stats": strat_stats,
+        "events": events_stats,
     }

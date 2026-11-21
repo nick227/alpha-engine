@@ -40,6 +40,27 @@ def _admitted_from_sqlite(conn: sqlite3.Connection, *, tenant_id: str) -> list[s
     return sorted(set(out))
 
 
+def get_consumer_universe_tickers() -> list[str]:
+    """Load canonical consumer universe symbols from config/consumer_universe_150.yaml."""
+    import yaml
+    p = Path(__file__).resolve().parent.parent.parent / "config" / "consumer_universe_150.yaml"
+    if not p.exists():
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        symbols: list[str] = []
+        for v in data.values():
+            if isinstance(v, list):
+                for s in v:
+                    clean = str(s).strip().upper().replace(".", "-")
+                    if clean and clean not in symbols:
+                        symbols.append(clean)
+        return symbols
+    except Exception:
+        return []
+
+
 def get_active_universe_tickers(
     *,
     tenant_id: str = "default",
@@ -49,9 +70,10 @@ def get_active_universe_tickers(
     db_path: str | Path | None = None,
 ) -> list[str]:
     """
-    static_watchlist (config/target_stocks.yaml) ∪ candidate_queue where status='admitted'.
+    static_watchlist (config/target_stocks.yaml) ∪ candidate_queue where status='admitted' ∪ consumer_universe_150.yaml.
     """
     static = set(get_target_stocks(asof=asof))
+    consumer = set(get_consumer_universe_tickers())
     if repository is not None:
         admitted = set(repository.list_admitted_candidate_tickers(tenant_id))
     elif sqlite_conn is not None:
@@ -59,4 +81,4 @@ def get_active_universe_tickers(
     else:
         repo = AlphaRepository(db_path=db_path or "data/alpha.db")
         admitted = set(repo.list_admitted_candidate_tickers(tenant_id))
-    return sorted(static | admitted)
+    return sorted(static | admitted | consumer)

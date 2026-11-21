@@ -264,24 +264,41 @@ def get_consensus_signals(
         """,
         [tenant_id, *params],
     ).fetchall()
+    def _opt_float(v: Any) -> float | None:
+        return float(v) if v is not None else None
+
+    def _row_val(r: Any, key: str, default: Any = None) -> Any:
+        try:
+            return r[key]
+        except (IndexError, KeyError):
+            return default
+
     signals = [
         {
-            "ticker": str(r["ticker"]),
-            "regime": str(r["regime"]),
-            "sentimentStrategyId": str(r["sentiment_strategy_id"]) if r["sentiment_strategy_id"] is not None else None,
-            "quantStrategyId": str(r["quant_strategy_id"]) if r["quant_strategy_id"] is not None else None,
-            "sentimentScore": float(r["sentiment_score"]),
-            "quantScore": float(r["quant_score"]),
-            "ws": float(r["ws"]),
-            "wq": float(r["wq"]),
-            "agreementBonus": float(r["agreement_bonus"]),
-            "pFinal": float(r["p_final"]),
-            "stabilityScore": float(r["stability_score"]),
-            "createdAt": str(r["created_at"]),
+            "ticker": str(_row_val(r, "ticker", "")),
+            "regime": str(_row_val(r, "regime")) if _row_val(r, "regime") is not None else "unknown",
+            "sentimentStrategyId": str(_row_val(r, "sentiment_strategy_id")) if _row_val(r, "sentiment_strategy_id") is not None else None,
+            "quantStrategyId": str(_row_val(r, "quant_strategy_id")) if _row_val(r, "quant_strategy_id") is not None else None,
+            "sentimentScore": _opt_float(_row_val(r, "sentiment_score")),
+            "quantScore": _opt_float(_row_val(r, "quant_score")),
+            "ws": _opt_float(_row_val(r, "ws")),
+            "wq": _opt_float(_row_val(r, "wq")),
+            "agreementBonus": _opt_float(_row_val(r, "agreement_bonus")),
+            "pFinal": _opt_float(_row_val(r, "p_final")),
+            "scoreMethodology": {"method": "weighted_consensus", "isProbability": False},
+            "successProbability": None,
+            "actionable": False,
+            "stabilityScore": _opt_float(_row_val(r, "stability_score")),
+            "createdAt": str(_row_val(r, "created_at")) if _row_val(r, "created_at") is not None else None,
         }
         for r in rows
     ]
-    return {"tenant_id": tenant_id, "count": len(signals), "signals": signals}
+    return {
+        "tenant_id": tenant_id,
+        "status": "available" if signals else "unavailable",
+        "count": len(signals),
+        "signals": signals,
+    }
 
 
 def get_ticker_attribution(
@@ -306,6 +323,9 @@ def get_ticker_attribution(
             "materiality": float(r["materiality"]),
             "direction": str(r["direction"]),
             "confidence": float(r["confidence"]),
+            "confidenceMethodology": {"method": "event_model_score", "isProbability": False},
+            "successProbability": None,
+            "actionable": False,
             "conceptTags": _loads_list(str(r["concept_tags_json"]) if r["concept_tags_json"] is not None else None),
             "explanationTerms": _loads_list(
                 str(r["explanation_terms_json"]) if r["explanation_terms_json"] is not None else None
@@ -329,6 +349,7 @@ def get_ticker_accuracy(conn: sqlite3.Connection, *, tenant_id: str, symbol: str
           ON p.tenant_id = po.tenant_id
          AND p.id = po.prediction_id
         WHERE po.tenant_id = ? AND p.ticker = ?
+          AND (po.is_quarantined = 0 OR po.is_quarantined IS NULL)
         """,
         (tenant_id, ticker),
     ).fetchone()
@@ -377,7 +398,7 @@ def get_prediction_run_latest(conn: sqlite3.Connection, *, tenant_id: str, timef
                 SELECT id, ingress_start, ingress_end, prediction_start, prediction_end, timeframe, regime, created_at
                 FROM prediction_runs
                 WHERE tenant_id = ? AND timeframe = ?
-                ORDER BY prediction_end DESC, created_at DESC
+                ORDER BY julianday(created_at) DESC, id DESC
                 LIMIT 1
                 """,
                 (tenant_id, str(timeframe)),
@@ -388,7 +409,7 @@ def get_prediction_run_latest(conn: sqlite3.Connection, *, tenant_id: str, timef
                 SELECT id, ingress_start, ingress_end, prediction_start, prediction_end, timeframe, regime, created_at
                 FROM prediction_runs
                 WHERE tenant_id = ?
-                ORDER BY prediction_end DESC, created_at DESC
+                ORDER BY julianday(created_at) DESC, id DESC
                 LIMIT 1
                 """,
                 (tenant_id,),
@@ -570,6 +591,9 @@ def get_prediction_context(
     ranking_ctx = _loads_obj(str(row["ranking_context_json"]) if row["ranking_context_json"] is not None else None)
     feature_ctx = _loads_obj(str(row["feature_snapshot_json"]) if row["feature_snapshot_json"] is not None else None)
     return {
+        "confidenceMethodology": {"method": "strategy_defined_uncalibrated", "isProbability": False},
+        "successProbability": None,
+        "actionable": False,
         "predictionId": str(row["id"]),
         "tenant_id": str(row["tenant_id"]),
         "ticker": str(row["ticker"]),
@@ -690,6 +714,13 @@ def get_engine_calendar(
                 "datePolicy": "actual",
             }
         )
+
+    for event in events:
+        event["confidenceMethodology"] = {
+            "method": "uncalibrated_" + event["type"] + "_score", "isProbability": False,
+        }
+        event["successProbability"] = None
+        event["actionable"] = False
 
     events.sort(key=lambda e: (str(e["date"]), str(e["type"]), str(e["symbol"])), reverse=True)
     trimmed = events[:n]

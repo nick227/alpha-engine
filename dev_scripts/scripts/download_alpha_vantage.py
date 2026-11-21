@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 SYMBOLS = ["SPY", "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "AMD", "QQQ", "IWM"]
 OUTPUT_DIR = "data/raw_dumps/alpha_vantage"
-API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "EY8J3ZVMQNHVWAI8")
+API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

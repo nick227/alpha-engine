@@ -166,7 +166,7 @@ class LiveLoopService:
         can_ensure = True
         if bars_cache is None:
             # Offline-safe mode: read from existing cached bars without fetching.
-            bars_cache = BarsCache(db_path=self.db_path, provider=build_bars_provider("mock"), tenant_id=self.tenant_id)
+            bars_cache = BarsCache(db_path=self.db_path, provider=build_bars_provider("null"), tenant_id=self.tenant_id)
             can_ensure = False
 
         # Determine the live window and ensure bars for the whole universe (deterministic).

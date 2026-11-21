@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -9,9 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.pipeline_gates import (
     compute_pipeline_signals,
-    intelligence_confidence_tier,
     product_labels_for_tier,
-    should_block_best_pick_without_predictions,
+    recommendation_quality,
 )
 from app.internal_read_v1.bars_chart import (
     build_candles_payload,
@@ -45,6 +45,9 @@ from app.internal_read_v1.intelligence_read import (
     get_ticker_attribution,
     list_strategies_catalog,
 )
+from app.internal_read_v1.prediction_transparency import prediction_scoreboard, prediction_evidence
+from app.internal_read_v1.pairwise_benchmark import compare_prediction_strategies
+from app.internal_read_v1.research_trace import build_prediction_trace
 from app.services.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -396,6 +399,46 @@ def api_prediction_runs_latest(
     return out
 
 
+@router.get("/predictions/benchmarks/matched")
+def api_matched_prediction_benchmark(
+    request: Request, ml_strategy_id: str, rules_strategy_id: str,
+    tenant_id: str = "default", horizon: str | None = None, limit: int = 10000
+) -> dict[str, Any]:
+    if not ml_strategy_id or not rules_strategy_id or ml_strategy_id == rules_strategy_id:
+        raise HTTPException(status_code=422, detail="two different strategy IDs are required")
+    return compare_prediction_strategies(
+        _svc(request).store.conn, tenant_id=tenant_id,
+        ml_strategy_id=ml_strategy_id, rules_strategy_id=rules_strategy_id,
+        horizon=horizon, max_recent_rows=limit,
+    )
+
+
+@router.get("/predictions/scoreboard")
+def api_prediction_scoreboard(request: Request, tenant_id: str = "default", ticker: str | None = None, horizon: str | None = None, limit: int = 5000) -> dict[str, Any]:
+    return prediction_scoreboard(_svc(request).store.conn, tenant_id=tenant_id, ticker=ticker, horizon=horizon, limit=limit)
+
+
+@router.get("/predictions/{prediction_id}/trace")
+def api_prediction_trace(
+    request: Request, prediction_id: str, tenant_id: str = "default"
+) -> dict[str, Any]:
+    """Versioned stored prediction evidence, for capture by a bot decision writer."""
+    out = build_prediction_trace(
+        _svc(request).store.conn, tenant_id=tenant_id, prediction_id=prediction_id
+    )
+    if out is None:
+        raise HTTPException(status_code=404, detail="prediction not found")
+    return out
+
+
+@router.get("/predictions/{prediction_id}/evidence")
+def api_prediction_evidence(request: Request, prediction_id: str, tenant_id: str = "default") -> dict[str, Any]:
+    out = prediction_evidence(_svc(request).store.conn, tenant_id=tenant_id, prediction_id=prediction_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="prediction not found")
+    return out
+
+
 @router.get("/predictions/{prediction_id}/context")
 def api_prediction_context(request: Request, prediction_id: str, tenant_id: str = "default") -> dict[str, Any]:
     out = get_prediction_context(_svc(request).store.conn, tenant_id=tenant_id, prediction_id=prediction_id)
@@ -433,6 +476,22 @@ def api_engine_calendar(
     return out
 
 
+def _recommendation_metadata(conn: Any, tenant_id: str) -> dict[str, Any]:
+    quality = recommendation_quality(conn, tenant_id=tenant_id)
+    tier = "full" if quality["actionable"] else "suppressed"
+    return {
+        "contractVersion": "2.0",
+        "qualityStatus": quality,
+        "suppressionReasons": quality["suppressionReasons"],
+        "intelligenceConfidenceTier": tier,
+        "pipelineSignals": quality["pipelineSignals"],
+        "consumerExperience": {
+            **product_labels_for_tier(tier),
+            "message": "" if quality["actionable"] else "Research only; actionable recommendations unavailable.",
+        },
+    }
+
+
 @router.get("/recommendations/latest")
 def api_recommendations_latest(
     request: Request,
@@ -455,20 +514,10 @@ def api_recommendations_latest(
         preference=pref_key,
         limit=n,
     )
-    signals = compute_pipeline_signals(conn, tenant_id=tenant_id)
-    tier = intelligence_confidence_tier(signals)
-    labels = product_labels_for_tier(tier)
     return {
-        "tenant_id": tenant_id,
-        "mode": mode_key,
-        "selectionPreference": pref_key,
-        "intelligenceConfidenceTier": tier,
-        "consumerExperience": {
-            **labels,
-            "message": "" if rows else "No recommendations available.",
-        },
-        "pipelineSignals": signals.as_public_dict(),
-        "recommendations": rows,
+        "tenant_id": tenant_id, "mode": mode_key, "selectionPreference": pref_key,
+        **_recommendation_metadata(conn, tenant_id), "recommendations": rows,
+        "actionableCount": sum(r["actionable"] for r in rows),
     }
 
 
@@ -485,16 +534,12 @@ def api_recommendations_best(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     conn = _svc(request).store.conn
-    signals = compute_pipeline_signals(conn, tenant_id=tenant_id)
-    if should_block_best_pick_without_predictions(signals.predictions_total):
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "status": "limited_mode",
-                "reason": "prediction_pipeline_inactive",
-                "retryHint": "Run pipeline",
-            },
-        )
+    metadata = _recommendation_metadata(conn, tenant_id)
+    if not metadata["qualityStatus"]["actionable"]:
+        raise HTTPException(status_code=503, detail={
+            "status": "limited_mode", "reason": "recommendations_suppressed",
+            "retryHint": "Run pipeline", **metadata,
+        })
     row = get_recommendation_best(
         conn,
         tenant_id=tenant_id,
@@ -502,15 +547,16 @@ def api_recommendations_best(
         preference=pref_key,
     )
     if row is None:
-        raise HTTPException(status_code=404, detail="no recommendation available")
-    tier = intelligence_confidence_tier(signals)
-    labels = product_labels_for_tier(tier)
-    return {
-        **row,
-        "intelligenceConfidenceTier": tier,
-        "consumerExperience": {**labels, "message": ""},
-        "pipelineSignals": signals.as_public_dict(),
-    }
+        raise HTTPException(status_code=503, detail={
+            **metadata, "status": "limited_mode", "reason": "no_eligible_recommendation",
+            "suppressionReasons": ["NO_ELIGIBLE_RECOMMENDATION"],
+            "qualityStatus": {**metadata["qualityStatus"], "status": "suppressed",
+                              "actionable": False, "suppressionReasons": ["NO_ELIGIBLE_RECOMMENDATION"]},
+            "intelligenceConfidenceTier": "suppressed",
+            "consumerExperience": {**product_labels_for_tier("suppressed"),
+                                   "message": "No eligible actionable recommendation."},
+        })
+    return {**metadata, **row}
 
 
 @router.get("/recommendations/{ticker}")
@@ -530,13 +576,22 @@ def api_recommendations_ticker(
     )
     if row is None:
         return {
+            **_recommendation_metadata(_svc(request).store.conn, tenant_id),
             "found": False,
+            "actionable": False,
             "ticker": sym,
             "tenant_id": tenant_id,
             "mode": mode_key,
             "message": "no recommendation for ticker",
         }
-    return {"found": True, **row}
+    return {
+        **_recommendation_metadata(_svc(request).store.conn, tenant_id), "found": True, **row,
+        "intelligenceConfidenceTier": "full" if row["actionable"] else "suppressed",
+        "consumerExperience": {
+            **product_labels_for_tier("full" if row["actionable"] else "suppressed"),
+            "message": "" if row["actionable"] else "Research only; actionable recommendations unavailable.",
+        },
+    }
 
 
 @router.get("/recommendations/under/{price_cap}")
@@ -548,7 +603,7 @@ def api_recommendations_under_price(
     preference: str = "long_only",
     tenant_id: str = "default",
 ) -> dict[str, Any]:
-    if price_cap <= 0:
+    if not math.isfinite(price_cap) or price_cap <= 0:
         raise HTTPException(status_code=400, detail="price_cap must be > 0")
     try:
         mode_key = parse_mode(mode)
@@ -569,5 +624,42 @@ def api_recommendations_under_price(
         "mode": mode_key,
         "selectionPreference": pref_key,
         "priceCap": float(price_cap),
+        **_recommendation_metadata(_svc(request).store.conn, tenant_id),
         "recommendations": rows,
+        "actionableCount": sum(r["actionable"] for r in rows),
     }
+
+
+@router.post("/pipeline/run")
+def api_pipeline_run(request: Request, background: bool = True, trigger: str = "api") -> dict[str, Any]:
+    """Trigger the daily pipeline: fail-closed preflight + single-writer flock on the data volume.
+
+    Skips (and records why) when disabled, short on storage, or already running.
+    """
+    import os
+
+    from app.jobs import pipeline_control
+
+    db_file = os.environ.get("ALPHA_DB_PATH", "data/alpha.db")
+    return pipeline_control.start_guarded(db_file, trigger=trigger[:40], background=background)
+
+
+@router.get("/pipeline/status")
+def api_pipeline_status(request: Request) -> dict[str, Any]:
+    """Persistent last-run status, lock state, and whether a run would be allowed now."""
+    import os
+
+    from app.jobs import pipeline_control
+
+    return pipeline_control.summary(os.environ.get("ALPHA_DB_PATH", "data/alpha.db"))
+
+
+@router.get("/pipeline/scheduler")
+def api_pipeline_scheduler(request: Request) -> dict[str, Any]:
+    """Scheduler configuration and status."""
+    import os
+
+    from app.jobs.scheduler import get_scheduler
+
+    db_file = os.environ.get("ALPHA_DB_PATH", "data/alpha.db")
+    return get_scheduler(db_path=db_file).status()

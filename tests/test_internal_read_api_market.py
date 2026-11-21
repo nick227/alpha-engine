@@ -234,21 +234,11 @@ def test_api_recommendations_latest_long_only(market_client: TestClient) -> None
     assert rows[0]["selectionPreference"] == "long_only"
 
 
-def test_api_recommendations_best(market_client: TestClient) -> None:
-    res = market_client.get("/api/recommendations/best")
-    assert res.status_code == 200
-    row = res.json()
-    assert row["ticker"] == "TST"
-    assert row["mode"] == "balanced"
-    assert row["selectionPreference"] == "absolute"
-
-
-def test_api_recommendations_best_long_only(market_client: TestClient) -> None:
-    res = market_client.get("/api/recommendations/best", params={"preference": "long_only"})
-    assert res.status_code == 200
-    row = res.json()
-    assert row["selectionPreference"] == "long_only"
-    assert row["action"] in ("BUY", "SELL", "HOLD")
+@pytest.mark.parametrize("preference", ["absolute", "long_only"])
+def test_api_recommendations_best_stale_fixture_is_suppressed(market_client: TestClient, preference: str) -> None:
+    res = market_client.get("/api/recommendations/best", params={"preference": preference})
+    assert res.status_code == 503
+    assert "INSUFFICIENT_FRESH_PRICE_COVERAGE" in res.json()["suppressionReasons"]
 
 
 def test_api_recommendations_ticker(market_client: TestClient) -> None:
@@ -283,7 +273,11 @@ def test_api_recommendations_under_price(market_client: TestClient) -> None:
     rows = body["recommendations"]
     assert len(rows) >= 1
     assert rows[0]["ticker"] == "CHEAP"
-    assert rows[0]["entryZone"][1] <= 2.0
+    assert rows[0]["referencePrice"] <= 2.0
+    assert rows[0]["entryZone"] is None
+    assert rows[0]["action"] == "WATCH"
+    assert rows[0]["actionable"] is False
+    assert rows[0]["confidence"] is None
     assert rows[0]["band"] == "under_2"
     assert rows[0]["eligibilityPassed"] is True
     assert "compositeScore" in rows[0]

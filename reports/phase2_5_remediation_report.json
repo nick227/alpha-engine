@@ -1,0 +1,390 @@
+{
+  "timestamp": "2026-11-21T03:16:47.760658+00:00",
+  "database": "/home/administrator/web/alpha-trading-platform/alpha-engine/data/alpha.db",
+  "integrity_pre": {
+    "quick_check": [
+      "ok"
+    ]
+  },
+  "outcome_quarantine": {
+    "total_outcomes_in_warehouse": 1829,
+    "quarantined_count": 377,
+    "clean_outcomes_active": 1452,
+    "by_tenant": {
+      "backfill": 373,
+      "default": 4
+    },
+    "quarantine_reason": "mock_bars_provider_exit_price",
+    "deleted_records": 0,
+    "non_destructive_preservation": true,
+    "quarantine_table": "quarantined_prediction_outcomes"
+  },
+  "storage_maintenance": {
+    "index_dropped": "idx_price_bars_ticker_ts",
+    "active_indexes": [
+      "sqlite_autoindex_price_bars_1"
+    ],
+    "active_primary_key_index": "sqlite_autoindex_price_bars_1",
+    "query_plans_post_drop": {
+      "point_lookup": [
+        {
+          "id": 3,
+          "parent": 0,
+          "notused": 0,
+          "detail": "SEARCH price_bars USING INDEX sqlite_autoindex_price_bars_1 (tenant_id=? AND ticker=?)"
+        }
+      ],
+      "latest_bar": [
+        {
+          "id": 5,
+          "parent": 0,
+          "notused": 0,
+          "detail": "SEARCH price_bars USING INDEX sqlite_autoindex_price_bars_1 (tenant_id=? AND ticker=?)"
+        },
+        {
+          "id": 33,
+          "parent": 0,
+          "notused": 0,
+          "detail": "USE TEMP B-TREE FOR ORDER BY"
+        }
+      ],
+      "range_scan": [
+        {
+          "id": 4,
+          "parent": 0,
+          "notused": 0,
+          "detail": "SEARCH price_bars USING INDEX sqlite_autoindex_price_bars_1 (tenant_id=? AND ticker=?)"
+        },
+        {
+          "id": 29,
+          "parent": 0,
+          "notused": 0,
+          "detail": "USE TEMP B-TREE FOR ORDER BY"
+        }
+      ]
+    },
+    "page_size": 4096,
+    "page_count": 1469600,
+    "freelist_count": 332813,
+    "freed_pages": 332813,
+    "freed_mb": 1300.05,
+    "file_size_bytes": 6019481600,
+    "file_size_mb": 5740.62,
+    "vacuum_performed": false,
+    "reclaim_mechanism": "Pages retained in SQLite internal freelist for zero-fragmentation insert reuse."
+  },
+  "coverage_and_integrity": {
+    "quick_check": [
+      "ok"
+    ],
+    "duplicate_bar_count_default": 0,
+    "canonical_universe_size": 153,
+    "symbols_fully_covered": 153,
+    "missing_symbols": [],
+    "unexplained_gaps_count": 0,
+    "unexplained_gaps": [],
+    "symbol_stats_summary": {
+      "all_symbols_end_date": "2026-11-20",
+      "full_history_symbols": {
+        "AAPL": {
+          "bars": 17046,
+          "min_date": "1980-12-12",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "MSFT": {
+          "bars": 10819,
+          "min_date": "1986-03-13",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "NVDA": {
+          "bars": 14177,
+          "min_date": "1999-01-22",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "AMZN": {
+          "bars": 8000,
+          "min_date": "1997-05-15",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "GOOGL": {
+          "bars": 6165,
+          "min_date": "2004-08-19",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "META": {
+          "bars": 2803,
+          "min_date": "2018-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "TSLA": {
+          "bars": 9414,
+          "min_date": "2010-06-29",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "UNH": {
+          "bars": 2255,
+          "min_date": "2018-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "JNJ": {
+          "bars": 16356,
+          "min_date": "1962-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "JPM": {
+          "bars": 11789,
+          "min_date": "1980-03-17",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "PG": {
+          "bars": 14369,
+          "min_date": "1970-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "XOM": {
+          "bars": 14369,
+          "min_date": "1970-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "CVX": {
+          "bars": 16354,
+          "min_date": "1962-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "BAC": {
+          "bars": 13577,
+          "min_date": "1973-02-21",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "KO": {
+          "bars": 16356,
+          "min_date": "1962-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "WMT": {
+          "bars": 13673,
+          "min_date": "1972-08-25",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "ADBE": {
+          "bars": 10171,
+          "min_date": "1986-08-13",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "CRM": {
+          "bars": 5665,
+          "min_date": "2004-06-23",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "AMD": {
+          "bars": 17103,
+          "min_date": "1980-03-17",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "NFLX": {
+          "bars": 6729,
+          "min_date": "2002-05-23",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "ORCL": {
+          "bars": 10278,
+          "min_date": "1986-03-12",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "INTC": {
+          "bars": 11791,
+          "min_date": "1980-03-17",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "TXN": {
+          "bars": 13757,
+          "min_date": "1972-06-01",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "WFC": {
+          "bars": 13733,
+          "min_date": "1972-06-01",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "QCOM": {
+          "bars": 8821,
+          "min_date": "1991-12-13",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "GS": {
+          "bars": 6956,
+          "min_date": "1999-05-04",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "AMAT": {
+          "bars": 11791,
+          "min_date": "1980-03-17",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "MS": {
+          "bars": 8520,
+          "min_date": "1993-02-23",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "SMCI": {
+          "bars": 3010,
+          "min_date": "2015-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "UVXY": {
+          "bars": 3830,
+          "min_date": "2011-10-04",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "SPY": {
+          "bars": 14854,
+          "min_date": "1993-01-29",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "QQQ": {
+          "bars": 13359,
+          "min_date": "1999-03-10",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "IWM": {
+          "bars": 8768,
+          "min_date": "2000-05-26",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "DIA": {
+          "bars": 2259,
+          "min_date": "2018-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "GLD": {
+          "bars": 5561,
+          "min_date": "2004-11-18",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "TLT": {
+          "bars": 6143,
+          "min_date": "2002-07-30",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "HYG": {
+          "bars": 4961,
+          "min_date": "2007-04-11",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "LQD": {
+          "bars": 2259,
+          "min_date": "2018-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "XLE": {
+          "bars": 2259,
+          "min_date": "2018-01-02",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "XLF": {
+          "bars": 7046,
+          "min_date": "1998-12-22",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "XLK": {
+          "bars": 7046,
+          "min_date": "1998-12-22",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "XLV": {
+          "bars": 7046,
+          "min_date": "1998-12-22",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "XLI": {
+          "bars": 7046,
+          "min_date": "1998-12-22",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        }
+      },
+      "sample_symbols": {
+        "AAPL": {
+          "bars": 17046,
+          "min_date": "1980-12-12",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "NVDA": {
+          "bars": 14177,
+          "min_date": "1999-01-22",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "MSFT": {
+          "bars": 10819,
+          "min_date": "1986-03-13",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "MMC": {
+          "bars": 155,
+          "min_date": "2026-04-14",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "SPY": {
+          "bars": 14854,
+          "min_date": "1993-01-29",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        },
+        "QQQ": {
+          "bars": 13359,
+          "min_date": "1999-03-10",
+          "max_date": "2026-11-20",
+          "missing_trading_days_count": 0
+        }
+      }
+    },
+    "total_default_bars": 862744,
+    "total_all_bars": 33305656
+  }
+}

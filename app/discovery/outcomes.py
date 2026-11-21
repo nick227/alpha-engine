@@ -104,19 +104,22 @@ def _nth_bar_after(conn: sqlite3.Connection, *, tenant_id: str, symbol: str, d: 
     if r and r["close"] is not None:
         return str(r["d"]), float(r["close"])
     # Fallback: use feature_snapshot (discovery universe is much larger than price_bars)
-    r = conn.execute(
-        """
-        SELECT as_of_date as d, close
-        FROM feature_snapshot
-        WHERE symbol = ? AND as_of_date > ?
-        ORDER BY as_of_date ASC
-        LIMIT 1 OFFSET ?
-        """,
-        (str(symbol), str(d), int(n) - 1),
-    ).fetchone()
-    if not r or r["close"] is None:
+    try:
+        r = conn.execute(
+            """
+            SELECT as_of_date as d, close
+            FROM feature_snapshot
+            WHERE symbol = ? AND as_of_date > ?
+            ORDER BY as_of_date ASC
+            LIMIT 1 OFFSET ?
+            """,
+            (str(symbol), str(d), int(n) - 1),
+        ).fetchone()
+        if not r or r["close"] is None:
+            return None
+        return str(r["d"]), float(r["close"])
+    except sqlite3.OperationalError:
         return None
-    return str(r["d"]), float(r["close"])
 
 
 def compute_watchlist_outcomes(

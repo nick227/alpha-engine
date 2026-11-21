@@ -191,6 +191,7 @@ def build_outcome_trend_last_n(
             FROM prediction_outcomes po
             JOIN predictions p ON p.id = po.prediction_id AND p.tenant_id = po.tenant_id
             WHERE po.tenant_id = ? AND UPPER(TRIM(p.ticker)) = ?
+              AND (po.is_quarantined = 0 OR po.is_quarantined IS NULL)
             ORDER BY po.evaluated_at DESC
             LIMIT ?
             """,
@@ -330,6 +331,7 @@ def build_weekly_performance_summary(
             FROM prediction_outcomes po
             JOIN predictions p ON p.id = po.prediction_id AND p.tenant_id = po.tenant_id
             WHERE po.tenant_id = ?
+              AND (po.is_quarantined = 0 OR po.is_quarantined IS NULL)
               AND po.evaluated_at >= datetime('now', '-7 days')
             """,
             (tenant_id,),
@@ -354,6 +356,7 @@ def build_weekly_performance_summary(
             FROM prediction_outcomes po
             JOIN predictions p ON p.id = po.prediction_id AND p.tenant_id = po.tenant_id
             WHERE po.tenant_id = ?
+              AND (po.is_quarantined = 0 OR po.is_quarantined IS NULL)
               AND po.evaluated_at >= datetime('now', '-7 days')
             GROUP BY p.strategy_id
             ORDER BY n DESC

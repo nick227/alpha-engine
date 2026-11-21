@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -10,7 +11,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from app.core.active_universe import get_active_universe_tickers
-from app.internal_read_v1.chart_market import build_stats_payload, load_company_profile_json
+from app.core.pipeline_gates import recommendation_quality
+from app.internal_read_v1.chart_market import build_quote_payload, build_stats_payload, load_company_profile_json
 from app.internal_read_v1.chart_symbols import normalize_ticker
 
 RecommendationMode = Literal["conservative", "balanced", "aggressive", "long_term"]
@@ -77,7 +79,7 @@ def parse_best_preference(value: str | None) -> BestPreference:
 
 def _latest_rankings(conn: sqlite3.Connection, *, tenant_id: str) -> dict[str, float]:
     row = conn.execute(
-        "SELECT MAX(timestamp) AS ts FROM ranking_snapshots WHERE tenant_id = ?",
+        "SELECT timestamp AS ts FROM ranking_snapshots WHERE tenant_id = ? ORDER BY julianday(timestamp) DESC LIMIT 1",
         (tenant_id,),
     ).fetchone()
     if not row or row["ts"] is None:
@@ -91,7 +93,7 @@ def _latest_rankings(conn: sqlite3.Connection, *, tenant_id: str) -> dict[str, f
         """,
         (tenant_id, ts),
     ).fetchall()
-    return {normalize_ticker(str(r["ticker"])): float(r["score"]) for r in rows}
+    return {normalize_ticker(str(r["ticker"])): float(r["score"]) for r in rows if r["score"] is not None}
 
 
 def _latest_consensus(conn: sqlite3.Connection, *, tenant_id: str) -> dict[str, float]:
@@ -101,15 +103,16 @@ def _latest_consensus(conn: sqlite3.Connection, *, tenant_id: str) -> dict[str, 
         FROM consensus_signals
         WHERE tenant_id = ?
           AND created_at = (
-            SELECT MAX(cs2.created_at)
+            SELECT cs2.created_at
             FROM consensus_signals cs2
             WHERE cs2.tenant_id = consensus_signals.tenant_id
               AND cs2.ticker = consensus_signals.ticker
+            ORDER BY julianday(cs2.created_at) DESC LIMIT 1
           )
         """,
         (tenant_id,),
     ).fetchall()
-    return {normalize_ticker(str(r["ticker"])): float(r["p_final"]) for r in rows}
+    return {normalize_ticker(str(r["ticker"])): float(r["p_final"]) for r in rows if r["p_final"] is not None}
 
 
 def _candidate_status(conn: sqlite3.Connection, *, tenant_id: str) -> dict[str, str]:
@@ -174,15 +177,6 @@ def _admission_signal(status: str | None) -> float:
     return 0.0
 
 
-def _risk_bucket(day_change_pct: float | None) -> str:
-    v = abs(float(day_change_pct or 0.0))
-    if v >= 3.0:
-        return "High"
-    if v >= 1.5:
-        return "Moderate"
-    return "Low"
-
-
 def _action_from_score(score: float, *, mode: RecommendationMode) -> str:
     buy_thr = 0.30 if mode == "conservative" else 0.20
     sell_thr = -0.30 if mode == "conservative" else -0.20
@@ -193,50 +187,15 @@ def _action_from_score(score: float, *, mode: RecommendationMode) -> str:
     return "HOLD"
 
 
-def _entry_zone(price: float, action: str) -> tuple[float, float]:
-    p = float(price)
-    if action == "BUY":
-        return (round(p * 0.99, 4), round(p * 1.01, 4))
-    if action == "SELL":
-        return (round(p * 0.995, 4), round(p * 1.015, 4))
-    return (round(p * 0.995, 4), round(p * 1.005, 4))
-
-
-def _build_thesis(*, action: str, ranking: float, consensus: float, day_change_pct: float | None) -> list[str]:
-    thesis: list[str] = []
-    if action == "BUY":
-        thesis.append("Composite model bias is bullish")
-    elif action == "SELL":
-        thesis.append("Composite model bias is bearish")
-    else:
-        thesis.append("Signals are mixed; conviction is muted")
-
-    if ranking > 0:
-        thesis.append("Ranking layer contributes positive conviction")
-    elif ranking < 0:
-        thesis.append("Ranking layer contributes negative conviction")
-
-    if consensus > 0.15:
-        thesis.append("Consensus track agreement supports upside")
-    elif consensus < -0.15:
-        thesis.append("Consensus track agreement supports downside")
-    else:
-        thesis.append("Consensus layer remains near neutral")
-
-    if day_change_pct is not None:
-        if day_change_pct > 0:
-            thesis.append("Short-term momentum is positive")
-        elif day_change_pct < 0:
-            thesis.append("Short-term momentum is negative")
-    return thesis[:3]
-
-
-def _build_avoid_if(*, action: str, entry_min: float, entry_max: float) -> list[str]:
-    if action == "BUY":
-        return [f"Breaks below {round(entry_min * 0.975, 4)}", "Broad market shifts to risk-off"]
-    if action == "SELL":
-        return [f"Reclaims above {round(entry_max * 1.015, 4)}", "Broad market shifts to risk-on"]
-    return ["Conviction remains below threshold", "Macro regime flips abruptly"]
+def _build_explanations(*, score: float, source: dict[str, Any]) -> list[str]:
+    """Deterministic accounting of inputs; never an investment thesis."""
+    return [
+        f"Relative composite score: {score:.4f}; not a probability of success.",
+        f"Ranking input: {source.get('ranking_score', 0):.4f}; "
+        f"consensus input: {source.get('consensus_p_final', 0):.4f} (uncalibrated).",
+        "Selection includes momentum, admission, company-profile proxies, freshness, "
+        "repeat and sector-diversity adjustments.",
+    ]
 
 
 def _clip01(value: float) -> float:
@@ -370,7 +329,7 @@ def _evaluate_under_price_eligibility(
     return (len(reasons) == 0, reasons)
 
 
-def _fifty_dollar_potential(
+def _profile_composite_score(
     *,
     semantic_credibility: float,
     longevity: float,
@@ -437,6 +396,7 @@ def rebuild_house_recommendations(
     if ranking_map:
         universe = sorted(ranking_map.keys())
 
+    quality = recommendation_quality(conn, tenant_id=tenant_id)
     conn.execute("DELETE FROM house_recommendations WHERE tenant_id = ? AND mode = ?", (tenant_id, mode))
 
     candidates: list[dict[str, Any]] = []
@@ -446,10 +406,14 @@ def rebuild_house_recommendations(
         if not stats:
             continue
         price = float(stats["price"])
+        if not math.isfinite(price) or price <= 0:
+            continue
         profile = load_company_profile_json(ticker)
         sector = str(profile.get("sector") or "unknown").strip().lower()
         rank_score = float(ranking_map.get(ticker, 0.0))
         consensus_score = float(consensus_map.get(ticker, 0.0))
+        if not math.isfinite(rank_score) or not math.isfinite(consensus_score):
+            continue
         mom_score = _momentum_signal(stats.get("dayChangePct"))
         admission_score = _admission_signal(status_map.get(ticker))
 
@@ -476,18 +440,15 @@ def rebuild_house_recommendations(
         repeat_penalty = min(1.0, repeat_count / float(max(1, repeat_window_days)))
         prelim = composite + (freshness_bonus_weight * freshness_bonus) - (repeat_penalty_weight * repeat_penalty)
         action = _action_from_score(composite, mode=mode)
-        risk = _risk_bucket(stats.get("dayChangePct"))
         horizon = _MODE_HORIZON[str(mode)]
-        entry_min, entry_max = _entry_zone(price, action)
-        thesis = _build_thesis(
-            action=action,
-            ranking=rank_score,
-            consensus=consensus_score,
-            day_change_pct=stats.get("dayChangePct"),
-        )
-        avoid_if = _build_avoid_if(action=action, entry_min=entry_min, entry_max=entry_max)
+        # No validated entry, stop, or risk-estimation methodology is available.
+        risk, entry_min, entry_max = "Unavailable", None, None
+        thesis, avoid_if = [], []
 
+        quote = build_quote_payload(conn, tenant_id=tenant_id, ticker=ticker)
         source = {
+            "reference_price": price,
+            "reference_price_as_of": quote.get("time") if quote else None,
             "ranking_score": round(rank_score, 6),
             "consensus_p_final": round(consensus_score, 6),
             "momentum_signal": round(mom_score, 6),
@@ -531,7 +492,15 @@ def rebuild_house_recommendations(
         final_score = c["prelim_score"] - diversity_penalty
         action = _action_from_score(final_score, mode=mode)
         sector_seen[sec] = seen + 1
-        confidence = int(max(5, min(99, round(abs(final_score) * 100.0))))
+        # Legacy NOT NULL storage column only; never published or used for ordering.
+        confidence = 0
+        symbol_quality = recommendation_quality(
+            conn, tenant_id=tenant_id, ticker=c["ticker"], global_quality=quality,
+        )
+        c["source"]["quality"] = symbol_quality
+        c["source"]["research_action"] = action
+        if not symbol_quality["actionable"]:
+            action = "WATCH"
         c["source"]["sector"] = sec
         c["source"]["sector_seen_before"] = int(seen)
         c["source"]["sector_diversity_penalty"] = round(diversity_penalty, 6)
@@ -570,157 +539,105 @@ def rebuild_house_recommendations(
 
 
 def _row_to_payload(row: sqlite3.Row, *, mode: RecommendationMode) -> dict[str, Any]:
-    thesis = json.loads(str(row["thesis_json"] or "[]"))
-    avoid_if = json.loads(str(row["avoid_if_json"] or "[]"))
     source_raw = json.loads(str(row["source_json"] or "{}"))
     source = source_raw if isinstance(source_raw, dict) else {}
-    diversity_diagnostics = {
-        "freshnessBonus": source.get("freshness_bonus"),
-        "repeatPenalty": source.get("repeat_penalty"),
-        "recentRepeatCount": source.get("repeat_count_window"),
-        "sector": source.get("sector"),
-        "sectorSeenBefore": source.get("sector_seen_before"),
-        "sectorDiversityPenalty": source.get("sector_diversity_penalty"),
-        "preliminaryScore": source.get("preliminary_score"),
-        "diversityAdjustedScore": source.get("diversity_adjusted_score"),
+    score = float(row["score"])
+    quality = source.get("quality") or {
+        "status": "suppressed", "actionable": False,
+        "suppressionReasons": ["QUALITY_UNAVAILABLE"],
     }
+    actionable = quality.get("actionable") is True
     return {
+        "contractVersion": "2.0",
         "ticker": str(row["ticker"]),
-        "action": str(row["action"]),
-        "confidence": int(row["confidence"]),
-        "score": round(float(row["score"]), 4),
-        "risk": str(row["risk"]),
+        "action": str(row["action"]) if actionable else "WATCH",
+        "actionable": actionable,
+        "researchDirection": {"BUY": "bullish", "SELL": "bearish", "HOLD": "neutral"}.get(
+            source.get("research_action"), "unknown"),
+        "confidence": None,
+        "successProbability": None,
+        "confidenceMethodology": {
+            "status": "unavailable", "method": "not_calibrated",
+            "reason": "No empirical calibration evidence is attached to this recommendation.",
+        },
+        "heuristicConfidence": {
+            "status": "available", "value": round(abs(score), 6),
+            "method": "absolute_composite_score", "unit": "score", "isProbability": False,
+        },
+        "score": round(score, 4),
+        "scoreMethodology": {"method": "weighted_composite_with_selection_adjustments",
+                             "unit": "relative_score", "isProbability": False},
+        "risk": None,
+        "entryZone": None,
+        "expectedReturn": None,
+        "guidanceAvailability": {
+            key: {"status": "unavailable", "reason": "NO_VALIDATED_METHODOLOGY"}
+            for key in ("entryZone", "risk", "expectedReturn", "avoidIf")
+        },
+        "referencePrice": source.get("reference_price"),
+        "referencePriceAsOf": source.get("reference_price_as_of"),
         "horizon": str(row["horizon"]),
-        "entryZone": [float(row["entry_min"]), float(row["entry_max"])],
-        "thesis": thesis if isinstance(thesis, list) else [],
-        "avoidIf": avoid_if if isinstance(avoid_if, list) else [],
+        "horizonMethodology": "mode_policy_not_validated_forecast",
+        "thesis": [],
+        "explanations": _build_explanations(score=score, source=source),
+        "explanationMethodology": "deterministic_score_components",
+        "avoidIf": [],
         "mode": str(mode),
         "asOf": str(row["as_of"]),
-        "selectionDiagnostics": diversity_diagnostics,
+        "asOfMethodology": "research_build_time_not_source_freshness",
+        "qualityStatus": quality,
+        "suppressionReasons": quality["suppressionReasons"],
+        "selectionDiagnostics": {
+            "freshnessBonus": source.get("freshness_bonus"),
+            "repeatPenalty": source.get("repeat_penalty"),
+            "recentRepeatCount": source.get("repeat_count_window"),
+            "sector": source.get("sector"),
+            "sectorSeenBefore": source.get("sector_seen_before"),
+            "sectorDiversityPenalty": source.get("sector_diversity_penalty"),
+            "preliminaryScore": source.get("preliminary_score"),
+            "diversityAdjustedScore": source.get("diversity_adjusted_score"),
+        },
     }
 
 
 def get_recommendations_latest(
-    conn: sqlite3.Connection,
-    *,
-    tenant_id: str,
-    mode: RecommendationMode,
-    preference: BestPreference = "absolute",
-    limit: int = 10,
+    conn: sqlite3.Connection, *, tenant_id: str, mode: RecommendationMode,
+    preference: BestPreference = "absolute", limit: int = 10,
 ) -> list[dict[str, Any]]:
     with _RECOMMENDATIONS_LOCK:
         rebuild_house_recommendations(conn, tenant_id=tenant_id, mode=mode)
-        if preference == "long_only":
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM house_recommendations
-                WHERE tenant_id = ? AND mode = ? AND action = 'BUY'
-                ORDER BY confidence DESC, score DESC
-                LIMIT ?
-                """,
-                (tenant_id, mode, int(limit)),
-            ).fetchall()
-            # Fallback: if no BUY recommendations, return absolute set so list is never empty.
-            if not rows:
-                rows = conn.execute(
-                    """
-                    SELECT *
-                    FROM house_recommendations
-                    WHERE tenant_id = ? AND mode = ?
-                    ORDER BY confidence DESC, score DESC
-                    LIMIT ?
-                    """,
-                    (tenant_id, mode, int(limit)),
-                ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM house_recommendations
-                WHERE tenant_id = ? AND mode = ?
-                ORDER BY confidence DESC, score DESC
-                LIMIT ?
-                """,
-                (tenant_id, mode, int(limit)),
-            ).fetchall()
-    payload = [_row_to_payload(r, mode=mode) for r in rows]
+        rows = conn.execute(
+            "SELECT * FROM house_recommendations WHERE tenant_id = ? AND mode = ? "
+            "ORDER BY ABS(score) DESC, score DESC, ticker ASC", (tenant_id, mode),
+        ).fetchall()
+        payload = [_row_to_payload(r, mode=mode) for r in rows]
+    if preference == "long_only":
+        payload = [p for p in payload if p["researchDirection"] == "bullish"]
     for p in payload:
         p["selectionPreference"] = preference
-    return payload
+    return payload[:limit]
 
 
 def get_recommendation_best(
-    conn: sqlite3.Connection,
-    *,
-    tenant_id: str,
-    mode: RecommendationMode,
+    conn: sqlite3.Connection, *, tenant_id: str, mode: RecommendationMode,
     preference: BestPreference = "absolute",
 ) -> dict[str, Any] | None:
-    with _RECOMMENDATIONS_LOCK:
-        rebuild_house_recommendations(conn, tenant_id=tenant_id, mode=mode)
-        if preference == "long_only":
-            row = conn.execute(
-                """
-                SELECT *
-                FROM house_recommendations
-                WHERE tenant_id = ? AND mode = ? AND action = 'BUY'
-                ORDER BY confidence DESC, score DESC
-                LIMIT 1
-                """,
-                (tenant_id, mode),
-            ).fetchone()
-            if row is None:
-                # fallback to absolute best when no BUY exists
-                row = conn.execute(
-                    """
-                    SELECT *
-                    FROM house_recommendations
-                    WHERE tenant_id = ? AND mode = ?
-                    ORDER BY confidence DESC, score DESC
-                    LIMIT 1
-                    """,
-                    (tenant_id, mode),
-                ).fetchone()
-        else:
-            row = conn.execute(
-                """
-                SELECT *
-                FROM house_recommendations
-                WHERE tenant_id = ? AND mode = ?
-                ORDER BY confidence DESC, score DESC
-                LIMIT 1
-                """,
-                (tenant_id, mode),
-            ).fetchone()
-    if not row:
-        return None
-    payload = _row_to_payload(row, mode=mode)
-    payload["selectionPreference"] = preference
-    return payload
+    rows = get_recommendations_latest(
+        conn, tenant_id=tenant_id, mode=mode, preference=preference, limit=10000,
+    )
+    return next((r for r in rows if r["actionable"]), None)
 
 
 def get_recommendation_for_ticker(
-    conn: sqlite3.Connection,
-    *,
-    tenant_id: str,
-    mode: RecommendationMode,
-    ticker: str,
+    conn: sqlite3.Connection, *, tenant_id: str, mode: RecommendationMode, ticker: str,
 ) -> dict[str, Any] | None:
     with _RECOMMENDATIONS_LOCK:
         rebuild_house_recommendations(conn, tenant_id=tenant_id, mode=mode)
         row = conn.execute(
-            """
-            SELECT *
-            FROM house_recommendations
-            WHERE tenant_id = ? AND mode = ? AND ticker = ?
-            LIMIT 1
-            """,
+            "SELECT * FROM house_recommendations WHERE tenant_id = ? AND mode = ? AND ticker = ?",
             (tenant_id, mode, normalize_ticker(ticker)),
         ).fetchone()
-    if not row:
-        return None
-    return _row_to_payload(row, mode=mode)
+        return _row_to_payload(row, mode=mode) if row else None
 
 
 def get_recommendations_under_price(
@@ -738,17 +655,15 @@ def get_recommendations_under_price(
             """
             SELECT *
             FROM house_recommendations
-            WHERE tenant_id = ? AND mode = ? AND entry_max <= ?
-            ORDER BY confidence DESC, score DESC
-            LIMIT 300
+            WHERE tenant_id = ? AND mode = ?
+            ORDER BY ABS(score) DESC, score DESC
             """,
-            (tenant_id, mode, float(price_cap)),
+            (tenant_id, mode),
         ).fetchall()
     if not rows:
         return []
 
     passed: list[dict[str, Any]] = []
-    near_miss: list[dict[str, Any]] = []
     for row in rows:
         base = _row_to_payload(row, mode=mode)
         ticker = str(row["ticker"])
@@ -760,6 +675,8 @@ def get_recommendations_under_price(
         dynamic_composite = float(source.get("dynamic_composite") or row["score"] or 0.0)
         dynamic_signal = _dynamic_signal01(dynamic_composite)
         price = float(stats["price"])
+        if not math.isfinite(price) or price <= 0 or price > price_cap:
+            continue
         high_52 = float(stats.get("high52") or price)
         avg_volume = _safe_positive(stats.get("avgVolume"))
         market_cap = _safe_positive(stats.get("marketCap"))
@@ -776,7 +693,7 @@ def get_recommendations_under_price(
             undervaluation=undervaluation,
             liquidity_efficiency=liquidity_efficiency,
         )
-        fifty_plus = _fifty_dollar_potential(
+        fifty_plus = _profile_composite_score(
             semantic_credibility=semantic_credibility,
             longevity=longevity,
             undervaluation=undervaluation,
@@ -784,7 +701,7 @@ def get_recommendations_under_price(
         )
         eligible, reasons = _evaluate_under_price_eligibility(
             price=price,
-            action=str(row["action"]),
+            action=str(source.get("research_action", "WATCH")),
             preference=preference,
             avg_volume=avg_volume,
             years_listed=years_listed,
@@ -800,38 +717,35 @@ def get_recommendations_under_price(
             "compositeScore": round(composite_score, 4),
             "semanticCredibility": round(semantic_credibility, 4),
             "liquidityEfficiency": round(liquidity_efficiency, 4),
-            "undervaluation": round(undervaluation, 4),
-            "fiftyDollarPotential": round(fifty_plus, 4),
+            "undervaluation": None,
+            "pricePositionScore": round(undervaluation, 4),
+            "fiftyDollarPotential": None,
+            "profileCompositeScore": round(fifty_plus, 4),
+            "researchScoreMethodology": {
+                "isProbability": False, "unit": "heuristic_score_0_to_1",
+                "compositeScore": "weighted profile, price-position, liquidity and signal proxies",
+                "semanticCredibility": "profile-field completeness proxy, not verified credibility",
+                "liquidityEfficiency": "volume and market-cap proxy, not execution capacity",
+                "pricePositionScore": "distance below historical high, not fair value",
+                "profileCompositeScore": "profile, listing age, price-position and signal blend; no price target",
+            },
             "disqualifiers": reasons,
             "_consensusPFinalSort": float(source.get("consensus_p_final", 0.0)),
         }
         if eligible:
             passed.append(enriched)
-        elif len(reasons) == 1:
-            near_miss.append(enriched)
+        # Ineligible candidates are not promoted to fill a requested result count.
 
     ranked = sorted(
         passed,
         key=lambda p: (
             float(p["compositeScore"]),
-            int(p["confidence"]),
+            abs(float(p["score"])),
             float(p["_consensusPFinalSort"]),
         ),
         reverse=True,
     )
-    if len(ranked) >= int(limit):
-        out = ranked[: int(limit)]
-        for item in out:
-            item.pop("_consensusPFinalSort", None)
-        return out
-
-    near_sorted = sorted(
-        near_miss,
-        key=lambda p: (float(p["compositeScore"]), int(p["confidence"]), float(p["_consensusPFinalSort"])),
-        reverse=True,
-    )
-    needed = int(limit) - len(ranked)
-    out = ranked + near_sorted[:needed]
+    out = ranked[:int(limit)]
     for item in out:
         item.pop("_consensusPFinalSort", None)
     return out

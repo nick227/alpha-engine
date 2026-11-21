@@ -108,7 +108,8 @@ def test_recommendations_best_semantic_503_when_pipeline_blocked(
     assert res.status_code == 503
     body = res.json()
     assert body["status"] == "limited_mode"
-    assert body["reason"] == "prediction_pipeline_inactive"
+    assert body["reason"] == "recommendations_suppressed"
+    assert "PREDICTIONS_STALE_OR_MISSING" in body["suppressionReasons"]
     assert body["retryHint"] == "Run pipeline"
 
 
