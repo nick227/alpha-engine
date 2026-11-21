@@ -1,0 +1,1549 @@
+{
+  "generated_at": "2026-11-21T01:56:04.564814+00:00",
+  "database": "/home/administrator/web/alpha-trading-platform/alpha-engine/data/alpha.db",
+  "tenant_id": "default",
+  "provider": "yfinance",
+  "price_adjustment_policy": "auto_adjust=True (Split & Dividend Adjusted)",
+  "total_symbols_in_universe": 153,
+  "up_to_date_count": 60,
+  "needs_incremental_fill_count": 89,
+  "needs_full_history_count": 4,
+  "dry_run": true,
+  "symbols_up_to_date": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA",
+    "UNH",
+    "JNJ",
+    "JPM",
+    "PG",
+    "XOM",
+    "CSCO",
+    "ADBE",
+    "AMD",
+    "FIS",
+    "DELL",
+    "APPF",
+    "ATRC",
+    "BRBR",
+    "BXC",
+    "CHTR",
+    "CVLT",
+    "DEI",
+    "EEFT",
+    "EPC",
+    "EWL",
+    "FDS",
+    "FISV",
+    "FSV",
+    "GDDY",
+    "HOG",
+    "INFY",
+    "IPAR",
+    "ITRI",
+    "LRN",
+    "MAT",
+    "MMYT",
+    "PFSI",
+    "PGNY",
+    "PLNT",
+    "POOL",
+    "QFIN",
+    "QTWO",
+    "RACE",
+    "SFM",
+    "SMCI",
+    "SPSC",
+    "TCOM",
+    "TIPT",
+    "USPH",
+    "UVXY",
+    "VIXY",
+    "VRRM",
+    "SPY",
+    "QQQ",
+    "IWM",
+    "GLD",
+    "VNQ",
+    "VXUS"
+  ],
+  "symbols_needing_fill": [
+    "V",
+    "HD",
+    "CVX",
+    "MA",
+    "BAC",
+    "ABBV",
+    "COST",
+    "PEP",
+    "KO",
+    "LLY",
+    "MRK",
+    "TMO",
+    "WMT",
+    "MCD",
+    "ACN",
+    "LIN",
+    "CRM",
+    "NFLX",
+    "ABT",
+    "DIS",
+    "NKE",
+    "ORCL",
+    "INTC",
+    "TXN",
+    "PM",
+    "WFC",
+    "NEE",
+    "RTX",
+    "HON",
+    "QCOM",
+    "AMGN",
+    "IBM",
+    "GE",
+    "SPGI",
+    "CAT",
+    "GS",
+    "BA",
+    "DHR",
+    "INTU",
+    "DE",
+    "ISRG",
+    "AMAT",
+    "MS",
+    "BKNG",
+    "NOW",
+    "BLK",
+    "MDT",
+    "VRTX",
+    "SYK",
+    "TJX",
+    "C",
+    "PGR",
+    "REGN",
+    "ZTS",
+    "PLD",
+    "CI",
+    "SCHW",
+    "AMT",
+    "MO",
+    "EOG",
+    "SO",
+    "DUK",
+    "BDX",
+    "CME",
+    "EQIX",
+    "SLB",
+    "ITW",
+    "CL",
+    "APD",
+    "BMY",
+    "ICE",
+    "MCK",
+    "AON",
+    "ETN",
+    "CSX",
+    "HUM",
+    "SHW",
+    "F",
+    "GM",
+    "DIA",
+    "TLT",
+    "HYG",
+    "LQD",
+    "XLE",
+    "XLF",
+    "XLK",
+    "XLV",
+    "XLI",
+    "XLY",
+    "BRK-B",
+    "MMC",
+    "CB",
+    "WM"
+  ],
+  "batches_required": 8,
+  "detailed_plan": [
+    {
+      "symbol": "AAPL",
+      "status": "UP_TO_DATE",
+      "current_bars": 12161,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "MSFT",
+      "status": "UP_TO_DATE",
+      "current_bars": 10818,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "NVDA",
+      "status": "UP_TO_DATE",
+      "current_bars": 7569,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "AMZN",
+      "status": "UP_TO_DATE",
+      "current_bars": 7999,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "GOOGL",
+      "status": "UP_TO_DATE",
+      "current_bars": 6164,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "META",
+      "status": "UP_TO_DATE",
+      "current_bars": 2802,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "TSLA",
+      "status": "UP_TO_DATE",
+      "current_bars": 4689,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "BRK-B",
+      "status": "NEEDS_FULL_HISTORY",
+      "current_bars": 0,
+      "latest_bar": null,
+      "fill_start": "2026-04-14",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 220
+    },
+    {
+      "symbol": "UNH",
+      "status": "UP_TO_DATE",
+      "current_bars": 2254,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "JNJ",
+      "status": "UP_TO_DATE",
+      "current_bars": 16355,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "JPM",
+      "status": "UP_TO_DATE",
+      "current_bars": 11788,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "V",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "PG",
+      "status": "UP_TO_DATE",
+      "current_bars": 14368,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "XOM",
+      "status": "UP_TO_DATE",
+      "current_bars": 14368,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "HD",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "CVX",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 16206,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "MA",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "BAC",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 13429,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "ABBV",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "COST",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "PEP",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "KO",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 16208,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "LLY",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "MRK",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "TMO",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 27,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "WMT",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 13525,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "CSCO",
+      "status": "UP_TO_DATE",
+      "current_bars": 179,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "MCD",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "ACN",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "ADBE",
+      "status": "UP_TO_DATE",
+      "current_bars": 10170,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "LIN",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "CRM",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 5517,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "AMD",
+      "status": "UP_TO_DATE",
+      "current_bars": 11806,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "NFLX",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 6581,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "ABT",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "DIS",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "NKE",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "ORCL",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 10130,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "INTC",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 11643,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "TXN",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 13609,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "PM",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "WFC",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 13585,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "NEE",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "RTX",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "HON",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "QCOM",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 8673,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "AMGN",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "IBM",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "GE",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "SPGI",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "CAT",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "GS",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 6808,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "BA",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "DHR",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "INTU",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "DE",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "ISRG",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "AMAT",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 11643,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "MS",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 8372,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "BKNG",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "NOW",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "BLK",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "MDT",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "VRTX",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 8,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "SYK",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "TJX",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "C",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "MMC",
+      "status": "NEEDS_FULL_HISTORY",
+      "current_bars": 0,
+      "latest_bar": null,
+      "fill_start": "2026-04-14",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 220
+    },
+    {
+      "symbol": "CB",
+      "status": "NEEDS_FULL_HISTORY",
+      "current_bars": 0,
+      "latest_bar": null,
+      "fill_start": "2026-04-14",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 220
+    },
+    {
+      "symbol": "PGR",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "REGN",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "ZTS",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "PLD",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "CI",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "SCHW",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "AMT",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "MO",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "EOG",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "SO",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "DUK",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "BDX",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "CME",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "EQIX",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "SLB",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "ITW",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "CL",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "APD",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "BMY",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "ICE",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "MCK",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "AON",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "WM",
+      "status": "NEEDS_FULL_HISTORY",
+      "current_bars": 0,
+      "latest_bar": null,
+      "fill_start": "2026-04-14",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 220
+    },
+    {
+      "symbol": "ETN",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "CSX",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "HUM",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "SHW",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "FIS",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "F",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "GM",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "DELL",
+      "status": "UP_TO_DATE",
+      "current_bars": 179,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "APPF",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "ATRC",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "BRBR",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "BXC",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "CHTR",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "CVLT",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "DEI",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "EEFT",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "EPC",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "EWL",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "FDS",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "FISV",
+      "status": "UP_TO_DATE",
+      "current_bars": 403,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "FSV",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "GDDY",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "HOG",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "INFY",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "IPAR",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "ITRI",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "LRN",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "MAT",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "MMYT",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "PFSI",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "PGNY",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "PLNT",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "POOL",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "QFIN",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "QTWO",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "RACE",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "SFM",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "SMCI",
+      "status": "UP_TO_DATE",
+      "current_bars": 3009,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "SPSC",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "TCOM",
+      "status": "UP_TO_DATE",
+      "current_bars": 402,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "TIPT",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "USPH",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "UVXY",
+      "status": "UP_TO_DATE",
+      "current_bars": 3829,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "VIXY",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "VRRM",
+      "status": "UP_TO_DATE",
+      "current_bars": 404,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "SPY",
+      "status": "UP_TO_DATE",
+      "current_bars": 8535,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "QQQ",
+      "status": "UP_TO_DATE",
+      "current_bars": 6997,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "IWM",
+      "status": "UP_TO_DATE",
+      "current_bars": 6689,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "DIA",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 2111,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "GLD",
+      "status": "UP_TO_DATE",
+      "current_bars": 5560,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "VNQ",
+      "status": "UP_TO_DATE",
+      "current_bars": 179,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "VXUS",
+      "status": "UP_TO_DATE",
+      "current_bars": 175,
+      "latest_bar": "2026-11-20T00:00:00+00:00",
+      "fill_start": null,
+      "fill_end": null,
+      "estimated_missing_days": 0
+    },
+    {
+      "symbol": "TLT",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 5995,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "HYG",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 4813,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "LQD",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 2111,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "XLE",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 2111,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "XLF",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 6898,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "XLK",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 6898,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "XLV",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 6898,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "XLI",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 6898,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    },
+    {
+      "symbol": "XLY",
+      "status": "NEEDS_INCREMENTAL_FILL",
+      "current_bars": 32,
+      "latest_bar": "2026-04-22T00:00:00+00:00",
+      "fill_start": "2026-04-23",
+      "fill_end": "2026-11-20",
+      "estimated_missing_days": 211
+    }
+  ]
+}
