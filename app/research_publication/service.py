@@ -48,12 +48,19 @@ CREATE INDEX IF NOT EXISTS idx_research_publications_latest
 """
 
 
+MODES = ("live", "historical_replay")
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_DDL)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(research_publications)")}
+    if "mode" not in cols:  # additive: replay publications are never served as live research
+        conn.execute("ALTER TABLE research_publications ADD COLUMN mode TEXT NOT NULL DEFAULT 'live'")
 
 
-def load_bars(conn: sqlite3.Connection, tickers: list[str], sessions: int, *, tenant_id: str = TENANT) -> dict[str, list[list[Any]]]:
-    """Last `sessions` daily bars per ticker, one per date, ascending: [date, o, h, l, c, v]."""
+def load_bars(conn: sqlite3.Connection, tickers: list[str], sessions: int, *, tenant_id: str = TENANT, until: str | None = None) -> dict[str, list[list[Any]]]:
+    """Last `sessions` daily bars per ticker (on/before `until` if given), one per date, ascending."""
+    bound = until or "9999-12-31"
     out: dict[str, list[list[Any]]] = {}
     for t in tickers:
         # Bound by distinct session dates, not raw rows: legacy data has several rows
@@ -63,18 +70,20 @@ def load_bars(conn: sqlite3.Connection, tickers: list[str], sessions: int, *, te
             SELECT MIN(d) FROM (
                 SELECT DISTINCT substr(timestamp, 1, 10) AS d FROM price_bars
                 WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND close > 0
+                  AND substr(timestamp, 1, 10) <= ?
                 ORDER BY d DESC LIMIT ?
             )
             """,
-            (tenant_id, t, sessions),
+            (tenant_id, t, bound, sessions),
         ).fetchone()[0]
         rows = conn.execute(
             """
             SELECT timestamp, open, high, low, close, volume FROM price_bars
             WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND close > 0 AND timestamp >= ?
+              AND substr(timestamp, 1, 10) <= ?
             ORDER BY timestamp DESC
             """,
-            (tenant_id, t, cutoff or "9999"),
+            (tenant_id, t, cutoff or "9999", bound),
         ).fetchall()
         by_date: dict[str, list[Any]] = {}
         for r in rows:
@@ -116,15 +125,22 @@ def validate(conn: sqlite3.Connection, payload: Any, *, today: date | None = Non
     if not shape_ok:
         return gates, None
 
+    mode = payload.get("mode", "live")
+    inputs = payload["inputs"] if isinstance(payload["inputs"], dict) else {}
+    as_of = inputs.get("asOf") if mode == "historical_replay" else None
+    mode_ok = mode in MODES and (mode == "live" or (isinstance(as_of, str) and len(as_of) == 10))
+    gates.append(_gate("mode", mode_ok, {"mode": mode, "asOf": as_of}))
+    if not mode_ok:
+        return gates, None
+
     universe = live_universe()
     uni_ok = payload["universe"] == universe
     gates.append(_gate("universe", uni_ok, None if uni_ok else {"expected": universe}))
     if not uni_ok:
         return gates, None
 
-    inputs = payload["inputs"] if isinstance(payload["inputs"], dict) else {}
     sessions = input_sessions(cfg)
-    bars = load_bars(conn, universe, sessions)
+    bars = load_bars(conn, universe, sessions, until=as_of)
     complete = all(len(bars[t]) == sessions for t in universe)
     ours = {t: bars_fingerprint(bars[t]) for t in universe}
     claimed = inputs.get("fingerprints") or {}
@@ -137,8 +153,13 @@ def validate(conn: sqlite3.Connection, payload: Any, *, today: date | None = Non
     market = max(bars[t][-1][0] for t in universe)
     lagging = sorted(t for t in universe if bars[t][-1][0] != market)
     age = (today - date.fromisoformat(market)).days
-    fresh_ok = inputs.get("marketDate") == market and not lagging and age <= MAX_MARKET_DATA_AGE_DAYS
-    gates.append(_gate("freshness", fresh_ok, {"marketDate": market, "ageDays": age, "laggingTickers": lagging}))
+    if mode == "live":
+        fresh_ok = inputs.get("marketDate") == market and not lagging and age <= MAX_MARKET_DATA_AGE_DAYS
+        gates.append(_gate("freshness", fresh_ok, {"marketDate": market, "ageDays": age, "laggingTickers": lagging}))
+    else:
+        # Historical replay: research as of a real past session that every symbol traded.
+        fresh_ok = inputs.get("marketDate") == market == as_of and not lagging
+        gates.append(_gate("replay_session", fresh_ok, {"asOf": as_of, "marketDate": market, "ageDays": age, "laggingTickers": lagging}))
     if not fresh_ok:
         return gates, None
 
@@ -163,8 +184,9 @@ def validate(conn: sqlite3.Connection, payload: Any, *, today: date | None = Non
     return gates, recomputed
 
 
-def _integrity_ok(gates: list[dict[str, Any]]) -> bool:
-    required = {"schema", "universe", "provenance", "freshness", "reproduction", "market_data"}
+def _integrity_ok(gates: list[dict[str, Any]], mode: str) -> bool:
+    required = {"schema", "mode", "universe", "provenance", "reproduction", "market_data",
+                "freshness" if mode == "live" else "replay_session"}
     passed = {g["gate"] for g in gates if g["status"] == "pass"}
     return required <= passed
 
@@ -188,7 +210,8 @@ def publish(conn: sqlite3.Connection, body: bytes, *, key_id: str, today: date |
             "gates": json.loads(existing[2]), "idempotent": True}
 
     gates, result = validate(conn, payload, today=today)
-    accepted = result is not None and _integrity_ok(gates)
+    mode = payload.get("mode", "live") if payload.get("mode", "live") in MODES else "live"
+    accepted = result is not None and _integrity_ok(gates, mode)
     run_status = None
     if accepted:
         run_status = "HEALTHY" if result["evaluation"]["sufficientHoldout"] else "DEGRADED"
@@ -200,23 +223,23 @@ def publish(conn: sqlite3.Connection, body: bytes, *, key_id: str, today: date |
     conn.execute("BEGIN IMMEDIATE")
     try:
         conn.execute(
-            "INSERT INTO research_publications (id, tenant_id, schema_version, publisher_key_id, worker_id, strategy_key, market_date, status, run_status, gates_json, payload_json, received_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO research_publications (id, tenant_id, schema_version, publisher_key_id, worker_id, strategy_key, market_date, status, run_status, gates_json, payload_json, received_at, mode)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (pub_id, TENANT, str(payload.get("schemaVersion")), key_id, worker_id, strat_key, market,
-             "accepted" if accepted else "rejected", run_status, json.dumps(gates), canonical(payload).decode("utf-8"), now),
+             "accepted" if accepted else "rejected", run_status, json.dumps(gates), canonical(payload).decode("utf-8"), now, mode),
         )
         if accepted:
             ev = result["evaluation"]
             for p in result["predictions"]:
                 ranking_ctx = {
-                    "publicationId": pub_id, "strategy": strat_key, "marketDate": market, "runStatus": run_status,
+                    "publicationId": pub_id, "strategy": strat_key, "marketDate": market, "runStatus": run_status, "mode": mode,
                     "evaluation": {k: ev[k] for k in ("method", "parametersFitted", "genuineOutOfSample", "edgeOverBaseline", "sufficientHoldout", "inSample", "holdout")},
                 }
                 conn.execute(
                     "INSERT INTO predictions (id, tenant_id, strategy_id, scored_event_id, ticker, timestamp, prediction, confidence, horizon, entry_price, mode, feature_snapshot_json, rank_score, ranking_context_json)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?, ?)",
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (f"{pub_id}:{p['ticker']}", TENANT, strat_key, pub_id, p["ticker"], p["observedAt"], p["direction"],
-                     p["confidence"], p["horizon"], p["entryPrice"],
+                     p["confidence"], p["horizon"], p["entryPrice"], "published" if mode == "live" else "replay",
                      json.dumps({**p["features"], "model_id": strat_key, "publicationId": pub_id}, sort_keys=True),
                      p["confidence"], json.dumps(ranking_ctx, sort_keys=True)),
                 )
@@ -224,19 +247,22 @@ def publish(conn: sqlite3.Connection, body: bytes, *, key_id: str, today: date |
     except Exception:
         conn.execute("ROLLBACK")
         raise
-    body_out = {"publicationId": pub_id, "status": "accepted" if accepted else "rejected", "runStatus": run_status, "gates": gates,
+    body_out = {"publicationId": pub_id, "mode": mode, "status": "accepted" if accepted else "rejected", "runStatus": run_status, "gates": gates,
                 "predictions": [f"{pub_id}:{p['ticker']}" for p in (result or {}).get("predictions", [])] if accepted else []}
     return (201 if accepted else 422), body_out
 
 
-def latest_for_ticker(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
-    """Locator for bots: the prediction for `ticker` in the latest accepted publication."""
+def latest_for_ticker(conn: sqlite3.Connection, ticker: str, *, mode: str = "live", session: str | None = None) -> dict[str, Any]:
+    """Locator for bots: the prediction for `ticker` in the latest accepted publication of
+    `mode` (replay publications are only returned when asked for, optionally by session)."""
     ensure_schema(conn)
-    row = conn.execute(
-        "SELECT id, market_date, run_status, received_at, gates_json FROM research_publications"
-        " WHERE tenant_id = ? AND status = 'accepted' ORDER BY market_date DESC, received_at DESC LIMIT 1",
-        (TENANT,),
-    ).fetchone()
+    sql = ("SELECT id, market_date, run_status, received_at, gates_json FROM research_publications"
+           " WHERE tenant_id = ? AND status = 'accepted' AND mode = ?")
+    args: list[Any] = [TENANT, mode]
+    if session:
+        sql += " AND market_date = ?"
+        args.append(session)
+    row = conn.execute(sql + " ORDER BY market_date DESC, received_at DESC LIMIT 1", args).fetchone()
     t = str(ticker).strip().upper()
     if not row:
         return {"found": False, "ticker": t, "reason": "no_accepted_publication"}
@@ -244,7 +270,7 @@ def latest_for_ticker(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
     pred = conn.execute("SELECT id FROM predictions WHERE tenant_id = ? AND scored_event_id = ? AND ticker = ?", (TENANT, pub_id, t)).fetchone()
     edge = next((g["detail"] for g in json.loads(gates_json) if g["gate"] == "edge_over_baseline"), {})
     base = {
-        "ticker": t, "publicationId": pub_id, "marketDate": market, "publishedAt": received,
+        "ticker": t, "publicationId": pub_id, "mode": mode, "marketDate": market, "publishedAt": received,
         "run": {"intelligenceConfidenceTier": "full" if run_status == "HEALTHY" else "suppressed",
                 "rankedUnderDegradedRun": run_status != "HEALTHY", "runStatus": run_status},
         "quality": edge,
@@ -256,10 +282,10 @@ def latest_for_ticker(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
 
 def publication_record(conn: sqlite3.Connection, pub_id: str) -> dict[str, Any] | None:
     ensure_schema(conn)
-    row = conn.execute("SELECT id, status, run_status, market_date, publisher_key_id, worker_id, strategy_key, gates_json, received_at FROM research_publications WHERE id = ?", (pub_id,)).fetchone()
+    row = conn.execute("SELECT id, status, run_status, market_date, publisher_key_id, worker_id, strategy_key, gates_json, received_at, mode FROM research_publications WHERE id = ?", (pub_id,)).fetchone()
     if not row:
         return None
-    keys = ["publicationId", "status", "runStatus", "marketDate", "publisherKeyId", "workerId", "strategyKey", "gates", "receivedAt"]
+    keys = ["publicationId", "status", "runStatus", "marketDate", "publisherKeyId", "workerId", "strategyKey", "gates", "receivedAt", "mode"]
     out = dict(zip(keys, row))
     out["gates"] = json.loads(out["gates"])
     return out

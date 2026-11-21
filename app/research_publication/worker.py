@@ -32,6 +32,7 @@ from app.research_publication.strategy import TREND_MOMENTUM_V1, evaluate, input
 HOME = Path(os.environ.get("ALPHA_RESEARCH_HOME", Path.home() / "alpha-research"))
 STRATEGY_KEY = "trend_momentum_v1"
 TENANT = "default"
+REPLAY_HEADROOM_SESSIONS = 40  # sync a little extra history so recent sessions can be replayed
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -94,7 +95,7 @@ def cmd_keygen(args: argparse.Namespace) -> int:
 
 
 def cmd_sync(_: argparse.Namespace) -> dict[str, Any]:
-    sessions = input_sessions(TREND_MOMENTUM_V1)
+    sessions = input_sessions(TREND_MOMENTUM_V1) + REPLAY_HEADROOM_SESSIONS
     status, data = _request("GET", f"/api/sync/bars?sessions={sessions}")
     if status != 200:
         raise SystemExit(f"sync failed: HTTP {status} {data}")
@@ -132,21 +133,26 @@ def cmd_sync(_: argparse.Namespace) -> dict[str, Any]:
     return summary
 
 
-def cmd_run(_: argparse.Namespace) -> Path:
+def cmd_run(args: argparse.Namespace) -> Path:
     cfg = TREND_MOMENTUM_V1
     universe = live_universe()
     sessions = input_sessions(cfg)
-    bars = load_bars(_db(), universe, sessions)
+    as_of = getattr(args, "as_of", None)
+    bars = load_bars(_db(), universe, sessions, until=as_of)
     short = [t for t in universe if len(bars[t]) != sessions]
     if short:
         raise SystemExit(f"not enough synced bars for {short}; run sync first")
     market = max(bars[t][-1][0] for t in universe)
+    if as_of and market != as_of:
+        raise SystemExit(f"{as_of} is not a session every live symbol traded (latest on/before it: {market})")
     payload = {
         "schemaVersion": PUBLICATION_VERSION,
+        **({"mode": "historical_replay"} if as_of else {}),
         "worker": {"id": os.environ.get("ALPHA_RESEARCH_WORKER_ID", "localhost")},
         "strategy": {"key": STRATEGY_KEY, "config": cfg},
         "universe": universe,
         "inputs": {"dataset": cfg["dataset"], "tenantId": TENANT, "sessions": sessions, "marketDate": market,
+                   **({"asOf": as_of} if as_of else {}),
                    "fingerprints": {t: bars_fingerprint(bars[t]) for t in universe}},
         "result": evaluate(bars, cfg),
     }
@@ -175,10 +181,12 @@ def main(argv: list[str] | None = None) -> int:
     k = sub.add_parser("keygen")
     k.add_argument("--out", default=str(Path.home() / ".config" / "alpha-research" / "publisher_ed25519.pem"))
     sub.add_parser("sync")
-    sub.add_parser("run")
+    r = sub.add_parser("run")
+    r.add_argument("--as-of", dest="as_of", help="historical replay: research as of this past session (YYYY-MM-DD)")
     p = sub.add_parser("publish")
     p.add_argument("--file")
-    sub.add_parser("all")
+    a = sub.add_parser("all")
+    a.add_argument("--as-of", dest="as_of")
     args = ap.parse_args(argv)
     if args.cmd == "keygen":
         return cmd_keygen(args)

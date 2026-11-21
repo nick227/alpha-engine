@@ -733,13 +733,16 @@ def api_research_publication(request: Request, publication_id: str) -> dict[str,
 
 
 @router.get("/research/latest")
-def api_research_latest(request: Request, ticker: str, tenant_id: str = "default") -> dict[str, Any]:
-    """Bot locator: this ticker's prediction in the latest accepted publication, with run gates."""
-    from app.research_publication.service import latest_for_ticker
+def api_research_latest(
+    request: Request, ticker: str, tenant_id: str = "default", mode: str = "live", session: str | None = None
+) -> dict[str, Any]:
+    """Bot locator: this ticker's prediction in the latest accepted publication, with run gates.
+    mode=historical_replay (optionally &session=YYYY-MM-DD) selects labelled replay publications."""
+    from app.research_publication.service import MODES, latest_for_ticker
 
-    if tenant_id != "default":
-        raise HTTPException(status_code=422, detail="unsupported tenant")
-    return latest_for_ticker(_svc(request).store.conn, ticker)
+    if tenant_id != "default" or mode not in MODES:
+        raise HTTPException(status_code=422, detail="unsupported tenant or mode")
+    return latest_for_ticker(_svc(request).store.conn, ticker, mode=mode, session=session)
 
 
 @router.get("/market/session-close")

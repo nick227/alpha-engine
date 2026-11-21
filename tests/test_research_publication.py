@@ -78,9 +78,9 @@ def env(tmp_path, monkeypatch):
         yield {"client": client, "signed": signed, "db": db, "key": key, "today": today}
 
 
-def _run_worker():
+def _run_worker(as_of=None):
     worker.cmd_sync(None)
-    return worker.cmd_run(None)
+    return worker.cmd_run(type("A", (), {"as_of": as_of})())
 
 
 def _pub_rows(db):
@@ -121,7 +121,7 @@ def test_worker_publication_is_validated_stored_and_traceable(env):
     pub_id = contract.publication_id(payload)
     record = env["client"].get(f"/api/research/publications/{pub_id}").json()
     assert {g["gate"]: g["status"] for g in record["gates"]} == {
-        "schema": "pass", "universe": "pass", "provenance": "pass", "freshness": "pass",
+        "schema": "pass", "mode": "pass", "universe": "pass", "provenance": "pass", "freshness": "pass",
         "reproduction": "pass", "market_data": "pass",
         "holdout_sufficient": "pass" if payload["result"]["evaluation"]["sufficientHoldout"] else "fail",
         "edge_over_baseline": "evidence"}
@@ -286,4 +286,47 @@ def test_load_bars_counts_sessions_not_rows_and_prefers_canonical(tmp_path):
     bars = service.load_bars(c, ["AAA"], 20)["AAA"]
     assert [b[0] for b in bars] == days[-20:]
     assert [b[4] for b in bars] == [100.0 + i for i in range(10, 30)]
+
+
+def _previous_session(env):
+    c = sqlite3.connect(env["db"])
+    try:
+        return c.execute("SELECT DISTINCT substr(timestamp,1,10) d FROM price_bars ORDER BY d DESC LIMIT 1 OFFSET 1").fetchone()[0]
+    finally:
+        c.close()
+
+
+def test_historical_replay_is_validated_as_of_its_session_and_kept_apart_from_live(env):
+    session = _previous_session(env)
+    path = _run_worker(as_of=session)
+    payload = json.loads(path.read_bytes())
+    assert payload["mode"] == "historical_replay" and payload["inputs"]["asOf"] == session
+    res = env["signed"]("POST", "/api/research/publications", path.read_bytes())
+    assert res.status_code == 201, res.json()
+    out = res.json()
+    assert out["mode"] == "historical_replay"
+    assert {g["gate"] for g in out["gates"]} >= {"mode", "replay_session", "reproduction", "market_data"}
+    assert "freshness" not in {g["gate"] for g in out["gates"]}
+    c = env["client"]
+    ticker = payload["result"]["predictions"][0]["ticker"]
+    # Never served as live research.
+    assert c.get("/api/research/latest", params={"ticker": ticker}).json()["reason"] == "no_accepted_publication"
+    replay = c.get("/api/research/latest", params={"ticker": ticker, "mode": "historical_replay", "session": session}).json()
+    assert replay["found"] is True and replay["mode"] == "historical_replay" and replay["marketDate"] == session
+    trace = c.get(f"/api/predictions/{replay['predictionId']}/trace").json()
+    assert trace["evidence"]["snapshot"]["observedAt"].startswith(session)
+    assert trace["evidence"]["snapshot"]["ranking"]["mode"] == "historical_replay"
+    assert c.get("/api/research/latest", params={"ticker": ticker, "mode": "bogus"}).status_code == 422
+
+
+def test_replay_must_match_a_real_session_and_cannot_pose_as_live(env):
+    session = _previous_session(env)
+    path = _run_worker(as_of=session)
+    payload = json.loads(path.read_bytes())
+    wrong = {**payload, "inputs": {**payload["inputs"], "asOf": "2001-01-02"}}
+    res = env["signed"]("POST", "/api/research/publications", contract.canonical(wrong))
+    assert res.status_code == 422 and res.json()["gates"][-1]["gate"] in ("provenance", "replay_session")
+    as_live = {k: v for k, v in payload.items() if k != "mode"}
+    res = env["signed"]("POST", "/api/research/publications", contract.canonical(as_live))
+    assert res.status_code == 422 and res.json()["gates"][-1]["gate"] in ("provenance", "freshness")
 
