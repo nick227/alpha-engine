@@ -267,27 +267,38 @@ def get_consensus_signals(
     def _opt_float(v: Any) -> float | None:
         return float(v) if v is not None else None
 
+    def _row_val(r: Any, key: str, default: Any = None) -> Any:
+        try:
+            return r[key]
+        except (IndexError, KeyError):
+            return default
+
     signals = [
         {
-            "ticker": str(r["ticker"]),
-            "regime": str(r["regime"]) if r["regime"] is not None else "unknown",
-            "sentimentStrategyId": str(r["sentiment_strategy_id"]) if r["sentiment_strategy_id"] is not None else None,
-            "quantStrategyId": str(r["quant_strategy_id"]) if r["quant_strategy_id"] is not None else None,
-            "sentimentScore": _opt_float(r["sentiment_score"]),
-            "quantScore": _opt_float(r["quant_score"]),
-            "ws": _opt_float(r["ws"]),
-            "wq": _opt_float(r["wq"]),
-            "agreementBonus": _opt_float(r["agreement_bonus"]),
-            "pFinal": _opt_float(r["p_final"]),
+            "ticker": str(_row_val(r, "ticker", "")),
+            "regime": str(_row_val(r, "regime")) if _row_val(r, "regime") is not None else "unknown",
+            "sentimentStrategyId": str(_row_val(r, "sentiment_strategy_id")) if _row_val(r, "sentiment_strategy_id") is not None else None,
+            "quantStrategyId": str(_row_val(r, "quant_strategy_id")) if _row_val(r, "quant_strategy_id") is not None else None,
+            "sentimentScore": _opt_float(_row_val(r, "sentiment_score")),
+            "quantScore": _opt_float(_row_val(r, "quant_score")),
+            "ws": _opt_float(_row_val(r, "ws")),
+            "wq": _opt_float(_row_val(r, "wq")),
+            "agreementBonus": _opt_float(_row_val(r, "agreement_bonus")),
+            "pFinal": _opt_float(_row_val(r, "p_final")),
             "scoreMethodology": {"method": "weighted_consensus", "isProbability": False},
             "successProbability": None,
             "actionable": False,
-            "stabilityScore": _opt_float(r["stability_score"]),
-            "createdAt": str(r["created_at"]) if r["created_at"] is not None else None,
+            "stabilityScore": _opt_float(_row_val(r, "stability_score")),
+            "createdAt": str(_row_val(r, "created_at")) if _row_val(r, "created_at") is not None else None,
         }
         for r in rows
     ]
-    return {"tenant_id": tenant_id, "count": len(signals), "signals": signals}
+    return {
+        "tenant_id": tenant_id,
+        "status": "available" if signals else "unavailable",
+        "count": len(signals),
+        "signals": signals,
+    }
 
 
 def get_ticker_attribution(

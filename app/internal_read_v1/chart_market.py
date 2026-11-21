@@ -79,8 +79,10 @@ def build_company_payload(
         ).fetchone()
     sec = row["sector"] if row else None
     ind = row["industry"] if row else None
+    has_data = bool(prof) or bool(row)
     return {
         "ticker": ticker,
+        "status": "available" if has_data else "unavailable",
         "shortName": prof.get("shortName"),
         "longName": prof.get("longName"),
         "sector": sec or prof.get("sector"),
@@ -90,6 +92,7 @@ def build_company_payload(
         "marketCap": prof.get("marketCap"),
         "beta": prof.get("beta"),
         "profile_loaded": bool(prof),
+        "fundamentals_loaded": bool(row),
     }
 
 

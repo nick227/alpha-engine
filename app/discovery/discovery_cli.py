@@ -373,7 +373,18 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 2
-        snapshots = fetch_fmp_fundamentals_batch(symbols, api_key=args.api_key)
+        try:
+            snapshots = fetch_fmp_fundamentals_batch(symbols, api_key=args.api_key)
+        except RuntimeError as e:
+            if "FMP_API_KEY" in str(e):
+                print(
+                    json.dumps(
+                        {"status": "unavailable", "reason": "FMP_API_KEY is not configured", "synced": 0},
+                        indent=2,
+                    )
+                )
+                return 0
+            raise
 
         repo = AlphaRepository(db_path=str(args.db))
         try:
