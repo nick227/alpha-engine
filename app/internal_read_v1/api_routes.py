@@ -46,6 +46,7 @@ from app.internal_read_v1.intelligence_read import (
     list_strategies_catalog,
 )
 from app.internal_read_v1.prediction_transparency import prediction_scoreboard, prediction_evidence
+from app.internal_read_v1.pairwise_benchmark import compare_prediction_strategies
 from app.services.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -395,6 +396,20 @@ def api_prediction_runs_latest(
     if out is None:
         raise HTTPException(status_code=404, detail="no prediction runs")
     return out
+
+
+@router.get("/predictions/benchmarks/matched")
+def api_matched_prediction_benchmark(
+    request: Request, ml_strategy_id: str, rules_strategy_id: str,
+    tenant_id: str = "default", horizon: str | None = None, limit: int = 10000
+) -> dict[str, Any]:
+    if not ml_strategy_id or not rules_strategy_id or ml_strategy_id == rules_strategy_id:
+        raise HTTPException(status_code=422, detail="two different strategy IDs are required")
+    return compare_prediction_strategies(
+        _svc(request).store.conn, tenant_id=tenant_id,
+        ml_strategy_id=ml_strategy_id, rules_strategy_id=rules_strategy_id,
+        horizon=horizon, max_recent_rows=limit,
+    )
 
 
 @router.get("/predictions/scoreboard")
