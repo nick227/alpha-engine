@@ -253,3 +253,24 @@ def test_session_close_is_daily_only_and_live_universe_only(env):
     assert c.get("/api/market/session-close", params={"ticker": "ZZZ"}).status_code == 404
     assert c.get("/api/market/session-close", params={"ticker": "AAA", "session": "bad"}).status_code == 422
 
+
+def test_live_bars_updates_legacy_format_rows_in_place_instead_of_duplicating(tmp_path, monkeypatch):
+    from app.jobs import live_bars
+
+    db = tmp_path / "legacy.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE price_bars (tenant_id TEXT, ticker TEXT, timeframe TEXT, timestamp TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, PRIMARY KEY (tenant_id, ticker, timeframe, timestamp))")
+    c.execute("INSERT INTO price_bars VALUES ('default','AAA','1d','2026-11-19',1,1,1,10,1)")                       # legacy bare date
+    c.execute("INSERT INTO price_bars VALUES ('default','AAA','1d','2026-11-20T00:00:00+00:00',1,1,1,11,1)")
+    c.commit()
+    c.close()
+    monkeypatch.setenv("ALPHA_LIVE_UNIVERSE", "AAA")
+    fetched = {"AAA": [("2026-11-19T00:00:00+00:00", 1.0, 1.0, 1.0, 9.5, 1.0), ("2026-11-20T00:00:00+00:00", 1.0, 1.0, 1.0, 11.0, 1.0),
+                       ("2026-11-21T00:00:00+00:00", 1.0, 1.0, 1.0, 12.0, 1.0)]}
+    rec = live_bars.refresh(str(db), fetch=lambda t, d: fetched)
+    assert (rec["inserted"], rec["corrected"], rec["unchanged"]) == (1, 1, 1)
+    c = sqlite3.connect(db)
+    rows = c.execute("SELECT timestamp, close FROM price_bars ORDER BY timestamp").fetchall()
+    c.close()
+    assert rows == [("2026-11-19", 9.5), ("2026-11-20T00:00:00+00:00", 11.0), ("2026-11-21T00:00:00+00:00", 12.0)]
+
