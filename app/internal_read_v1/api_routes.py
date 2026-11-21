@@ -510,6 +510,8 @@ def api_recommendations_best(
             "qualityStatus": {**metadata["qualityStatus"], "status": "suppressed",
                               "actionable": False, "suppressionReasons": ["NO_ELIGIBLE_RECOMMENDATION"]},
             "intelligenceConfidenceTier": "suppressed",
+            "consumerExperience": {**product_labels_for_tier("suppressed"),
+                                   "message": "No eligible actionable recommendation."},
         })
     return {**metadata, **row}
 

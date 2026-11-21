@@ -79,7 +79,7 @@ def parse_best_preference(value: str | None) -> BestPreference:
 
 def _latest_rankings(conn: sqlite3.Connection, *, tenant_id: str) -> dict[str, float]:
     row = conn.execute(
-        "SELECT MAX(timestamp) AS ts FROM ranking_snapshots WHERE tenant_id = ?",
+        "SELECT timestamp AS ts FROM ranking_snapshots WHERE tenant_id = ? ORDER BY julianday(timestamp) DESC LIMIT 1",
         (tenant_id,),
     ).fetchone()
     if not row or row["ts"] is None:
@@ -103,10 +103,11 @@ def _latest_consensus(conn: sqlite3.Connection, *, tenant_id: str) -> dict[str, 
         FROM consensus_signals
         WHERE tenant_id = ?
           AND created_at = (
-            SELECT MAX(cs2.created_at)
+            SELECT cs2.created_at
             FROM consensus_signals cs2
             WHERE cs2.tenant_id = consensus_signals.tenant_id
               AND cs2.ticker = consensus_signals.ticker
+            ORDER BY julianday(cs2.created_at) DESC LIMIT 1
           )
         """,
         (tenant_id,),

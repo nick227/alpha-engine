@@ -228,3 +228,15 @@ def test_null_consensus_remains_research_only(warehouse, client):
 @pytest.mark.parametrize('cap', ['nan','inf','-1'])
 def test_invalid_price_cap_is_client_error(client, cap):
     assert client.get(f'/api/recommendations/under/{cap}').status_code == 400
+
+
+def test_source_selection_uses_time_not_iso_text_order(warehouse):
+    # Same UTC date: lexical T ordering would incorrectly win over a newer space timestamp.
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    new = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
+    warehouse.execute('UPDATE ranking_snapshots SET timestamp=?,score=0.1', (old,))
+    warehouse.execute('UPDATE consensus_signals SET created_at=?,p_final=0.1', (old,))
+    warehouse.execute("INSERT INTO ranking_snapshots VALUES ('default','T0',?,0.9)", (new,))
+    warehouse.execute("INSERT INTO consensus_signals VALUES ('default','T0',?,0.9)", (new,))
+    assert recs._latest_rankings(warehouse,tenant_id='default')['T0'] == 0.9
+    assert recs._latest_consensus(warehouse,tenant_id='default')['T0'] == 0.9
