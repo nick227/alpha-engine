@@ -139,6 +139,7 @@ class MLPredictor(StrategyBase):
             entry_price=float(price_context.get("entry_price", 100.0)),
             mode=self.config.mode,
             feature_snapshot={
+                "model_id": model.get("model_id"),
                 "ml_score": round(score, 5),
                 "coverage": round(coverage, 3),
                 "top_factors": _top_factors(model["feature_importance_json"]),

@@ -45,6 +45,7 @@ from app.internal_read_v1.intelligence_read import (
     get_ticker_attribution,
     list_strategies_catalog,
 )
+from app.internal_read_v1.prediction_transparency import prediction_scoreboard, prediction_evidence
 from app.services.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -393,6 +394,19 @@ def api_prediction_runs_latest(
     out = get_prediction_run_latest(_svc(request).store.conn, tenant_id=tenant_id, timeframe=timeframe)
     if out is None:
         raise HTTPException(status_code=404, detail="no prediction runs")
+    return out
+
+
+@router.get("/predictions/scoreboard")
+def api_prediction_scoreboard(request: Request, tenant_id: str = "default", ticker: str | None = None, horizon: str | None = None, limit: int = 5000) -> dict[str, Any]:
+    return prediction_scoreboard(_svc(request).store.conn, tenant_id=tenant_id, ticker=ticker, horizon=horizon, limit=limit)
+
+
+@router.get("/predictions/{prediction_id}/evidence")
+def api_prediction_evidence(request: Request, prediction_id: str, tenant_id: str = "default") -> dict[str, Any]:
+    out = prediction_evidence(_svc(request).store.conn, tenant_id=tenant_id, prediction_id=prediction_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="prediction not found")
     return out
 
 
