@@ -22,15 +22,12 @@ def _runtime_get_paths() -> set[str]:
     except ImportError as exc:
         pytest.skip(f"FastAPI app import unavailable in current environment: {exc}")
 
-    paths: set[str] = set()
-    for route in app.routes:
-        methods = getattr(route, "methods", None) or set()
-        if "GET" not in methods:
-            continue
-        path = getattr(route, "path", None)
-        if not path or path in _EXCLUDED_PATHS:
-            continue
-        paths.add(path)
+    # FastAPI >= 0.13x keeps included routers as nested nodes in app.routes; the OpenAPI
+    # schema is the stable, public view of every routable path (none opt out of the schema).
+    paths: set[str] = {
+        path for path, ops in app.openapi().get("paths", {}).items()
+        if "get" in ops and path not in _EXCLUDED_PATHS
+    }
     return paths
 
 

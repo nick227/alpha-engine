@@ -83,7 +83,12 @@ def test_dashboard_service_smoke() -> None:
         )
 
         assert svc.list_tenants() == ["default"]
-        assert svc.list_tickers(tenant_id=tenant_id) == ["AAPL"]
+        # list_tickers is the active universe (static ∪ admitted ∪ consumer), not "tickers seen in predictions".
+        from app.core.active_universe import get_active_universe_tickers
+
+        tickers = svc.list_tickers(tenant_id=tenant_id)
+        assert tickers == get_active_universe_tickers(tenant_id=tenant_id, sqlite_conn=svc.store.conn)
+        assert "AAPL" in tickers and tickers == sorted(set(tickers))
 
         champs = svc.get_champions(tenant_id=tenant_id, min_predictions=5)
         assert champs["sentiment"].track == "sentiment"
