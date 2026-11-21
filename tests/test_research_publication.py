@@ -274,3 +274,16 @@ def test_live_bars_updates_legacy_format_rows_in_place_instead_of_duplicating(tm
     c.close()
     assert rows == [("2026-11-19", 9.5), ("2026-11-20T00:00:00+00:00", 11.0), ("2026-11-21T00:00:00+00:00", 12.0)]
 
+
+def test_load_bars_counts_sessions_not_rows_and_prefers_canonical(tmp_path):
+    c = sqlite3.connect(tmp_path / "dups.db")
+    c.execute("CREATE TABLE price_bars (tenant_id TEXT, ticker TEXT, timeframe TEXT, timestamp TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)")
+    days = _weekdays_ending(date(2026, 11, 20), 30)[-30:]
+    for i, d in enumerate(days):
+        c.execute("INSERT INTO price_bars VALUES ('default','AAA','1d',?,1,1,1,?,1)", (f"{d}T00:00:00+00:00", 100.0 + i))
+        for stamp in (d, f"{d} 00:00:00", f"{d}T21:19:03.641365+00:00"):  # legacy duplicates, stale values
+            c.execute("INSERT INTO price_bars VALUES ('default','AAA','1d',?,1,1,1,?,1)", (stamp, 1.0))
+    bars = service.load_bars(c, ["AAA"], 20)["AAA"]
+    assert [b[0] for b in bars] == days[-20:]
+    assert [b[4] for b in bars] == [100.0 + i for i in range(10, 30)]
+

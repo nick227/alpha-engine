@@ -56,13 +56,25 @@ def load_bars(conn: sqlite3.Connection, tickers: list[str], sessions: int, *, te
     """Last `sessions` daily bars per ticker, one per date, ascending: [date, o, h, l, c, v]."""
     out: dict[str, list[list[Any]]] = {}
     for t in tickers:
+        # Bound by distinct session dates, not raw rows: legacy data has several rows
+        # (timestamp formats, intraday stamps) for one date.
+        cutoff = conn.execute(
+            """
+            SELECT MIN(d) FROM (
+                SELECT DISTINCT substr(timestamp, 1, 10) AS d FROM price_bars
+                WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND close > 0
+                ORDER BY d DESC LIMIT ?
+            )
+            """,
+            (tenant_id, t, sessions),
+        ).fetchone()[0]
         rows = conn.execute(
             """
             SELECT timestamp, open, high, low, close, volume FROM price_bars
-            WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND close > 0
-            ORDER BY timestamp DESC LIMIT ?
+            WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND close > 0 AND timestamp >= ?
+            ORDER BY timestamp DESC
             """,
-            (tenant_id, t, sessions * 2),
+            (tenant_id, t, cutoff or "9999"),
         ).fetchall()
         by_date: dict[str, list[Any]] = {}
         for r in rows:
