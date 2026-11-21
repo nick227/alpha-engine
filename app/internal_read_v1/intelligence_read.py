@@ -264,20 +264,23 @@ def get_consensus_signals(
         """,
         [tenant_id, *params],
     ).fetchall()
+    def _opt_float(v: Any) -> float | None:
+        return float(v) if v is not None else None
+
     signals = [
         {
             "ticker": str(r["ticker"]),
-            "regime": str(r["regime"]),
+            "regime": str(r["regime"]) if r["regime"] is not None else "unknown",
             "sentimentStrategyId": str(r["sentiment_strategy_id"]) if r["sentiment_strategy_id"] is not None else None,
             "quantStrategyId": str(r["quant_strategy_id"]) if r["quant_strategy_id"] is not None else None,
-            "sentimentScore": float(r["sentiment_score"]),
-            "quantScore": float(r["quant_score"]),
-            "ws": float(r["ws"]),
-            "wq": float(r["wq"]),
-            "agreementBonus": float(r["agreement_bonus"]),
-            "pFinal": float(r["p_final"]),
-            "stabilityScore": float(r["stability_score"]),
-            "createdAt": str(r["created_at"]),
+            "sentimentScore": _opt_float(r["sentiment_score"]),
+            "quantScore": _opt_float(r["quant_score"]),
+            "ws": _opt_float(r["ws"]),
+            "wq": _opt_float(r["wq"]),
+            "agreementBonus": _opt_float(r["agreement_bonus"]),
+            "pFinal": _opt_float(r["p_final"]),
+            "stabilityScore": _opt_float(r["stability_score"]),
+            "createdAt": str(r["created_at"]) if r["created_at"] is not None else None,
         }
         for r in rows
     ]
