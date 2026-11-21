@@ -279,6 +279,9 @@ def get_consensus_signals(
             "wq": _opt_float(r["wq"]),
             "agreementBonus": _opt_float(r["agreement_bonus"]),
             "pFinal": _opt_float(r["p_final"]),
+            "scoreMethodology": {"method": "weighted_consensus", "isProbability": False},
+            "successProbability": None,
+            "actionable": False,
             "stabilityScore": _opt_float(r["stability_score"]),
             "createdAt": str(r["created_at"]) if r["created_at"] is not None else None,
         }
@@ -380,7 +383,7 @@ def get_prediction_run_latest(conn: sqlite3.Connection, *, tenant_id: str, timef
                 SELECT id, ingress_start, ingress_end, prediction_start, prediction_end, timeframe, regime, created_at
                 FROM prediction_runs
                 WHERE tenant_id = ? AND timeframe = ?
-                ORDER BY prediction_end DESC, created_at DESC
+                ORDER BY julianday(created_at) DESC, id DESC
                 LIMIT 1
                 """,
                 (tenant_id, str(timeframe)),
@@ -391,7 +394,7 @@ def get_prediction_run_latest(conn: sqlite3.Connection, *, tenant_id: str, timef
                 SELECT id, ingress_start, ingress_end, prediction_start, prediction_end, timeframe, regime, created_at
                 FROM prediction_runs
                 WHERE tenant_id = ?
-                ORDER BY prediction_end DESC, created_at DESC
+                ORDER BY julianday(created_at) DESC, id DESC
                 LIMIT 1
                 """,
                 (tenant_id,),
@@ -573,6 +576,9 @@ def get_prediction_context(
     ranking_ctx = _loads_obj(str(row["ranking_context_json"]) if row["ranking_context_json"] is not None else None)
     feature_ctx = _loads_obj(str(row["feature_snapshot_json"]) if row["feature_snapshot_json"] is not None else None)
     return {
+        "confidenceMethodology": {"method": "strategy_defined_uncalibrated", "isProbability": False},
+        "successProbability": None,
+        "actionable": False,
         "predictionId": str(row["id"]),
         "tenant_id": str(row["tenant_id"]),
         "ticker": str(row["ticker"]),
