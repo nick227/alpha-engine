@@ -359,6 +359,15 @@ ENDPOINTS: tuple[EndpointSpec, ...] = (
         "allowed",
         "high",
     ),
+    EndpointSpec(
+        "api_market_session_close",
+        "GET",
+        "/api/market/session-close",
+        "api_smoke",
+        "minimal_empty",
+        "allowed",
+        "high",
+    ),
 )
 
 
