@@ -18,8 +18,14 @@ import json
 import subprocess
 import sys
 from datetime import date
+from pathlib import Path
 
-from app.db.repository import AlphaRepository
+# Runnable as a file (python dev_scripts/scripts/nightly_discovery_pipeline.py) without PYTHONPATH.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from app.db.repository import AlphaRepository  # noqa: E402
 from app.engine.discovery_integration import PROMOTED_STRATEGIES, queue_discovery_predictions
 
 
