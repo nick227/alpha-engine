@@ -1,0 +1,14 @@
+# Operational inference universe (P0). Separate from historical ML training data.
+# Daily price ingestion, sync and research publication are limited to these symbols.
+# Override with ALPHA_LIVE_UNIVERSE="SPY,QQQ,...".
+symbols:
+  - SPY
+  - QQQ
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - GOOGL
+  - JPM
+  - XOM
+  - META
