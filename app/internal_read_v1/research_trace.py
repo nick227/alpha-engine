@@ -104,6 +104,7 @@ def build_prediction_trace(
         },
         "evidence": {
             "sha256": evidence_digest,
+            "canonicalJson": _canonical(snapshot).decode("utf-8"),
             "snapshot": snapshot,
             "availability": available,
             "snapshotOrigin": "stored_prediction_fields",
