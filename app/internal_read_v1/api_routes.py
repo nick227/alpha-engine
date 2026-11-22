@@ -765,16 +765,17 @@ def api_market_session_close(request: Request, ticker: str, session: str | None 
             bound = _date.fromisoformat(session).isoformat()
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="session must be YYYY-MM-DD") from exc
-    row = _svc(request).store.conn.execute(
-        """
-        SELECT timestamp, close FROM price_bars
-        WHERE tenant_id = 'default' AND ticker = ? AND timeframe = '1d' AND close > 0
-          AND substr(timestamp, 1, 10) <= ?
-        ORDER BY timestamp DESC LIMIT 1
-        """,
-        (t, bound),
-    ).fetchone()
-    if not row:
+    from app.research_publication.service import load_bars
+
+    bars = load_bars(_svc(request).store.conn, [t], 21, until=bound)[t]
+    if not bars:
         raise HTTPException(status_code=404, detail="no daily bar")
-    return {"ticker": t, "session": str(row[0])[:10], "close": float(row[1]), "timeframe": "1d", "source": "alpha-engine price_bars"}
+    last = bars[-1]
+    prior = [b[5] for b in bars[:-1] if b[5] and b[5] > 0][-20:]
+    return {
+        "ticker": t, "session": last[0], "close": last[4], "volume": last[5] or None,
+        # Average of the 20 sessions before this one (liquidity context for risk checks).
+        "avgVolume20": round(sum(prior) / len(prior), 2) if prior else None,
+        "timeframe": "1d", "source": "alpha-engine price_bars",
+    }
 
