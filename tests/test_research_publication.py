@@ -331,3 +331,19 @@ def test_replay_must_match_a_real_session_and_cannot_pose_as_live(env):
     res = env["signed"]("POST", "/api/research/publications", contract.canonical(as_live))
     assert res.status_code == 422 and res.json()["gates"][-1]["gate"] in ("provenance", "freshness")
 
+
+def test_load_bars_ignores_non_session_rows(tmp_path):
+    c = sqlite3.connect(tmp_path / "junk.db")
+    c.execute("CREATE TABLE price_bars (tenant_id TEXT, ticker TEXT, timeframe TEXT, timestamp TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)")
+    days = _weekdays_ending(date(2026, 11, 20), 10)[-10:]
+    for i, d in enumerate(days):
+        c.execute("INSERT INTO price_bars VALUES ('default','AAA','1d',?,1,1,1,?,1)", (f"{d}T00:00:00+00:00", 100.0 + i))
+    # Mock contamination: intraday-stamped "daily" rows, including on a Saturday and a real weekday.
+    for stamp in ("2026-11-14T21:19:03.641365+00:00", "2026-11-14T21:27:36.470408+00:00", f"{days[-1]}T21:19:03.641365+00:00"):
+        c.execute("INSERT INTO price_bars VALUES ('default','AAA','1d',?,1,1,1,999,1)", (stamp,))
+    c.execute("INSERT INTO price_bars VALUES ('default','AAA','1d','2026-11-15',1,1,1,999,1)")  # Sunday, midnight-keyed
+    bars = service.load_bars(c, ["AAA"], 10)["AAA"]
+    assert [b[0] for b in bars] == days and 999 not in [b[4] for b in bars]
+    assert service.is_session_bar("2026-11-20") and service.is_session_bar("2026-11-20 00:00:00") and service.is_session_bar("2026-11-20T05:00:00+00:00")
+    assert not service.is_session_bar("2026-11-20T21:19:03.641365+00:00") and not service.is_session_bar("2026-11-21T00:00:00+00:00")
+

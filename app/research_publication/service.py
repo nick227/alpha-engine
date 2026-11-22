@@ -14,6 +14,7 @@ and published; an insufficient holdout makes the run DEGRADED.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -50,6 +51,21 @@ CREATE INDEX IF NOT EXISTS idx_research_publications_latest
 
 MODES = ("live", "historical_replay")
 
+# A daily bar is keyed by its session date. Legacy data contains "daily" rows stamped at
+# intraday creation times (e.g. T21:19:03.641365, random prices, weekend dates) — mock /
+# test contamination, not sessions. Only midnight-keyed rows on weekdays are sessions.
+_SESSION_TIME = re.compile(r"^(| 00:00:00|T0[045]:00:00(\+00:00|Z)?)$")
+
+
+def is_session_bar(timestamp: str) -> bool:
+    ts = str(timestamp)
+    if not _SESSION_TIME.match(ts[10:]):
+        return False
+    try:
+        return date.fromisoformat(ts[:10]).weekday() < 5
+    except ValueError:
+        return False
+
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_DDL)
@@ -63,31 +79,24 @@ def load_bars(conn: sqlite3.Connection, tickers: list[str], sessions: int, *, te
     bound = until or "9999-12-31"
     out: dict[str, list[list[Any]]] = {}
     for t in tickers:
-        # Bound by distinct session dates, not raw rows: legacy data has several rows
-        # (timestamp formats, intraday stamps) for one date.
-        cutoff = conn.execute(
-            """
-            SELECT MIN(d) FROM (
-                SELECT DISTINCT substr(timestamp, 1, 10) AS d FROM price_bars
-                WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND close > 0
-                  AND substr(timestamp, 1, 10) <= ?
-                ORDER BY d DESC LIMIT ?
-            )
-            """,
-            (tenant_id, t, bound, sessions),
-        ).fetchone()[0]
-        rows = conn.execute(
+        # One ordered pass, newest first, counting only valid session dates (legacy data has
+        # several rows per date and non-session rows). Rows of one date are contiguous here.
+        cur = conn.execute(
             """
             SELECT timestamp, open, high, low, close, volume FROM price_bars
-            WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND close > 0 AND timestamp >= ?
+            WHERE tenant_id = ? AND ticker = ? AND timeframe = '1d' AND close > 0
               AND substr(timestamp, 1, 10) <= ?
             ORDER BY timestamp DESC
             """,
-            (tenant_id, t, cutoff or "9999", bound),
-        ).fetchall()
+            (tenant_id, t, bound),
+        )
         by_date: dict[str, list[Any]] = {}
-        for r in rows:
+        for r in cur:
+            if not is_session_bar(r[0]):
+                continue
             d = str(r[0])[:10]
+            if d not in by_date and len(by_date) >= sessions:
+                break
             # Prefer the canonical midnight-UTC row when a date has several formats.
             if d not in by_date or str(r[0]).endswith("T00:00:00+00:00"):
                 by_date[d] = [d, float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5])]
