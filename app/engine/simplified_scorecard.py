@@ -18,35 +18,6 @@ class SimplifiedScorecard:
         self.strategy_returns = strategy_returns
         self.benchmark_returns = benchmark_returns or None
     
-    def calculate_sharpe(self):
-        """Calculate Sharpe ratio with annualization."""
-        if len(self.strategy_returns) < 2:
-            return 0
-            
-        mean_return = np.mean(self.strategy_returns)
-        return_std = np.std(self.strategy_returns)
-        
-        if return_std == 0:
-            return np.inf if mean_return > 0 else 0
-            
-        # Annualize Sharpe
-        sharpe = (mean_return / return_std) * np.sqrt(252)
-        return sharpe
-    
-    def calculate_drawdown(self):
-        """Calculate maximum drawdown."""
-        if len(self.strategy_returns) == 0:
-            return 0
-            
-        # Calculate cumulative returns
-        cumulative_returns = (1 + self.strategy_returns).cumprod()
-        
-        # Calculate drawdowns
-        rolling_max = cumulative_returns.cummax()
-        drawdowns = cumulative_returns / rolling_max - 1
-        
-        return abs(drawdowns.min())
-    
     def calculate_win_rate(self):
         """Calculate win rate (percentage of positive returns)."""
         if len(self.strategy_returns) == 0:
