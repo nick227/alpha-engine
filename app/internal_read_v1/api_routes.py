@@ -139,6 +139,32 @@ def api_regime(request: Request, ticker: str, tenant_id: str = "default") -> dic
     return out
 
 
+@router.get("/regime/{ticker}/history")
+def api_regime_history(request: Request, ticker: str, start: str, end: str) -> dict[str, Any]:
+    """Point-in-time regime for each session in [start, end] from clean session bars (backtests).
+
+    Same classification as /api/regime/{ticker}; each entry uses only bars up to its session.
+    """
+    from datetime import date as _date
+
+    from app.internal_read_v1.regime_read import MIN_DAILY_BARS, regime_series
+    from app.research_publication.live_universe import live_universe
+    from app.research_publication.service import load_bars
+
+    t = normalize_ticker(ticker)
+    if t not in live_universe():
+        raise HTTPException(status_code=404, detail="ticker not in live universe")
+    try:
+        s, e = _date.fromisoformat(start), _date.fromisoformat(end)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="start/end must be YYYY-MM-DD") from exc
+    if s > e or (e - s).days > 366 * 6:
+        raise HTTPException(status_code=422, detail="range must be ascending and at most 6 years")
+    bars = load_bars(_svc(request).store.conn, [t], 1600 + MIN_DAILY_BARS, until=e.isoformat())[t]
+    series = regime_series([b[0] for b in bars], [b[4] for b in bars])
+    return {"ticker": t, "source": "alpha-engine price_bars (session bars)", "points": [p for p in series if p["asOf"] >= s.isoformat()]}
+
+
 @router.get("/strategies/catalog")
 def api_strategies_catalog(
     request: Request,
@@ -743,6 +769,32 @@ def api_research_latest(
     if tenant_id != "default" or mode not in MODES:
         raise HTTPException(status_code=422, detail="unsupported tenant or mode")
     return latest_for_ticker(_svc(request).store.conn, ticker, mode=mode, session=session)
+
+
+@router.get("/market/daily-bars")
+def api_market_daily_bars(request: Request, ticker: str, start: str, end: str) -> dict[str, Any]:
+    """Clean daily session bars [date, open, high, low, close, volume] for a live-universe ticker
+    over [start, end] (at most 6 years), with the bars-sync fingerprint. Session rows only — the
+    same reader research uses (no intraday/mock rows, one canonical row per date). Prices are as
+    stored: consumers must validate continuity (splits) themselves."""
+    from datetime import date as _date
+
+    from app.research_publication.contract import bars_fingerprint
+    from app.research_publication.live_universe import live_universe
+    from app.research_publication.service import load_bars
+
+    t = str(ticker).strip().upper()
+    if t not in live_universe():
+        raise HTTPException(status_code=404, detail="ticker not in live universe")
+    try:
+        s, e = _date.fromisoformat(start), _date.fromisoformat(end)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="start/end must be YYYY-MM-DD") from exc
+    if s > e or (e - s).days > 366 * 6:
+        raise HTTPException(status_code=422, detail="range must be ascending and at most 6 years")
+    bars = [b for b in load_bars(_svc(request).store.conn, [t], 1600, until=e.isoformat())[t] if b[0] >= s.isoformat()]
+    return {"ticker": t, "timeframe": "1d", "start": start, "end": end, "bars": bars,
+            "sha256": bars_fingerprint(bars), "source": "alpha-engine price_bars (session bars)"}
 
 
 @router.get("/market/session-close")

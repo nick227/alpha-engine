@@ -55,6 +55,29 @@ def _confirmed_bars(closes: list[float], sma200s: list[float]) -> tuple[RegimeLa
     return current, cnt
 
 
+def regime_series(dates: list[str], closes: list[float]) -> list[dict[str, Any]]:
+    """Regime as it was known at each session's close (only bars up to that session are used).
+
+    The same classification as build_regime_payload, evaluated point-in-time for every session
+    with at least MIN_DAILY_BARS of history: entry i equals build_regime_payload over bars[:i+1].
+    """
+    sma20s = _rolling_sma(closes, 20)
+    sma200s = _rolling_sma(closes, 200)
+    out: list[dict[str, Any]] = []
+    for i in range(MIN_DAILY_BARS - 1, len(closes)):
+        regime, confirmed = _confirmed_bars(closes[: i + 1], sma200s[: i + 1])
+        out.append({
+            "asOf": dates[i],
+            "regime": regime,
+            "score": _score(closes[i], sma200s[i], regime),
+            "sma20": round(sma20s[i], 4),
+            "sma200": round(sma200s[i], 4),
+            "close": round(closes[i], 4),
+            "confirmedBars": confirmed,
+        })
+    return out
+
+
 def build_regime_payload(
     conn: sqlite3.Connection,
     *,
