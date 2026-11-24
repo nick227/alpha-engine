@@ -214,9 +214,11 @@ def publish(conn: sqlite3.Connection, body: bytes, *, key_id: str, today: date |
         return 400, {"status": "rejected", "reason": "invalid_payload"}
     existing = conn.execute("SELECT status, run_status, gates_json FROM research_publications WHERE id = ?", (pub_id,)).fetchone()
     if existing:
+        prior_gates = json.loads(existing[2])
         return (200 if existing[0] == "accepted" else 422), {
             "publicationId": pub_id, "status": existing[0], "runStatus": existing[1],
-            "gates": json.loads(existing[2]), "idempotent": True}
+            "gates": prior_gates, "idempotent": True,
+            "researchQuality": research_quality(prior_gates, existing[1]) if existing[0] == "accepted" else None}
 
     gates, result = validate(conn, payload, today=today)
     mode = payload.get("mode", "live") if payload.get("mode", "live") in MODES else "live"
@@ -257,8 +259,38 @@ def publish(conn: sqlite3.Connection, body: bytes, *, key_id: str, today: date |
         conn.execute("ROLLBACK")
         raise
     body_out = {"publicationId": pub_id, "mode": mode, "status": "accepted" if accepted else "rejected", "runStatus": run_status, "gates": gates,
+                "researchQuality": research_quality(gates, run_status) if accepted else None,
                 "predictions": [f"{pub_id}:{p['ticker']}" for p in (result or {}).get("predictions", [])] if accepted else []}
     return (201 if accepted else 422), body_out
+
+
+def research_quality(gates: list[dict[str, Any]], run_status: str | None) -> dict[str, Any]:
+    """Predictive quality, reported separately from operational health.
+
+    runStatus HEALTHY only means the publication passed integrity gates with a sufficient
+    holdout sample. It says nothing about whether the research predicts anything:
+    `evidenceQualifies` is true only when the recomputed holdout beat its baseline on
+    genuinely out-of-sample data. Consumers must not trade research that doesn't qualify.
+    """
+    edge = next((g.get("detail") or {} for g in gates if g.get("gate") == "edge_over_baseline"), {})
+    beat, oos = edge.get("edgeOverBaseline") is True, edge.get("genuineOutOfSample") is True
+    if run_status != "HEALTHY":
+        verdict = "insufficient_evidence"
+    elif not beat:
+        verdict = "no_demonstrated_edge"
+    elif not oos:
+        verdict = "edge_not_out_of_sample"
+    else:
+        verdict = "edge_demonstrated"
+    return {
+        "operationalStatus": run_status,
+        "verdict": verdict,
+        "evidenceQualifies": verdict == "edge_demonstrated",
+        "holdoutPrecision": edge.get("holdoutPrecision"),
+        "baselineRate": edge.get("baselineRate"),
+        "edgeOverBaseline": edge.get("edgeOverBaseline"),
+        "genuineOutOfSample": edge.get("genuineOutOfSample"),
+    }
 
 
 def latest_for_ticker(conn: sqlite3.Connection, ticker: str, *, mode: str = "live", session: str | None = None) -> dict[str, Any]:
@@ -283,6 +315,7 @@ def latest_for_ticker(conn: sqlite3.Connection, ticker: str, *, mode: str = "liv
         "run": {"intelligenceConfidenceTier": "full" if run_status == "HEALTHY" else "suppressed",
                 "rankedUnderDegradedRun": run_status != "HEALTHY", "runStatus": run_status},
         "quality": edge,
+        "researchQuality": research_quality(json.loads(gates_json), run_status),
     }
     if not pred:
         return {"found": False, "reason": "no_signal", **base}
@@ -297,4 +330,5 @@ def publication_record(conn: sqlite3.Connection, pub_id: str) -> dict[str, Any] 
     keys = ["publicationId", "status", "runStatus", "marketDate", "publisherKeyId", "workerId", "strategyKey", "gates", "receivedAt", "mode"]
     out = dict(zip(keys, row))
     out["gates"] = json.loads(out["gates"])
+    out["researchQuality"] = research_quality(out["gates"], out["runStatus"]) if out["status"] == "accepted" else None
     return out
