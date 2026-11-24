@@ -5,9 +5,11 @@
     python -m app.research_publication.worker run       # strategy on synced bars → outbox
     python -m app.research_publication.worker publish   # signed POST of the latest outbox entry
     python -m app.research_publication.worker all
+    python -m app.research_publication.worker scheduled  # Railway cron: publish once per verified refresh
 
 Environment: ALPHA_RESEARCH_URL (Railway Alpha Engine), ALPHA_RESEARCH_KEY_ID,
-ALPHA_RESEARCH_KEY_FILE (Ed25519 private key, PEM, mode 0600), ALPHA_RESEARCH_DB
+ALPHA_RESEARCH_KEY_FILE (Ed25519 private key, PEM, mode 0600) or ALPHA_RESEARCH_KEY_PEM (the same
+PEM held as a managed secret, e.g. a Railway variable), ALPHA_RESEARCH_DB
 (local worker database), ALPHA_RESEARCH_WORKER_ID. The private key never leaves the worker.
 """
 from __future__ import annotations
@@ -58,6 +60,10 @@ def _db() -> sqlite3.Connection:
 def _private_key():
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
+    pem = os.environ.get("ALPHA_RESEARCH_KEY_PEM", "").strip()
+    if pem:
+        # Managed secret: PEM text, with literal "\n" accepted for single-line variable stores.
+        return load_pem_private_key(pem.replace("\\n", "\n").encode("ascii"), password=None)
     return load_pem_private_key(Path(_env("ALPHA_RESEARCH_KEY_FILE")).read_bytes(), password=None)
 
 
@@ -175,6 +181,66 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return 0 if status in (200, 201) else 1
 
 
+def _log(**fields: Any) -> None:
+    print(json.dumps({"at": datetime.now(timezone.utc).isoformat(), **fields}, sort_keys=True), flush=True)
+
+
+def _health() -> dict[str, Any]:
+    url = _env("ALPHA_RESEARCH_URL").rstrip("/") + "/health"
+    with urllib.request.urlopen(urllib.request.Request(url), timeout=30) as res:
+        return json.loads(res.read())
+
+
+def cmd_scheduled(_: argparse.Namespace) -> int:
+    """One scheduled pass (Railway cron). Safe to run often:
+
+    - waits (exit 0) until Alpha Engine reports a verified daily refresh: live_bars succeeded,
+      nothing missing, and the synced window ends on that market date;
+    - publishes once per (market date, inputs): the local state file skips work already
+      accepted, and Railway's content-addressed publish is idempotent anyway;
+    - any failure exits non-zero without recording state, so the next pass retries.
+    Publication is not eligibility: Railway re-derives every claim, and weak research is
+    still published (with its evidence) but never qualifies for trading downstream.
+    """
+    state_path = HOME / "scheduled-state.json"
+    try:
+        lb = (_health().get("live_bars") or {})
+    except Exception as err:  # unreachable Alpha Engine is a failure, not a wait
+        _log(action="error", stage="health", error=str(err)[:200])
+        return 1
+    market = lb.get("market_date")
+    if lb.get("state") != "succeeded" or lb.get("missing") or not market:
+        _log(action="wait", reason="daily_refresh_not_verified", liveBars={k: lb.get(k) for k in ("state", "market_date", "missing", "finished_at")})
+        return 0
+    last = json.loads(state_path.read_text()) if state_path.exists() else {}
+    if last.get("marketDate") == market and last.get("refreshFinishedAt") == lb.get("finished_at"):
+        _log(action="skip", reason="already_published", marketDate=market, publicationId=last.get("publicationId"))
+        return 0
+    try:
+        summary = cmd_sync(_)
+        if summary["marketDate"] != market:
+            _log(action="wait", reason="sync_behind_refresh", refreshMarketDate=market, syncMarketDate=summary["marketDate"])
+            return 0
+        path = cmd_run(argparse.Namespace(as_of=None))
+        status, out = _request("POST", "/api/research/publications", path.read_bytes())
+    except SystemExit as err:
+        _log(action="error", stage="pipeline", error=str(err)[:300])
+        return 1
+    if status not in (200, 201):
+        _log(action="error", stage="publish", httpStatus=status, status=out.get("status"),
+             failedGates=[g.get("gate") for g in out.get("gates", []) if g.get("status") == "fail"])
+        return 1
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = state_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"marketDate": market, "refreshFinishedAt": lb.get("finished_at"), "publicationId": out.get("publicationId"),
+                               "publishedAt": datetime.now(timezone.utc).isoformat()}))
+    tmp.replace(state_path)
+    _log(action="published", httpStatus=status, idempotent=bool(out.get("idempotent")), marketDate=market,
+         publicationId=out.get("publicationId"), runStatus=out.get("runStatus"), researchQuality=out.get("researchQuality"),
+         predictions=len(out.get("predictions", [])))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="research-worker")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -187,7 +253,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--file")
     a = sub.add_parser("all")
     a.add_argument("--as-of", dest="as_of")
+    sub.add_parser("scheduled")
     args = ap.parse_args(argv)
+    if args.cmd == "scheduled":
+        return cmd_scheduled(args)
     if args.cmd == "keygen":
         return cmd_keygen(args)
     if args.cmd == "sync":
