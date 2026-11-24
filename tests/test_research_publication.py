@@ -347,3 +347,92 @@ def test_load_bars_ignores_non_session_rows(tmp_path):
     assert service.is_session_bar("2026-11-20") and service.is_session_bar("2026-11-20 00:00:00") and service.is_session_bar("2026-11-20T05:00:00+00:00")
     assert not service.is_session_bar("2026-11-20T21:19:03.641365+00:00") and not service.is_session_bar("2026-11-21T00:00:00+00:00")
 
+
+
+# ── Publication health vs research quality ─────────────────────────────────────
+
+@pytest.mark.parametrize("run_status, edge, oos, verdict", [
+    ("HEALTHY", False, False, "no_demonstrated_edge"),  # staging today: 48.4% vs 49.9%
+    ("HEALTHY", True, False, "edge_not_out_of_sample"),
+    ("HEALTHY", True, True, "edge_demonstrated"),
+    ("DEGRADED", True, True, "insufficient_evidence"),
+])
+def test_operational_health_is_not_research_quality(run_status, edge, oos, verdict):
+    gates = [{"gate": "edge_over_baseline", "status": "evidence", "detail": {
+        "holdoutPrecision": 0.484, "baselineRate": 0.499, "edgeOverBaseline": edge, "genuineOutOfSample": oos}}]
+    q = service.research_quality(gates, run_status)
+    assert q["operationalStatus"] == run_status and q["verdict"] == verdict
+    assert q["evidenceQualifies"] is (verdict == "edge_demonstrated")
+
+
+def test_quality_is_reported_on_every_read_surface(env):
+    path = _run_worker()
+    res = env["signed"]("POST", "/api/research/publications", path.read_bytes()).json()
+    assert res["runStatus"] == "HEALTHY" and res["researchQuality"]["evidenceQualifies"] is False
+    record = env["client"].get(f"/api/research/publications/{res['publicationId']}").json()
+    assert record["researchQuality"] == res["researchQuality"]
+    ticker = res["predictions"][0].split(":")[1]
+    latest = env["client"].get("/api/research/latest", params={"ticker": ticker}).json()
+    assert latest["run"]["runStatus"] == "HEALTHY"
+    assert latest["researchQuality"]["verdict"] in {"no_demonstrated_edge", "edge_not_out_of_sample"}
+
+
+# ── Scheduled publisher (Railway cron) ──────────────────────────────────────────
+
+def _scheduled(env, monkeypatch, live_bars):
+    monkeypatch.setattr(worker, "_health", lambda: {"live_bars": live_bars})
+    return worker.cmd_scheduled(None)
+
+
+def _refreshed(env, finished="2026-11-24T22:05:00+00:00"):
+    sync = env["signed"]("GET", f"/api/sync/bars?sessions={SESSIONS}").json()
+    return {"state": "succeeded", "market_date": sync["marketDate"], "missing": [], "finished_at": finished}
+
+
+def test_scheduled_waits_for_a_verified_refresh(env, monkeypatch, capsys):
+    assert _scheduled(env, monkeypatch, {"state": "running", "market_date": None, "missing": []}) == 0
+    assert _scheduled(env, monkeypatch, {**_refreshed(env), "state": "partial", "missing": ["BBB"]}) == 0
+    assert '"daily_refresh_not_verified"' in capsys.readouterr().out
+    assert not (worker.HOME / "outbox").exists()  # nothing computed, nothing published
+
+
+def test_scheduled_publishes_once_per_refresh_and_is_idempotent(env, monkeypatch, capsys):
+    lb = _refreshed(env)
+    assert _scheduled(env, monkeypatch, lb) == 0
+    out = capsys.readouterr().out
+    assert '"action": "published"' in out and '"idempotent": false' in out
+    assert _scheduled(env, monkeypatch, lb) == 0
+    assert '"already_published"' in capsys.readouterr().out
+    # Lost local state (fresh volume): Railway's content-addressed publish dedupes.
+    (worker.HOME / "scheduled-state.json").unlink()
+    assert _scheduled(env, monkeypatch, lb) == 0
+    assert '"idempotent": true' in capsys.readouterr().out
+    assert len(_pub_rows(env["db"])[0]) == 1
+
+
+def test_scheduled_failures_exit_nonzero_and_the_next_pass_recovers(env, monkeypatch):
+    lb = _refreshed(env)
+
+    def down():
+        raise OSError("connection refused")
+    monkeypatch.setattr(worker, "_health", down)
+    assert worker.cmd_scheduled(None) == 1
+
+    real = worker._request
+    monkeypatch.setattr(worker, "_request", lambda m, p, b=b"": (503, {"error": "busy"}) if m == "POST" else real(m, p, b))
+    assert _scheduled(env, monkeypatch, lb) == 1
+    assert not (worker.HOME / "scheduled-state.json").exists()  # nothing recorded on failure
+
+    monkeypatch.setattr(worker, "_request", real)
+    assert _scheduled(env, monkeypatch, lb) == 0
+    assert len(_pub_rows(env["db"])[0]) == 1
+
+
+def test_private_key_can_come_from_a_managed_secret(env, monkeypatch):
+    pem = env["key"].private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
+    monkeypatch.delenv("ALPHA_RESEARCH_KEY_FILE", raising=False)
+    monkeypatch.setenv("ALPHA_RESEARCH_KEY_PEM", pem.replace("\n", "\\n"))
+    signed = contract.sign_request(worker._private_key(), "test-worker", "GET", "/x", b"")
+    assert env["client"].get("/x", headers=signed) is not None  # loads and signs without a key file
+    assert worker._private_key().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw) == \
+        env["key"].public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
