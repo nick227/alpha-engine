@@ -368,6 +368,24 @@ ENDPOINTS: tuple[EndpointSpec, ...] = (
         "allowed",
         "high",
     ),
+    EndpointSpec(
+        "api_market_daily_bars",
+        "GET",
+        "/api/market/daily-bars",
+        "api_smoke",
+        "minimal_empty",
+        "allowed",
+        "high",
+    ),
+    EndpointSpec(
+        "api_regime_history",
+        "GET",
+        "/api/regime/{ticker}/history",
+        "api_smoke",
+        "minimal_empty",
+        "allowed",
+        "high",
+    ),
 )
 
 
