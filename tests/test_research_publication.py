@@ -436,3 +436,33 @@ def test_private_key_can_come_from_a_managed_secret(env, monkeypatch):
     assert env["client"].get("/x", headers=signed) is not None  # loads and signs without a key file
     assert worker._private_key().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw) == \
         env["key"].public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+
+# ── Backtest data: clean daily bars and point-in-time regime ────────────────────
+
+def test_daily_bars_are_clean_session_bars_with_a_fingerprint(env):
+    c = env["client"]
+    full = env["signed"]("GET", f"/api/sync/bars?sessions={SESSIONS}").json()["tickers"]["AAA"]["bars"]
+    start, end = full[10][0], full[40][0]
+    r = c.get("/api/market/daily-bars", params={"ticker": "AAA", "start": start, "end": end})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["bars"] == [b for b in full if start <= b[0] <= end]
+    assert body["sha256"] == contract.bars_fingerprint(body["bars"])
+    assert c.get("/api/market/daily-bars", params={"ticker": "ZZZ", "start": start, "end": end}).status_code == 404
+    assert c.get("/api/market/daily-bars", params={"ticker": "AAA", "start": end, "end": start}).status_code == 422
+    assert c.get("/api/market/daily-bars", params={"ticker": "AAA", "start": "2010-01-01", "end": end}).status_code == 422
+
+
+def test_regime_history_is_point_in_time_and_matches_the_live_regime():
+    from app.internal_read_v1 import regime_read
+
+    closes = [100 + 10 * math.sin(i / 25) + i * 0.05 for i in range(320)]
+    dates = [f"d{i:04d}" for i in range(320)]
+    series = regime_read.regime_series(dates, closes)
+    assert len(series) == 320 - regime_read.MIN_DAILY_BARS + 1
+    # Each point uses only bars up to its session: recomputing on the prefix gives the same answer.
+    for i in (199, 250, 319):
+        prefix = regime_read.regime_series(dates[: i + 1], closes[: i + 1])[-1]
+        assert series[i - 199] == prefix and prefix["asOf"] == dates[i]
+    assert {p["regime"] for p in series} <= {"risk_on", "risk_off"}
