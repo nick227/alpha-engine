@@ -106,7 +106,7 @@ def _build_size_map(conn: sqlite3.Connection, tickers: list[str]) -> dict[str, s
             SELECT ticker, close, volume,
                    ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp DESC) as rn
             FROM price_bars
-            WHERE tenant_id='ml_train' AND timeframe='1d' AND ticker IN ({ph})
+            WHERE tenant_id='default' AND timeframe='1d' AND ticker IN ({ph})
         ) WHERE rn <= 252
         GROUP BY ticker
     """, tickers).fetchall()
@@ -147,7 +147,7 @@ def _compute_rolling_p33(
     rows = conn.execute(f"""
         SELECT DATE(timestamp) as dt, open, high, low, close
         FROM price_bars
-        WHERE tenant_id='ml_train' AND timeframe='1d'
+        WHERE tenant_id='default' AND timeframe='1d'
           AND ticker IN ({ph})
           AND DATE(timestamp) BETWEEN DATE(?, '-{lookback_days} days') AND DATE(?)
         ORDER BY dt
@@ -229,7 +229,7 @@ def scan(
     if db not in _qual_cache:
         qual_rows = conn.execute("""
             SELECT ticker FROM price_bars
-            WHERE tenant_id='ml_train' AND timeframe='1d'
+            WHERE tenant_id='default' AND timeframe='1d'
             GROUP BY ticker
             HAVING COUNT(*) >= 1250
         """).fetchall()
@@ -277,7 +277,7 @@ def scan(
             SELECT ticker, timestamp, open, high, low, close, volume,
                    ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp DESC) as rn
             FROM price_bars
-            WHERE tenant_id='ml_train' AND timeframe='1d'
+            WHERE tenant_id='default' AND timeframe='1d'
               AND ticker IN ({ph})
               AND timestamp <= ?
         )
