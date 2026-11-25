@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -39,7 +41,29 @@ def _dual_stack_socket(port: int):
     return sock
 
 
+def _preflight_cutover_check() -> None:
+    """Pre-flight hook for restart-safe compact database cutover."""
+    if os.environ.get("ALPHA_COMPACT_CUTOVER_ENABLED", "").lower() in ("true", "1", "yes"):
+        print("[alpha-engine] ALPHA_COMPACT_CUTOVER_ENABLED is set. Initiating bootstrap pre-flight check...")
+        from app.ops.compact_cutover_bootstrap import CutoverManager
+
+        volume_dir = Path(os.environ.get("VOLUME_DIR", "/data"))
+        tmp_dir = Path(os.environ.get("TMP_DIR", "/tmp"))
+        candidate = os.environ.get("ALPHA_CANDIDATE_PATH")
+        mgr = CutoverManager(
+            volume_dir=volume_dir,
+            tmp_dir=tmp_dir,
+            source_candidate_path=Path(candidate) if candidate else None,
+        )
+        success = mgr.run()
+        if not success:
+            print("[alpha-engine] FATAL: Compact database cutover failed pre-flight verification. Refusing to start server.", file=sys.stderr)
+            sys.exit(1)
+        print("[alpha-engine] Bootstrap pre-flight check complete. Proceeding with service startup.")
+
+
 if __name__ == "__main__":
+    _preflight_cutover_check()
     host, port = _listen_host(), _listen_port()
     if host == "::":
         config = uvicorn.Config("app.internal_read_v1.app:app", host=host, port=port, factory=False)
