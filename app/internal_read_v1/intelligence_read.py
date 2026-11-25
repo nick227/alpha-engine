@@ -64,14 +64,30 @@ def list_strategies_catalog(
     if active_only:
         where.append("active = 1")
     params.append(int(limit))
+
+    info_rows = conn.execute("PRAGMA table_info(strategies)").fetchall()
+    cols = {r[1] if isinstance(r, tuple) else r["name"] for r in info_rows}
+
+    backtest_score_sql = "backtest_score" if "backtest_score" in cols else "0.0 AS backtest_score"
+    forward_score_sql = "forward_score" if "forward_score" in cols else "0.0 AS forward_score"
+    live_score_sql = "live_score" if "live_score" in cols else "0.0 AS live_score"
+    stability_score_sql = "stability_score" if "stability_score" in cols else "0.0 AS stability_score"
+    created_at_sql = "created_at" if "created_at" in cols else "NULL AS created_at"
+    sample_size_sql = "sample_size" if "sample_size" in cols else "0 AS sample_size"
+    activated_at_sql = "activated_at" if "activated_at" in cols else "NULL AS activated_at"
+    deactivated_at_sql = "deactivated_at" if "deactivated_at" in cols else "NULL AS deactivated_at"
+
+    order_stability = "stability_score DESC," if "stability_score" in cols else ""
+    order_created = "created_at DESC" if "created_at" in cols else "id DESC"
+
     rows = conn.execute(
         f"""
         SELECT id, name, version, strategy_type, mode, track, status, active, is_champion,
-               backtest_score, forward_score, live_score, stability_score, sample_size,
-               created_at, activated_at, deactivated_at
+               {backtest_score_sql}, {forward_score_sql}, {live_score_sql}, {stability_score_sql},
+               {sample_size_sql}, {created_at_sql}, {activated_at_sql}, {deactivated_at_sql}
         FROM strategies
         WHERE {" AND ".join(where)}
-        ORDER BY is_champion DESC, status ASC, stability_score DESC, created_at DESC
+        ORDER BY is_champion DESC, status ASC, {order_stability} {order_created}
         LIMIT ?
         """,
         params,
@@ -87,12 +103,12 @@ def list_strategies_catalog(
             "status": str(r["status"]),
             "active": bool(r["active"]),
             "isChampion": bool(r["is_champion"]),
-            "backtestScore": float(r["backtest_score"]),
-            "forwardScore": float(r["forward_score"]),
-            "liveScore": float(r["live_score"]),
-            "stabilityScore": float(r["stability_score"]),
-            "sampleSize": int(r["sample_size"]),
-            "createdAt": str(r["created_at"]),
+            "backtestScore": float(r["backtest_score"] or 0.0),
+            "forwardScore": float(r["forward_score"] or 0.0),
+            "liveScore": float(r["live_score"] or 0.0),
+            "stabilityScore": float(r["stability_score"] or 0.0),
+            "sampleSize": int(r["sample_size"] or 0),
+            "createdAt": str(r["created_at"]) if r["created_at"] is not None else None,
             "activatedAt": str(r["activated_at"]) if r["activated_at"] is not None else None,
             "deactivatedAt": str(r["deactivated_at"]) if r["deactivated_at"] is not None else None,
         }
