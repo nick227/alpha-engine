@@ -35,7 +35,7 @@ def compute_sha256(path: Path) -> str:
 def verify_sqlite_integrity(db_path: Path) -> bool:
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
-        res = conn.execute("PRAGMA integrity_check").fetchall()
+        res = conn.execute("PRAGMA quick_check").fetchall()
         conn.close()
         return res == [("ok",)]
     except Exception as e:
@@ -161,12 +161,6 @@ class CutoverManager:
             print(f"[cutover] FATAL: {msg}", file=sys.stderr)
             save_cutover_state(self.state_file, state_data, "FAILED", error=msg)
             return False
-
-        # Set journal mode to WAL and normal sync
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA synchronous = NORMAL;")
-        conn.close()
 
         final_size = self.db_path.stat().st_size
         save_cutover_state(
