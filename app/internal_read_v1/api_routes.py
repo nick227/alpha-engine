@@ -825,7 +825,7 @@ def api_market_session_close(request: Request, ticker: str, session: str | None 
     last = bars[-1]
     prior = [b[5] for b in bars[:-1] if b[5] and b[5] > 0][-20:]
     return {
-        "ticker": t, "session": last[0], "close": last[4], "volume": last[5] or None,
+        "ticker": t, "session": last[0], "open": last[1], "close": last[4], "volume": last[5] or None,
         # Average of the 20 sessions before this one (liquidity context for risk checks).
         "avgVolume20": round(sum(prior) / len(prior), 2) if prior else None,
         "timeframe": "1d", "source": "alpha-engine price_bars",
