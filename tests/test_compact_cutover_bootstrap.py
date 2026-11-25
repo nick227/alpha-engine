@@ -14,7 +14,8 @@ from app.ops.compact_cutover_bootstrap import (
     CutoverManager,
     compute_sha256,
     verify_sqlite_integrity,
-    verify_compact_database,
+    verify_candidate_database,
+    verify_operational_database,
     load_cutover_state,
     EXPECTED_CANDIDATE_SHA256,
     EXPECTED_CANDIDATE_BYTES,
@@ -88,7 +89,7 @@ class MockCandidateHandler(http.server.BaseHTTPRequestHandler):
                     break
 
     def log_message(self, format, *args):
-        pass  # Quiet logging
+        pass
 
 
 def start_mock_candidate_server(serve_corrupt=False):
@@ -119,24 +120,63 @@ def test_normal_cutover_lifecycle(mock_env):
     assert compute_sha256(installed_db) == EXPECTED_CANDIDATE_SHA256
     assert verify_sqlite_integrity(installed_db) is True
 
-    # 4. Idempotent re-run verifies database cryptographically and passes
+    # 4. Idempotent re-run verifies operational database and passes
     assert mgr.run() is True
 
 
-def test_completed_state_strict_cryptographic_verification(mock_env):
+def test_post_cutover_database_writes_allowed_on_restart(mock_env):
+    """CRITICAL: Verifies that after cutover completes, new market data and
+    research publications can be inserted (mutating SHA-256), and subsequent
+    container restarts pass operational verification cleanly without failing closed.
+    """
     volume_dir, tmp_dir, cand_file = mock_env
     mgr = CutoverManager(volume_dir=volume_dir, tmp_dir=tmp_dir, source_candidate_path=cand_file)
 
-    # Successfully complete cutover
+    # 1. Complete initial cutover
     assert mgr.run() is True
 
-    # Now tamper with alpha.db by modifying 1 byte
-    db_file = volume_dir / "alpha.db"
-    data = bytearray(db_file.read_bytes())
-    data[100] = (data[100] + 1) % 256
-    db_file.write_bytes(data)
+    db_path = volume_dir / "alpha.db"
+    initial_sha = compute_sha256(db_path)
+    assert initial_sha == EXPECTED_CANDIDATE_SHA256
 
-    # Re-running with tampered DB must FAIL CLOSED even though state says COMPLETED
+    # 2. Simulate legitimate post-cutover application writes (new market bars)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO price_bars (tenant_id, ticker, timeframe, timestamp, open, high, low, close, volume)
+        VALUES ('default', 'TEST_POST_CUTOVER', '1d', '2026-11-25 16:00:00', 100.0, 105.0, 99.0, 104.0, 50000.0)
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Database SHA-256 has legitimately changed
+    new_sha = compute_sha256(db_path)
+    assert new_sha != initial_sha
+
+    # 3. Simulate subsequent container restart: bootstrap must pass operational verification!
+    restart_mgr = CutoverManager(volume_dir=volume_dir, tmp_dir=tmp_dir)
+    assert restart_mgr.run() is True
+
+    # State remains COMPLETED
+    state = load_cutover_state(volume_dir / ".cutover_state.json")
+    assert state["state"] == "COMPLETED"
+
+
+def test_completed_state_fail_closed_on_corrupt_database(mock_env):
+    volume_dir, tmp_dir, cand_file = mock_env
+    mgr = CutoverManager(volume_dir=volume_dir, tmp_dir=tmp_dir, source_candidate_path=cand_file)
+
+    # Complete initial cutover
+    assert mgr.run() is True
+
+    # Corrupt database header bytes
+    db_file = volume_dir / "alpha.db"
+    with open(db_file, "r+b") as f:
+        f.seek(16)
+        f.write(b"\x00\x00")
+
+    # Restart manager must fail closed on corrupt operational DB
     assert mgr.run() is False
     state = load_cutover_state(volume_dir / ".cutover_state.json")
     assert state["state"] == "FAILED"
@@ -150,8 +190,6 @@ def test_fail_closed_on_corrupt_state_file(mock_env):
     mgr = CutoverManager(volume_dir=volume_dir, tmp_dir=tmp_dir, source_candidate_path=cand_file)
     success = mgr.run()
     assert success is False
-
-    # Original database must not be touched
     assert (volume_dir / "alpha.db").exists()
 
 
@@ -170,7 +208,6 @@ def test_fail_closed_on_active_writer(mock_env):
     volume_dir, tmp_dir, cand_file = mock_env
     db_file = volume_dir / "alpha.db"
 
-    # Open exclusive lock connection simulating active writer
     conn = sqlite3.connect(db_file)
     conn.execute("BEGIN EXCLUSIVE;")
 
@@ -182,16 +219,51 @@ def test_fail_closed_on_active_writer(mock_env):
     conn.close()
 
 
+def test_recovery_from_interrupted_preparing(mock_env):
+    """Simulates restart when interrupted during PREPARING: original DB untouched,
+    transient staging cleaned up, cutover completes successfully.
+    """
+    volume_dir, tmp_dir, cand_file = mock_env
+
+    state_file = volume_dir / ".cutover_state.json"
+    state_file.write_text('{"state": "PREPARING", "history": []}', encoding="utf-8")
+
+    mgr = CutoverManager(volume_dir=volume_dir, tmp_dir=tmp_dir, source_candidate_path=cand_file)
+    success = mgr.run()
+    assert success is True
+
+    state = load_cutover_state(state_file)
+    assert state["state"] == "COMPLETED"
+    assert compute_sha256(volume_dir / "alpha.db") == EXPECTED_CANDIDATE_SHA256
+
+
+def test_recovery_from_interrupted_candidate_verified(mock_env):
+    """Simulates restart when interrupted at CANDIDATE_VERIFIED: original DB untouched,
+    verified candidate intact, proceeds directly to swap and complete.
+    """
+    volume_dir, tmp_dir, cand_file = mock_env
+
+    state_file = volume_dir / ".cutover_state.json"
+    state_file.write_text('{"state": "CANDIDATE_VERIFIED", "history": []}', encoding="utf-8")
+
+    mgr = CutoverManager(volume_dir=volume_dir, tmp_dir=tmp_dir, source_candidate_path=cand_file)
+    success = mgr.run()
+    assert success is True
+
+    state = load_cutover_state(state_file)
+    assert state["state"] == "COMPLETED"
+    assert state.get("recovered") is True
+    assert compute_sha256(volume_dir / "alpha.db") == EXPECTED_CANDIDATE_SHA256
+
+
 def test_interrupted_cutover_recovery_with_wiped_tmp(mock_env):
     """Simulates container restart after interruption: /tmp is completely wiped,
     candidate is retrieved via authenticated durable remote URL, verified, and installed.
     """
     volume_dir, tmp_dir, cand_file = mock_env
 
-    # Start mock authenticated remote candidate server
     server, remote_url = start_mock_candidate_server()
     try:
-        # Simulate interruption mid-swap: alpha.db unlinked, state is SWAPPING
         state_file = volume_dir / ".cutover_state.json"
         state_file.write_text(
             json.dumps({"state": "SWAPPING", "candidate_url": remote_url, "history": []}),
@@ -199,15 +271,12 @@ def test_interrupted_cutover_recovery_with_wiped_tmp(mock_env):
         )
         (volume_dir / "alpha.db").unlink()
 
-        # CRITICAL SIMULATION: WIPE /tmp completely to simulate container replacement
         shutil.rmtree(tmp_dir)
         tmp_dir.mkdir()
 
-        # Ensure no candidate exists locally in tmp or data
         assert not (tmp_dir / "cand" / "candidate.db").exists()
         assert not (volume_dir / "candidate.db").exists()
 
-        # Create manager pointing to empty tmp_dir and configured with candidate_url + auth_token
         mgr = CutoverManager(
             volume_dir=volume_dir,
             tmp_dir=tmp_dir,
@@ -215,17 +284,14 @@ def test_interrupted_cutover_recovery_with_wiped_tmp(mock_env):
             candidate_token="secret-cutover-token",
         )
 
-        # Run recovery
         success = mgr.run()
         assert success is True
 
-        # Verify database successfully installed and verified
         installed_db = volume_dir / "alpha.db"
         assert installed_db.exists()
         assert compute_sha256(installed_db) == EXPECTED_CANDIDATE_SHA256
         assert verify_sqlite_integrity(installed_db) is True
 
-        # Verify persistent state marked COMPLETED with recovered flag
         state = load_cutover_state(state_file)
         assert state["state"] == "COMPLETED"
         assert state.get("recovered") is True
@@ -238,7 +304,6 @@ def test_interrupted_cutover_recovery_with_wiped_tmp(mock_env):
 def test_partial_staging_file_cleanup_and_recovery(mock_env):
     volume_dir, tmp_dir, cand_file = mock_env
 
-    # Simulate interruption leaving a partial staging file
     staging_file = volume_dir / ".alpha.db.cutover_staging"
     staging_file.write_bytes(b"partial-corrupted-staging-file-bytes")
 
@@ -250,7 +315,6 @@ def test_partial_staging_file_cleanup_and_recovery(mock_env):
     success = mgr.run()
     assert success is True
 
-    # Partial staging file must have been cleaned up and replaced
     assert not staging_file.exists()
     assert (volume_dir / "alpha.db").exists()
     assert compute_sha256(volume_dir / "alpha.db") == EXPECTED_CANDIDATE_SHA256
