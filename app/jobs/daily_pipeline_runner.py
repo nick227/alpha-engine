@@ -67,9 +67,11 @@ def record_stage_status(db_path: str, stage: str, status: str, error: str | None
 
 
 def run_daily_pipeline(db_path: str = "data/alpha.db", tenant_id: str = "default") -> int:
+    resolved_db = str(Path(db_path).resolve())
+    os.environ["ALPHA_DB_PATH"] = resolved_db
     today_iso = date.today().isoformat()
     python_exe = sys.executable
-    logger.info(f"Running daily pipeline for tenant='{tenant_id}' on db='{db_path}' (as_of={today_iso})")
+    logger.info(f"Running daily pipeline for tenant='{tenant_id}' on db='{resolved_db}' (as_of={today_iso})")
 
     def _exec(args: list[str], *, step_name: str, check: bool = True) -> int:
         record_stage_status(db_path, step_name, "running")
